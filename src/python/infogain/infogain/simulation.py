@@ -6,10 +6,11 @@ from matplotlib.pyplot import show
 import numpy as np
 import pygame
 from random import random, expovariate, seed
+import visilibity as vis
 
 
 # local functions/imports
-from Actor import Actor, Pedestrian, Car
+from Actor import Actor, Pedestrian, Car, Obstacle, Blank
 from config import *
 
 
@@ -59,7 +60,7 @@ class Simulation:
             speed=0,
             colour='red',
             outline_colour='darkred',
-            scale=5
+            scale=1.1
         )
 
         self.actor_list = []
@@ -92,9 +93,25 @@ class Simulation:
 
     def _get_location_on_screen(self, location):
         return [
-            int(self._xmargin + (location[0]-self.ego.pos[0] + 0.25)*self._env_size),
-            int(self._ymargin + self._env_size - (location[1]-self.ego.pos[1]+0.5)*self._env_size)
+            int(self._xmargin + (location[0]-self.ego.pos[0] - EGO_X_OFFSET)*self._env_size),
+            int(self._ymargin + self._env_size - (location[1]-self.ego.pos[1] - EGO_Y_OFFSET)*self._env_size)
         ]
+
+    def _get_actor_outline(self, actor, flip=False):
+        flip = -1 if flip else 1
+        rot = np.array(
+            [
+                [np.cos(actor.orientation), -flip * np.sin(actor.orientation)],
+                [flip * np.sin(actor.orientation), np.cos(actor.orientation)],
+            ]
+        )
+        return (rot @ actor.get_poly().T).T
+
+    def _get_actor_outline_on_screen(self, actor):
+        actor_screen_pos = self._get_location_on_screen(actor.pos)
+        actor_screen_outline = self._get_actor_outline(actor, flip=True) * self._env_size
+
+        return (actor_screen_outline + np.array(actor_screen_pos))
 
     def _draw_rect(self, location, color, size):
         pygame.draw.rect(self.screen,
@@ -119,34 +136,65 @@ class Simulation:
                                (location[0], location[1]), size, 2)
 
     def _draw_actor(self, actor):
+        if type(actor) is not Blank:
+            pts = self._get_actor_outline_on_screen(actor)
+            pygame.draw.polygon(self.screen, actor.colour, pts, 0)
+            pygame.draw.polygon(self.screen, actor.outline_colour, pts, ACTOR_PATH_WIDTH)
 
-        actor_screen_pos = self._get_location_on_screen(actor.pos)
+    def _draw_ego(self):
 
-        rot = np.array(
-            [
-                [np.cos(actor.orientation), np.sin(actor.orientation)],
-                [-np.sin(actor.orientation), np.cos(actor.orientation)],
-            ]
+        self._draw_actor(self.ego)
+
+        # draw the stopping distance
+        d_s = self.ego.speed / self.ego.max_brake
+
+        loc = self._get_location_on_screen(self.ego.pos)
+        pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=d_s*self._env_size, width=2)
+
+    def _draw_visibility(self):
+        shapes = []
+
+        ox = self.ego.pos[0]+EGO_X_OFFSET-1
+        oy = self.ego.pos[1]+EGO_Y_OFFSET-1
+
+        # environment poly is counter clockwise
+        shapes.append(
+            vis.Polygon([
+                vis.Point(ox, oy),
+                vis.Point(ox+4.0, oy),
+                vis.Point(ox+4.0, oy+4.0),
+                vis.Point(ox, oy+4.0),
+            ])
         )
 
-        pts = np.array([
-            [5, 0],
-            [-5, 4],
-            [-2, 0],
-            [-5, -4],
-            [5, 0],
-        ]) * actor.scale
+        for actor in self.actor_list:
+            if type(actor) is Blank:
+                continue
 
-        pts = ((rot @ pts.T) + np.array(actor_screen_pos).reshape([2, 1])).T
+            if actor.pos[0] > self.ego.pos[0]+EGO_X_OFFSET and actor.pos[0] < self.ego.pos[0]+EGO_X_OFFSET+1.5 and \
+                    actor.pos[1] > self.ego.pos[1]+EGO_Y_OFFSET and actor.pos[1] < self.ego.pos[1]+EGO_Y_OFFSET+1.0:
+                pts = self._get_actor_outline(actor) + actor.pos
+                poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
+                shapes.append(vis.Polygon(poly_pts))
 
-        pygame.draw.polygon(self.screen, actor.colour, pts, 0)
-        pygame.draw.polygon(self.screen, actor.outline_colour, pts, ACTOR_PATH_WIDTH)
+        env = vis.Environment(shapes)
+        if env.is_valid(EPSILON):
+            observer = vis.Point(self.ego.pos[0], self.ego.pos[1])
+            vis_poly = vis.Visibility_Polygon(observer, env, EPSILON)
+
+            pts = []
+            for i in range(vis_poly.n()):
+                pts.append(self._get_location_on_screen([vis_poly[i].x(), vis_poly[i].y()]))
+            pygame.draw.polygon(self.screen, 'palegreen', pts, 0)
+            pygame.draw.polygon(self.screen, 'black', pts, ACTOR_PATH_WIDTH)
 
     def _draw_status(self):
 
         collisions_str = f'Collisions: {self.collisions}'
+        time_str = f'Sim Time: {self.sim_time:.4f}'
 
         text_width, text_height = self.status_font.size(collisions_str)
+        time_text_width, time_text_height = self.status_font.size(time_str)
 
         x_avg_offset = self._env_size + self._xmargin - text_width - STATUS_XMARGIN*2
         y_avg_offset = self._env_size + self._ymargin - text_height - STATUS_YMARGIN
@@ -157,9 +205,18 @@ class Simulation:
         pygame.draw.rect(self.screen,
                          SCREEN_OUTLINE_COLOUR,
                          (x_avg_offset-STATUS_XMARGIN, y_avg_offset-STATUS_YMARGIN, text_width + STATUS_XMARGIN*2, text_height + STATUS_YMARGIN), 2)
-
         text = self.status_font.render(collisions_str, False, STATUS_FONT_COLOUR)
         self.screen.blit(text, (x_avg_offset+STATUS_XMARGIN/3, y_avg_offset))
+
+        pygame.draw.rect(self.screen,
+                         SCREEN_BACKGROUND_COLOUR,
+                         (self._xmargin + STATUS_XMARGIN/2, self._xmargin + STATUS_YMARGIN, time_text_width + STATUS_XMARGIN, time_text_height + STATUS_YMARGIN), 0)
+        # pygame.draw.rect(self.screen,
+        #                  SCREEN_OUTLINE_COLOUR,
+        #                  (self._xmargin + STATUS_XMARGIN/2, self._xmargin + STATUS_YMARGIN, time_text_width + STATUS_XMARGIN, time_text_height + STATUS_YMARGIN), 2)
+
+        text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
+        self.screen.blit(text, (self._xmargin+STATUS_XMARGIN, self._ymargin+STATUS_YMARGIN))
 
     ##################################################################################
     # Simulator step functions
@@ -183,27 +240,81 @@ class Simulation:
         self.sim_time += tick_time
         self.ticks += 1
 
-        while (len(self.actor_list) < self.num_actors):
-            x = self.ego.pos[0]
-            dx = self.generator.uniform(low=0.25, high=0.75)
+        if len(self.actor_list):
+            x = self.actor_list[-1].pos[0]+self.actor_list[-1].get_width()/2 + 0.005
+        else:
+            x = self.ego.pos[0] + (1.5 + EGO_X_OFFSET)
 
-            if self.generator.uniform() < 0.5:
+        dx = 0.005 * self.generator.uniform()
+
+        while (len(self.actor_list) < self.num_actors):
+            rnd = self.generator.uniform()
+            if rnd < 0.4:
+
+                scale = 1 + 9 * self.generator.uniform()
+                width = Obstacle.check_width(scale)
+
+                y = 0.1 + self.generator.uniform()*0.3
+                if rnd < 0.25:
+                    y = -y
+                actor = Obstacle(
+                    id=self.ticks,
+                    pos=np.array([x+dx+width/2, y]),
+                    speed=0.0,
+                    scale=scale
+                )
+            elif rnd < 0.65:
+
+                scale = 1
+                width = Car.check_width(scale)
+
+                vy = 0.07
+                y = 0.3
+                if rnd < 0.525:
+                    y = -y
+
                 actor = Car(
                     id=self.ticks,
-                    pos=np.array([x+dx, 0.25]),
-                    goal=np.array([x+dx, -0.25]),
-                    speed=0.75,
-                    scale=5
+                    pos=np.array([x+dx+width/2, y]),
+                    goal=np.array([x+dx+width/2, -y]),
+                    speed=vy,
+                    scale=scale
                 )
-            else:
+            elif rnd < 0.95:
+
+                scale = 1
+                width = Pedestrian.check_width(scale)
+
+                vy = 0.025
+                y = 0.2
+                if rnd < 0.7875:
+                    y = -y
+
                 actor = Pedestrian(
                     id=self.ticks,
-                    pos=np.array([x+dx, 0.25]),
-                    goal=np.array([x+dx, -0.25]),
-                    speed=0.25,
-                    scale=3.5
+                    pos=np.array([x+dx+width/2, y]),
+                    goal=np.array([x+dx+width/2, -y]),
+                    speed=vy,
+                    scale=scale
                 )
+            else:
+                # do nothing (space)
+                scale = 1 + 9 * self.generator.uniform()
+                width = Obstacle.check_width(scale)
+
+                y = 0.1 + self.generator.uniform()*0.3
+                if rnd < 0.25:
+                    y = -y
+
+                actor = Blank(
+                    id=self.ticks,
+                    pos=np.array([x+dx+width/2, y]),
+                    speed=0.0,
+                    scale=scale
+                )
+
             self.actor_list.append(actor)
+            dx += actor.get_width() + 0.005 * self.generator.uniform()
 
         if max_simulation_time is not None:
             if self.sim_time > max_simulation_time:
@@ -220,7 +331,7 @@ class Simulation:
                 actor.speed = 0
                 actor.collided = True
 
-            if actor.at_goal() or (actor.collided and actor.distance_to(self.ego.pos) > 0.5):
+            if actor.at_goal() or (actor.pos[0] < self.ego.pos[0] and actor.distance_to(self.ego.pos) > 0.5):
                 finished_actors.append(actor)
 
         self.ego.tick(tick_time)
@@ -238,6 +349,9 @@ class Simulation:
             #  draw the limits of the environment
             self.screen.fill(SCREEN_BACKGROUND_COLOUR)
 
+            # visibility first as it will (currently) nuke everything else
+            self._draw_visibility()
+
             self._draw_road()
 
             #  draw the limits of the environment
@@ -248,6 +362,6 @@ class Simulation:
             for actor in self.actor_list:
                 self._draw_actor(actor)
 
-            self._draw_actor(self.ego)
+            self._draw_ego()
 
             self._draw_status()

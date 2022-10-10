@@ -77,14 +77,42 @@ class Actor:
     def at_goal(self):
         return self.reached_goal
 
+    def get_poly(self):
+        return np.array([
+            [0.01, 0.01],
+            [-0.01, 0.01],
+            [-0.01, -0.01],
+            [0.01, -0.01],
+            [0.01, 0.01],
+        ]) * self.scale
+
+    def get_width(self):
+        return 0.02 * self.scale
+
 
 class Car(Actor):
-    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='grey', outline_colour='darkgrey', scale=1):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
         self.max_v = 0.75
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
+
+    def get_poly(self):
+        return np.array([
+            [0.025, 0],
+            [-0.025, 0.02],
+            [-0.01, 0],
+            [-0.025, -0.02],
+            [0.025, 0],
+        ]) * self.scale
+
+    def get_width(self):
+        return 0.05 * self.scale
+
+    @staticmethod
+    def check_width(scale):
+        return 0.05 * scale
 
 
 class Pedestrian(Actor):
@@ -94,3 +122,69 @@ class Pedestrian(Actor):
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
+
+    def get_poly(self):
+        return np.array([
+            [0.01, 0],
+            [0, 0.015],
+            [-0.01, 0],
+            [0, -0.015],
+            [0.01, 0],
+        ]) * self.scale
+
+    def get_width(self):
+        return 0.03 * self.scale
+
+    @staticmethod
+    def check_width(scale):
+        return 0.03 * scale
+
+
+class Obstacle(Actor):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='grey', outline_colour='darkgrey', scale=1):
+        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+        self.max_v = 0
+        self.min_v = 0
+        self.max_brake = 0
+        self.max_accel = 0
+
+    def get_poly(self):
+        return np.array([
+            [0.01, 0.01],
+            [-0.01, 0.01],
+            [-0.01, -0.01],
+            [0.01, -0.01],
+            [0.01, 0.01],
+        ]) * self.scale
+
+    def get_width(self):
+        return 0.02 * self.scale
+
+    @staticmethod
+    def check_width(scale):
+        return 0.02 * scale
+
+
+class Blank(Actor):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='white', outline_colour='white', scale=1):
+        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+        self.max_v = 0
+        self.min_v = 0
+        self.max_brake = 0
+        self.max_accel = 0
+
+    def get_poly(self):
+        return np.array([
+            [0.01, 0.01],
+            [-0.01, 0.01],
+            [-0.01, -0.01],
+            [0.01, -0.01],
+            [0.01, 0.01],
+        ]) * self.scale
+
+    def get_width(self):
+        return 0.01 * self.scale
+
+    @staticmethod
+    def check_width(scale):
+        return 0.01 * scale

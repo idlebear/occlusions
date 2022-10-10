@@ -47,7 +47,7 @@ class RandomPolicy(BasePolicy):
             actors (_type_): other known actors in the environment
         """
 
-        a = self.generator.uniform(-self.max_brake, self.max_accel, size=1)
+        a = self.generator.uniform(-self.max_brake, self.max_accel)
         ego.accelerate(a, dt)
 
         return False

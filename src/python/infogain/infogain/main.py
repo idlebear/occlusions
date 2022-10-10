@@ -40,10 +40,10 @@ def simulate(args, delivery_log=None):
     sim = Simulation(
         policy_name=args.policy,
         policy_args={
-            'max_v': 0.75,
+            'max_v': 0.07,
             'min_v': 0,
-            'max_accel': 0.5,
-            'max_brake': 0.5,
+            'max_accel': 0.05,
+            'max_brake': 0.045,
         },
         generator_name=args.generator,
         generator_args=generator_args,

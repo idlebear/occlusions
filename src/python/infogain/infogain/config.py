@@ -10,6 +10,11 @@ SERVICE_TIME = 0
 TICK_TIME = 0.01
 BETA = 0.712    # constant for TSP length
 
+EPSILON = 0.000001
+
+EGO_X_OFFSET = -0.15
+EGO_Y_OFFSET = -0.5
+
 DEFAULT_POLICY_NAME = "random_assgn"
 DEFAULT_GENERATOR_NAME = "uniform"
 GENERATOR_ARGS = {
