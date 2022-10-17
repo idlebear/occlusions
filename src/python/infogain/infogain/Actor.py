@@ -166,7 +166,7 @@ class Obstacle(Actor):
 
 
 class Blank(Actor):
-    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='white', outline_colour='white', scale=1):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='white', outline_colour='darkgrey', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
         self.max_v = 0
         self.min_v = 0
@@ -183,8 +183,8 @@ class Blank(Actor):
         ]) * self.scale
 
     def get_width(self):
-        return 0.01 * self.scale
+        return 0.02 * self.scale
 
     @staticmethod
     def check_width(scale):
-        return 0.01 * scale
+        return 0.02 * scale
