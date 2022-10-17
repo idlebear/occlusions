@@ -58,7 +58,7 @@ class Simulation:
             id=0,
             pos=np.array([0.0, -LANE_WIDTH / 2]),
             goal=None,
-            speed=0,
+            speed=0.7,
             colour='red',
             outline_colour='darkred',
             scale=1.1
@@ -161,12 +161,19 @@ class Simulation:
             for i in range(self.visibility.n()):
                 pts.append(self._get_location_on_screen([self.visibility[i].x(), self.visibility[i].y()]))
 
-            TGREEN = (150, 220, 150)
-            TBLACK = (0, 0, 0)
-            pygame.draw.polygon(self.screen, TGREEN, pts, 0)
-            pygame.draw.polygon(self.screen, TBLACK, pts, ACTOR_PATH_WIDTH)
+            TGREEN = (150, 220, 150, 100)
+            TBLACK = (0, 0, 0, 200)
+            vis_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+            pygame.draw.polygon(vis_screen, TGREEN, pts, 0)
+            pygame.draw.polygon(vis_screen, TBLACK, pts, ACTOR_PATH_WIDTH)
+            self.screen.blit(vis_screen, (0, 0))
 
     def _draw_status(self):
+
+        #  draw the limits of the environment
+        pygame.draw.rect(self.screen,
+                         SCREEN_OUTLINE_COLOUR,
+                         (self._xmargin-self._border_offset, self._ymargin-self._border_offset, self._env_size+self._border_offset*2, self._env_size+self._border_offset*2), 2)
 
         collisions_str = f'Collisions: {self.collisions}'
         time_str = f'Sim Time: {self.sim_time:.4f}'
@@ -389,18 +396,14 @@ class Simulation:
             #  draw the limits of the environment
             self.screen.fill(SCREEN_BACKGROUND_COLOUR)
 
-            self._draw_visibility()
-
             self._draw_road()
-
-            #  draw the limits of the environment
-            pygame.draw.rect(self.screen,
-                             SCREEN_OUTLINE_COLOUR,
-                             (self._xmargin-self._border_offset, self._ymargin-self._border_offset, self._env_size+self._border_offset*2, self._env_size+self._border_offset*2), 2)
 
             for actor in self.actor_list:
                 self._draw_actor(actor)
 
             self._draw_ego()
+
+            # visibility first as it will (currently) nuke everything else
+            self._draw_visibility()
 
             self._draw_status()

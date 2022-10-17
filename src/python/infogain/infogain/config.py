@@ -18,8 +18,7 @@ EGO_Y_OFFSET = -0.5
 LANE_WIDTH = 0.06
 ROAD_WIDTH = 2 * LANE_WIDTH
 
-
-DEFAULT_POLICY_NAME = "random_assgn"
+DEFAULT_POLICY_NAME = "random"
 DEFAULT_GENERATOR_NAME = "uniform"
 GENERATOR_ARGS = {
     'min': 0,
@@ -28,8 +27,8 @@ GENERATOR_ARGS = {
     'dim': 2,
     'mix': 0.5,
 }
-SHOW_SIM = False
 
+SHOW_SIM = False
 
 OPPONENT_RISK_SPEED = 0.005
 OPPONENT_CAR_SPEED = 0.07

@@ -72,7 +72,7 @@ def simulate(args, delivery_log=None):
         if args.show_sim:
             screen.blit(surface, (0, 0))
             pygame.display.flip()
-            pygame.display.update()
+            # pygame.display.update()
             clock.tick(1 / args.tick_time * args.simulation_speed)
 
     if len(sim.serviced_tasks) > 0:
