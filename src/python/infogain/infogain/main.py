@@ -44,6 +44,7 @@ def simulate(args, delivery_log=None):
             'min_v': 0,
             'max_accel': 0.05,
             'max_brake': 0.045,
+            'screen': screen,
         },
         generator_name=args.generator,
         generator_args=generator_args,

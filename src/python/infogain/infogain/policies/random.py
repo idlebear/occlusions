@@ -20,6 +20,7 @@ class RandomPolicy(BasePolicy):
             self.max_brake = 0    # no brakes!
             self.max_v = 0
             self.max_v = 0    # no brakes!
+            self.screen = None
         else:
             try:
                 self.max_accel = policy_args['max_accel']
@@ -38,6 +39,11 @@ class RandomPolicy(BasePolicy):
                 self.min_v = policy_args['min_v']
             except KeyError:
                 self.min_v = 0    # no brakes!
+
+            try:
+                self.screen = policy_args['screen']
+            except KeyError:
+                self.screen = None
 
     def execute(self, ego, actors, current_time=0, max_solver_time=30, dt=0.1):
         """basic policy

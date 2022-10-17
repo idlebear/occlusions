@@ -33,6 +33,7 @@ class Simulation:
         self._xmargin = margin * 0.5
         self._ymargin = margin * 0.5
         self._screen_width = screen_width
+        self._screen_height = screen_height
         self._env_size = screen_width - margin
         self._border_offset = 10
         self.max_time = max_time
@@ -55,7 +56,7 @@ class Simulation:
 
         self.ego = Car(
             id=0,
-            pos=np.array([0.0, 0.0]),
+            pos=np.array([0.0, -LANE_WIDTH / 2]),
             goal=None,
             speed=0,
             colour='red',
@@ -68,6 +69,8 @@ class Simulation:
         self.sim_time = 0.
         self.next_time = 0.
         self.sim_start_time = 0.
+
+        self.next_agent_x = -np.inf
 
         self.ticks = 0
         self.collisions = 0
@@ -94,7 +97,7 @@ class Simulation:
     def _get_location_on_screen(self, location):
         return [
             int(self._xmargin + (location[0]-self.ego.pos[0] - EGO_X_OFFSET)*self._env_size),
-            int(self._ymargin + self._env_size - (location[1]-self.ego.pos[1] - EGO_Y_OFFSET)*self._env_size)
+            int(self._ymargin + self._env_size - (location[1] - EGO_Y_OFFSET)*self._env_size)
         ]
 
     def _get_actor_outline(self, actor, flip=False):
@@ -120,9 +123,14 @@ class Simulation:
 
     def _draw_road(self):
         x = int(self.ego.pos[0]-0.5)
+        y = 0
+
+        loc = self._get_location_on_screen((x, LANE_WIDTH))
+        pygame.draw.rect(self.screen, ROAD_COLOUR, (loc[0], loc[1], self._env_size * 2.5, 2*LANE_WIDTH*self._env_size))
+
         for _ in range(15):
-            loc = self._get_location_on_screen((x, -int(self._env_size*0.0001)))
-            pygame.draw.rect(self.screen, 'yellow', (loc[0], loc[1], int(self._env_size * 0.1), int(self._env_size*0.005)))
+            loc = self._get_location_on_screen((x,  y - int(self._env_size*0.0001)))
+            pygame.draw.rect(self.screen, ROAD_MARKING_COLOUR, (loc[0], loc[1], int(self._env_size * 0.1), int(self._env_size*0.005)))
             x += 0.2
 
     def _draw_task(self, location, color, size, outlines=False):
@@ -142,51 +150,21 @@ class Simulation:
             pygame.draw.polygon(self.screen, actor.outline_colour, pts, ACTOR_PATH_WIDTH)
 
     def _draw_ego(self):
-
         self._draw_actor(self.ego)
 
-        # draw the stopping distance
-        d_s = self.ego.speed / self.ego.max_brake
-
         loc = self._get_location_on_screen(self.ego.pos)
-        pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=d_s*self._env_size, width=2)
+        pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=self.d_s*self._env_size, width=2)
 
     def _draw_visibility(self):
-        shapes = []
-
-        ox = self.ego.pos[0]+EGO_X_OFFSET-1
-        oy = self.ego.pos[1]+EGO_Y_OFFSET-1
-
-        # environment poly is counter clockwise
-        shapes.append(
-            vis.Polygon([
-                vis.Point(ox, oy),
-                vis.Point(ox+4.0, oy),
-                vis.Point(ox+4.0, oy+4.0),
-                vis.Point(ox, oy+4.0),
-            ])
-        )
-
-        for actor in self.actor_list:
-            if type(actor) is Blank:
-                continue
-
-            if actor.pos[0] > self.ego.pos[0]+EGO_X_OFFSET and actor.pos[0] < self.ego.pos[0]+EGO_X_OFFSET+1.5 and \
-                    actor.pos[1] > self.ego.pos[1]+EGO_Y_OFFSET and actor.pos[1] < self.ego.pos[1]+EGO_Y_OFFSET+1.0:
-                pts = self._get_actor_outline(actor) + actor.pos
-                poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
-                shapes.append(vis.Polygon(poly_pts))
-
-        env = vis.Environment(shapes)
-        if env.is_valid(EPSILON):
-            observer = vis.Point(self.ego.pos[0], self.ego.pos[1])
-            vis_poly = vis.Visibility_Polygon(observer, env, EPSILON)
-
+        if self.visibility is not None:
             pts = []
-            for i in range(vis_poly.n()):
-                pts.append(self._get_location_on_screen([vis_poly[i].x(), vis_poly[i].y()]))
-            pygame.draw.polygon(self.screen, 'palegreen', pts, 0)
-            pygame.draw.polygon(self.screen, 'black', pts, ACTOR_PATH_WIDTH)
+            for i in range(self.visibility.n()):
+                pts.append(self._get_location_on_screen([self.visibility[i].x(), self.visibility[i].y()]))
+
+            TGREEN = (150, 220, 150)
+            TBLACK = (0, 0, 0)
+            pygame.draw.polygon(self.screen, TGREEN, pts, 0)
+            pygame.draw.polygon(self.screen, TBLACK, pts, ACTOR_PATH_WIDTH)
 
     def _draw_status(self):
 
@@ -221,6 +199,51 @@ class Simulation:
     ##################################################################################
     # Simulator step functions
     ##################################################################################
+    def calculate_visibility(self):
+
+        # the stopping distance
+        self.d_s = self.ego.speed / self.ego.max_brake
+
+        if self.ego.speed:
+            self.d_o = self.d_s * OPPONENT_RISK_SPEED / self.ego.speed
+        else:
+            self.d_o = 0
+
+        # calculate the visibility polygon
+        shapes = []
+
+        # environment poly is counter clockwise and large enough to be off screen
+        ox = self.ego.pos[0]-2
+        oy = -2
+        shapes.append(
+            vis.Polygon([
+                vis.Point(ox, oy),
+                vis.Point(ox+4.0, oy),
+                vis.Point(ox+4.0, oy+4.0),
+                vis.Point(ox, oy+4.0),
+            ])
+        )
+
+        for actor in self.actor_list:
+            if type(actor) is Blank:
+                continue
+
+            if actor.pos[0] > self.ego.pos[0]+EGO_X_OFFSET and actor.pos[0] < self.ego.pos[0]+EGO_X_OFFSET+1.5:
+                pts = self._get_actor_outline(actor) + actor.pos
+                poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
+                shapes.append(vis.Polygon(poly_pts))
+
+        vis_poly = None
+        env = vis.Environment(shapes)
+        if env.is_valid(EPSILON):
+            observer = vis.Point(self.ego.pos[0], self.ego.pos[1])
+            vis_poly = vis.Visibility_Polygon(observer, env, EPSILON)
+
+        return vis_poly
+
+    ##################################################################################
+    # Simulator step functions
+    ##################################################################################
 
     def _tick_actor(self, actor, tick_time):
         """step of simulation for each actor
@@ -240,44 +263,59 @@ class Simulation:
         self.sim_time += tick_time
         self.ticks += 1
 
-        if len(self.actor_list):
-            x = self.actor_list[-1].pos[0]+self.actor_list[-1].get_width()/2 + 0.005
-        else:
-            x = self.ego.pos[0] + (1.5 + EGO_X_OFFSET)
+        x = max(self.next_agent_x, self.ego.pos[0] + (1.5 + EGO_X_OFFSET))
 
         dx = 0.005 * self.generator.uniform()
 
         while (len(self.actor_list) < self.num_actors):
             rnd = self.generator.uniform()
             if rnd < 0.4:
-
                 scale = 1 + 9 * self.generator.uniform()
                 width = Obstacle.check_width(scale)
 
-                y = 0.1 + self.generator.uniform()*0.3
                 if rnd < 0.25:
-                    y = -y
+                    y = - LANE_WIDTH * 1.5 - self.generator.uniform()*0.3 - width/2
+                else:
+                    y = LANE_WIDTH * 1.5 + self.generator.uniform()*0.3 + width/2
+
                 actor = Obstacle(
                     id=self.ticks,
                     pos=np.array([x+dx+width/2, y]),
                     speed=0.0,
                     scale=scale
                 )
-            elif rnd < 0.65:
+            elif rnd < 0.5:
+
+                # oncoming traffic
+                scale = 1
+                width = Car.check_width(scale) * 2
+
+                v = OPPONENT_CAR_SPEED
+                y = LANE_WIDTH / 2
+
+                actor = Car(
+                    id=self.ticks,
+                    pos=np.array([x+dx+width/2, y]),
+                    goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
+                    speed=v,
+                    scale=scale
+                )
+            elif rnd < 0.75:
 
                 scale = 1
                 width = Car.check_width(scale)
 
-                vy = 0.07
+                v = OPPONENT_CAR_SPEED
+
                 y = 0.3
-                if rnd < 0.525:
+                if rnd < 0.625:
                     y = -y
 
                 actor = Car(
                     id=self.ticks,
                     pos=np.array([x+dx+width/2, y]),
                     goal=np.array([x+dx+width/2, -y]),
-                    speed=vy,
+                    speed=v,
                     scale=scale
                 )
             elif rnd < 0.95:
@@ -285,7 +323,7 @@ class Simulation:
                 scale = 1
                 width = Pedestrian.check_width(scale)
 
-                vy = 0.025
+                v = OPPONENT_PEDESTRIAN_SPEED
                 y = 0.2
                 if rnd < 0.7875:
                     y = -y
@@ -294,18 +332,15 @@ class Simulation:
                     id=self.ticks,
                     pos=np.array([x+dx+width/2, y]),
                     goal=np.array([x+dx+width/2, -y]),
-                    speed=vy,
+                    speed=v,
                     scale=scale
                 )
             else:
                 # do nothing (space)
                 scale = 1 + 9 * self.generator.uniform()
-                width = Obstacle.check_width(scale)
+                width = Blank.check_width(scale)
 
                 y = 0.1 + self.generator.uniform()*0.3
-                if rnd < 0.25:
-                    y = -y
-
                 actor = Blank(
                     id=self.ticks,
                     pos=np.array([x+dx+width/2, y]),
@@ -315,10 +350,15 @@ class Simulation:
 
             self.actor_list.append(actor)
             dx += actor.get_width() + 0.005 * self.generator.uniform()
+            self.next_agent_x = x + dx
 
         if max_simulation_time is not None:
             if self.sim_time > max_simulation_time:
                 return -1
+
+        # calculate the cone of danger for an assumed velocity -- this should be in the policy but we'll
+        # do it here for now for visualization
+        self.visibility = self.calculate_visibility()
 
         self._policy.execute(self.ego, self.actor_list, self.sim_time, tick_time)
 
@@ -349,7 +389,6 @@ class Simulation:
             #  draw the limits of the environment
             self.screen.fill(SCREEN_BACKGROUND_COLOUR)
 
-            # visibility first as it will (currently) nuke everything else
             self._draw_visibility()
 
             self._draw_road()
