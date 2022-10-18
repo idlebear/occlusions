@@ -14,6 +14,92 @@ from Actor import Actor, Pedestrian, Car, Obstacle, Blank
 from config import *
 
 
+def get_location(origin, location):
+    return [location[0]-origin[0] - EGO_X_OFFSET, 1 - location[1] + EGO_Y_OFFSET]
+
+
+class Window:
+    def __init__(self, screen, screen_width, screen_height, margin):
+        self.screen = screen
+
+        self.sim_time_text = pygame.font.SysFont('dejavuserif', 15)
+        self.elapsed_time_text = pygame.font.SysFont('dejavuserif', 10)
+        self.status_font = pygame.font.SysFont('roboto', STATUS_FONT_SIZE)
+
+        self._xmargin = margin * 0.5
+        self._ymargin = margin * 0.5
+        self._screen_width = screen_width
+        self._screen_height = screen_height
+        self._env_size = screen_width - margin
+        self._border_offset = 10
+
+    def _get_location_on_screen(self, origin, location):
+        return [
+            int(self._xmargin + (location[0]-origin[0] - EGO_X_OFFSET)*self._env_size),
+            int(self._ymargin + self._env_size - (location[1] - EGO_Y_OFFSET)*self._env_size)
+        ]
+
+    def clear(self):
+        self.screen.fill(SCREEN_BACKGROUND_COLOUR)
+
+    def draw_rect(self, colour, location, height, width=None):
+        if width is None:
+            width = height
+
+        pygame.draw.rect(
+            self.screen,
+            colour,
+            (self._xmargin+(location[0] - width / 2.0)*self._env_size,
+             self._ymargin+(location[1] - height / 2.0)*self._env_size,
+             width * self._env_size,
+             height * self._env_size
+             )
+        )
+
+    def draw_polygon(self, outline_colour, fill_colour, points, use_transparency=False):
+        points = [[self._xmargin+x*self._env_size, self._ymargin+y*self._env_size] for x, y in points]
+
+        if use_transparency:
+            vis_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+            pygame.draw.polygon(vis_screen, fill_colour, points, 0)
+            pygame.draw.polygon(vis_screen, outline_colour, points, ACTOR_PATH_WIDTH)
+            self.screen.blit(vis_screen, (0, 0))
+        else:
+            pygame.draw.polygon(self.screen, fill_colour, points, 0)
+            pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
+
+    def draw_status(self, collisions, sim_time):
+        #  draw the limits of the environment
+        pygame.draw.rect(self.screen,
+                         SCREEN_OUTLINE_COLOUR,
+                         (self._xmargin-self._border_offset, self._ymargin-self._border_offset, self._env_size+self._border_offset*2, self._env_size+self._border_offset*2), 2)
+
+        collisions_str = f'Collisions: {collisions}'
+        time_str = f'Sim Time: {sim_time:.4f}'
+
+        text_width, text_height = self.status_font.size(collisions_str)
+        time_text_width, time_text_height = self.status_font.size(time_str)
+
+        x_avg_offset = self._env_size + self._xmargin - text_width - STATUS_XMARGIN*2
+        y_avg_offset = self._env_size + self._ymargin - text_height - STATUS_YMARGIN
+
+        pygame.draw.rect(self.screen,
+                         SCREEN_BACKGROUND_COLOUR,
+                         (x_avg_offset-STATUS_XMARGIN, y_avg_offset-STATUS_YMARGIN, text_width + STATUS_XMARGIN*2, text_height + STATUS_YMARGIN), 0)
+        pygame.draw.rect(self.screen,
+                         SCREEN_OUTLINE_COLOUR,
+                         (x_avg_offset-STATUS_XMARGIN, y_avg_offset-STATUS_YMARGIN, text_width + STATUS_XMARGIN*2, text_height + STATUS_YMARGIN), 2)
+        text = self.status_font.render(collisions_str, False, STATUS_FONT_COLOUR)
+        self.screen.blit(text, (x_avg_offset+STATUS_XMARGIN/3, y_avg_offset))
+
+        pygame.draw.rect(self.screen,
+                         SCREEN_BACKGROUND_COLOUR,
+                         (self._xmargin + STATUS_XMARGIN/2, self._xmargin + STATUS_YMARGIN, time_text_width + STATUS_XMARGIN, time_text_height + STATUS_YMARGIN), 0)
+
+        text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
+        self.screen.blit(text, (self._xmargin+STATUS_XMARGIN, self._ymargin+STATUS_YMARGIN))
+
+
 class Simulation:
     def __init__(self, policy_name, policy_args=None, generator_name='uniform', generator_args=None, num_actors=1, pois_lambda=0.01, screen=None, service_time=SERVICE_TIME,
                  speed=ACTOR_SPEED, margin=SCREEN_MARGIN, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
@@ -21,23 +107,17 @@ class Simulation:
         self.num_actors = num_actors
         self.actor_speed = speed
         self.pois_lambda = pois_lambda
-        self.screen = screen
+
         self.record_data = record_data
-
-        if screen is not None or record_data:
-            self.sim_time_text = pygame.font.SysFont('dejavuserif', 15)
-            self.elapsed_time_text = pygame.font.SysFont('dejavuserif', 10)
-            self.status_font = pygame.font.SysFont('roboto', STATUS_FONT_SIZE)
-
-        self.service_time = service_time
-        self._xmargin = margin * 0.5
-        self._ymargin = margin * 0.5
-        self._screen_width = screen_width
-        self._screen_height = screen_height
-        self._env_size = screen_width - margin
-        self._border_offset = 10
         self.max_time = max_time
         self.max_tasks = max_tasks
+
+        self.service_time = service_time
+
+        if screen is not None or record_data:
+            self.window = Window(screen=screen, screen_width=screen_width, screen_height=screen_height, margin=margin)
+        else:
+            self.window = None
 
         self.delivery_log = delivery_log
 
@@ -58,7 +138,7 @@ class Simulation:
             id=0,
             pos=np.array([0.0, -LANE_WIDTH / 2]),
             goal=None,
-            speed=0.7,
+            speed=0.5,
             colour='red',
             outline_colour='darkred',
             scale=1.1
@@ -78,6 +158,7 @@ class Simulation:
     def load_policy(self, policy_name, policy_args):
         # load the policy
         self.policy_name = policy_name
+        policy_args['window'] = self.window
         self.policy_args = policy_args
         policy_mod = import_module('.'+self.policy_name, package='policies')
         self._policy = policy_mod.get_policy_fn(self.generator, policy_args)
@@ -94,13 +175,7 @@ class Simulation:
     # Plotting and drawing functions
     ############################################################################
 
-    def _get_location_on_screen(self, location):
-        return [
-            int(self._xmargin + (location[0]-self.ego.pos[0] - EGO_X_OFFSET)*self._env_size),
-            int(self._ymargin + self._env_size - (location[1] - EGO_Y_OFFSET)*self._env_size)
-        ]
-
-    def _get_actor_outline(self, actor, flip=False):
+    def _rotate_actor_outline(self, actor, flip=False):
         flip = -1 if flip else 1
         rot = np.array(
             [
@@ -110,111 +185,53 @@ class Simulation:
         )
         return (rot @ actor.get_poly().T).T
 
-    def _get_actor_outline_on_screen(self, actor):
-        actor_screen_pos = self._get_location_on_screen(actor.pos)
-        actor_screen_outline = self._get_actor_outline(actor, flip=True) * self._env_size
+    def _get_actor_outline(self, actor):
+        actor_pos = get_location(origin=self.ego.pos, location=actor.pos)
+        actor_outline = self._rotate_actor_outline(actor, flip=True)
 
-        return (actor_screen_outline + np.array(actor_screen_pos))
-
-    def _draw_rect(self, location, color, size):
-        pygame.draw.rect(self.screen,
-                         color,
-                         (location[0] - size/2.0, location[1] - size/2.0, size, size))
+        return (actor_outline + np.array(actor_pos))
 
     def _draw_road(self):
         x = int(self.ego.pos[0]-0.5)
         y = 0
 
-        loc = self._get_location_on_screen((x, LANE_WIDTH))
-        pygame.draw.rect(self.screen, ROAD_COLOUR, (loc[0], loc[1], self._env_size * 2.5, 2*LANE_WIDTH*self._env_size))
+        loc = get_location(origin=self.ego.pos, location=(x, y))
+        self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, 10)
 
         for _ in range(15):
-            loc = self._get_location_on_screen((x,  y - int(self._env_size*0.0001)))
-            pygame.draw.rect(self.screen, ROAD_MARKING_COLOUR, (loc[0], loc[1], int(self._env_size * 0.1), int(self._env_size*0.005)))
+            loc = get_location(origin=self.ego.pos, location=(x,  y - 0.0001))
+            self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.005, 0.1)
             x += 0.2
-
-    def _draw_task(self, location, color, size, outlines=False):
-        if not outlines:
-            pygame.draw.circle(self.screen,
-                               color,
-                               (location[0], location[1]), size, 0)
-        else:
-            pygame.draw.circle(self.screen,
-                               SCREEN_OUTLINE_COLOUR,
-                               (location[0], location[1]), size, 2)
 
     def _draw_actor(self, actor):
         if type(actor) is not Blank:
-            pts = self._get_actor_outline_on_screen(actor)
-            pygame.draw.polygon(self.screen, actor.colour, pts, 0)
-            pygame.draw.polygon(self.screen, actor.outline_colour, pts, ACTOR_PATH_WIDTH)
+            pts = self._get_actor_outline(actor)
+            self.window.draw_polygon(outline_colour=actor.outline_colour, fill_colour=actor.colour, points=pts)
 
     def _draw_ego(self):
         self._draw_actor(self.ego)
 
-        loc = self._get_location_on_screen(self.ego.pos)
-        pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=self.d_s*self._env_size, width=2)
+        # loc = self._get_location_on_screen(origin=self.ego.pos, location=self.ego.pos)
+        # pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=self.d_s*self._env_size, width=2)
 
     def _draw_visibility(self):
         if self.visibility is not None:
             pts = []
             for i in range(self.visibility.n()):
-                pts.append(self._get_location_on_screen([self.visibility[i].x(), self.visibility[i].y()]))
+                pts.append(get_location(origin=self.ego.pos, location=[self.visibility[i].x(), self.visibility[i].y()]))
 
             TGREEN = (150, 220, 150, 100)
             TBLACK = (0, 0, 0, 200)
-            vis_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
-            pygame.draw.polygon(vis_screen, TGREEN, pts, 0)
-            pygame.draw.polygon(vis_screen, TBLACK, pts, ACTOR_PATH_WIDTH)
-            self.screen.blit(vis_screen, (0, 0))
+            self.window.draw_polygon(outline_colour=TBLACK, fill_colour=TGREEN, points=pts, use_transparency=True)
 
     def _draw_status(self):
-
-        #  draw the limits of the environment
-        pygame.draw.rect(self.screen,
-                         SCREEN_OUTLINE_COLOUR,
-                         (self._xmargin-self._border_offset, self._ymargin-self._border_offset, self._env_size+self._border_offset*2, self._env_size+self._border_offset*2), 2)
-
-        collisions_str = f'Collisions: {self.collisions}'
-        time_str = f'Sim Time: {self.sim_time:.4f}'
-
-        text_width, text_height = self.status_font.size(collisions_str)
-        time_text_width, time_text_height = self.status_font.size(time_str)
-
-        x_avg_offset = self._env_size + self._xmargin - text_width - STATUS_XMARGIN*2
-        y_avg_offset = self._env_size + self._ymargin - text_height - STATUS_YMARGIN
-
-        pygame.draw.rect(self.screen,
-                         SCREEN_BACKGROUND_COLOUR,
-                         (x_avg_offset-STATUS_XMARGIN, y_avg_offset-STATUS_YMARGIN, text_width + STATUS_XMARGIN*2, text_height + STATUS_YMARGIN), 0)
-        pygame.draw.rect(self.screen,
-                         SCREEN_OUTLINE_COLOUR,
-                         (x_avg_offset-STATUS_XMARGIN, y_avg_offset-STATUS_YMARGIN, text_width + STATUS_XMARGIN*2, text_height + STATUS_YMARGIN), 2)
-        text = self.status_font.render(collisions_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(text, (x_avg_offset+STATUS_XMARGIN/3, y_avg_offset))
-
-        pygame.draw.rect(self.screen,
-                         SCREEN_BACKGROUND_COLOUR,
-                         (self._xmargin + STATUS_XMARGIN/2, self._xmargin + STATUS_YMARGIN, time_text_width + STATUS_XMARGIN, time_text_height + STATUS_YMARGIN), 0)
-        # pygame.draw.rect(self.screen,
-        #                  SCREEN_OUTLINE_COLOUR,
-        #                  (self._xmargin + STATUS_XMARGIN/2, self._xmargin + STATUS_YMARGIN, time_text_width + STATUS_XMARGIN, time_text_height + STATUS_YMARGIN), 2)
-
-        text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(text, (self._xmargin+STATUS_XMARGIN, self._ymargin+STATUS_YMARGIN))
+        self.window.draw_status(self.collisions, self.sim_time)
 
     ##################################################################################
     # Simulator step functions
     ##################################################################################
+
     def calculate_visibility(self):
-
-        # the stopping distance
-        self.d_s = self.ego.speed / self.ego.max_brake
-
-        if self.ego.speed:
-            self.d_o = self.d_s * OPPONENT_RISK_SPEED / self.ego.speed
-        else:
-            self.d_o = 0
 
         # calculate the visibility polygon
         shapes = []
@@ -236,7 +253,7 @@ class Simulation:
                 continue
 
             if actor.pos[0] > self.ego.pos[0]+EGO_X_OFFSET and actor.pos[0] < self.ego.pos[0]+EGO_X_OFFSET+1.5:
-                pts = self._get_actor_outline(actor) + actor.pos
+                pts = self._rotate_actor_outline(actor) + actor.pos
                 poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
                 shapes.append(vis.Polygon(poly_pts))
 
@@ -270,7 +287,7 @@ class Simulation:
         self.sim_time += tick_time
         self.ticks += 1
 
-        x = max(self.next_agent_x, self.ego.pos[0] + (1.5 + EGO_X_OFFSET))
+        x = max(self.next_agent_x, self.ego.pos[0] + (1.0))
 
         dx = 0.005 * self.generator.uniform()
 
@@ -281,9 +298,9 @@ class Simulation:
                 width = Obstacle.check_width(scale)
 
                 if rnd < 0.25:
-                    y = - LANE_WIDTH * 1.5 - self.generator.uniform()*0.3 - width/2
+                    y = - LANE_WIDTH * 1.5 - self.generator.uniform()*0.1 - width/2
                 else:
-                    y = LANE_WIDTH * 1.5 + self.generator.uniform()*0.3 + width/2
+                    y = LANE_WIDTH * 1.5 + self.generator.uniform()*0.1 + width/2
 
                 actor = Obstacle(
                     id=self.ticks,
@@ -291,30 +308,30 @@ class Simulation:
                     speed=0.0,
                     scale=scale
                 )
-            elif rnd < 0.5:
+            # elif rnd < 0.5:
 
-                # oncoming traffic
-                scale = 1
-                width = Car.check_width(scale) * 2
+            #     # oncoming traffic
+            #     scale = 1
+            #     width = Car.check_width(scale) * 2
 
-                v = OPPONENT_CAR_SPEED
-                y = LANE_WIDTH / 2
+            #     v = OPPONENT_CAR_SPEED
+            #     y = LANE_WIDTH / 2
 
-                actor = Car(
-                    id=self.ticks,
-                    pos=np.array([x+dx+width/2, y]),
-                    goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
-                    speed=v,
-                    scale=scale
-                )
-            elif rnd < 0.75:
+            #     actor = Car(
+            #         id=self.ticks,
+            #         pos=np.array([x+dx+width/2, y]),
+            #         goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
+            #         speed=v,
+            #         scale=scale
+            #     )
+            elif rnd < 0.55:
 
                 scale = 1
                 width = Car.check_width(scale)
 
                 v = OPPONENT_CAR_SPEED
 
-                y = 0.3
+                y = 2
                 if rnd < 0.625:
                     y = -y
 
@@ -331,7 +348,7 @@ class Simulation:
                 width = Pedestrian.check_width(scale)
 
                 v = OPPONENT_PEDESTRIAN_SPEED
-                y = 0.2
+                y = 0.4
                 if rnd < 0.7875:
                     y = -y
 
@@ -391,10 +408,10 @@ class Simulation:
             if actor.at_goal():
                 actor.set_goal(self.generator.random(2))
 
-        if self.screen is not None:
+        if self.window is not None:
 
             #  draw the limits of the environment
-            self.screen.fill(SCREEN_BACKGROUND_COLOUR)
+            self.window.clear()
 
             self._draw_road()
 
@@ -402,6 +419,8 @@ class Simulation:
                 self._draw_actor(actor)
 
             self._draw_ego()
+
+            self._policy.draw()
 
             # visibility first as it will (currently) nuke everything else
             self._draw_visibility()

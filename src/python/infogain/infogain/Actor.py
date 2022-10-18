@@ -93,7 +93,7 @@ class Actor:
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
-        self.max_v = 0.75
+        self.max_v = 0.4
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
@@ -118,7 +118,7 @@ class Car(Actor):
 class Pedestrian(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='blue', outline_colour='darkblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
-        self.max_v = 0.75
+        self.max_v = 0.3
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
@@ -133,11 +133,11 @@ class Pedestrian(Actor):
         ]) * self.scale
 
     def get_width(self):
-        return 0.03 * self.scale
+        return 0.035 * self.scale
 
     @staticmethod
     def check_width(scale):
-        return 0.03 * scale
+        return 0.035 * scale
 
 
 class Obstacle(Actor):
