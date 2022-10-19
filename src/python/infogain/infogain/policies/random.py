@@ -5,6 +5,9 @@ from copy import deepcopy
 from time import time
 import numpy as np
 
+import shapely.geometry as sh
+
+
 from policies.policy import BasePolicy
 from simulation import get_location
 
@@ -48,7 +51,7 @@ class RandomPolicy(BasePolicy):
             except KeyError:
                 self.window = None
 
-    def execute(self, ego, actors, current_time=0, max_solver_time=30, dt=0.1):
+    def execute(self, ego, actors, visibility, current_time=0, max_solver_time=30, dt=0.1):
         """basic policy
 
         Args:
@@ -70,13 +73,29 @@ class RandomPolicy(BasePolicy):
             get_location(origin=ego.pos, location=ego.pos),
             get_location(origin=ego.pos, location=(ego.pos[0]+self.d_s, ego.pos[1]+self.d_o_car)),
             get_location(origin=ego.pos, location=(ego.pos[0]+self.d_s, ego.pos[1]-self.d_o_car)),
+            get_location(origin=ego.pos, location=ego.pos),
         ]
 
         self.ped_pts = [
             get_location(origin=ego.pos, location=ego.pos),
             get_location(origin=ego.pos, location=(ego.pos[0]+self.d_s, ego.pos[1]+self.d_o_ped)),
             get_location(origin=ego.pos, location=(ego.pos[0]+self.d_s, ego.pos[1]-self.d_o_ped)),
+            get_location(origin=ego.pos, location=ego.pos),
         ]
+
+        if visibility is not None:
+            vis_poly_pts = []
+            for i in range(visibility.n()):
+                vis_poly_pts.append((visibility[i].x(), visibility[i].y()))
+            vis_poly_pts.append( vis_poly_pts[0] )
+
+            vis_poly = sh.Polygon( vis_poly_pts )
+            ped_poly = sh.Polygon( self.ped_pts )
+
+            overlap_area = vis_poly.intersection( ped_poly ).area
+            ped_area = ped_poly.area
+
+            print( f'Ped Area: {ped_area}, Overlap Area: {overlap_area}, Difference: {ped_area - overlap_area}\n')
 
         a = self.generator.uniform(-self.max_brake, self.max_accel)
         ego.accelerate(a, dt)

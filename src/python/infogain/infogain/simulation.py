@@ -384,7 +384,7 @@ class Simulation:
         # do it here for now for visualization
         self.visibility = self.calculate_visibility()
 
-        self._policy.execute(self.ego, self.actor_list, self.sim_time, tick_time)
+        self._policy.execute(self.ego, self.actor_list, self.visibility, current_time=self.sim_time, dt=tick_time)
 
         finished_actors = []
         for i, actor in enumerate(self.actor_list[::-1]):
