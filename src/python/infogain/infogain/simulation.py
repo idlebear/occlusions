@@ -33,6 +33,8 @@ class Window:
         self._env_size = screen_width - margin
         self._border_offset = 10
 
+        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+
     def _get_location_on_screen(self, origin, location):
         return [
             int(self._xmargin + (location[0]-origin[0] - EGO_X_OFFSET)*self._env_size),
@@ -60,10 +62,14 @@ class Window:
         points = [[self._xmargin+x*self._env_size, self._ymargin+y*self._env_size] for x, y in points]
 
         if use_transparency:
-            vis_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
-            pygame.draw.polygon(vis_screen, fill_colour, points, 0)
-            pygame.draw.polygon(vis_screen, outline_colour, points, ACTOR_PATH_WIDTH)
-            self.screen.blit(vis_screen, (0, 0))
+            self.tmp_screen.fill((0, 0, 0, 0))
+
+            # TODO: Drawing this filled polygon is hella slow, taking the sim from faster than real-time to somewhere around
+            #       half speed.  Removed for now, but it's just not as pretty...  there may be an update to resolve the issue
+            #       in pygame, but for the time being, our poly is going to be clear....
+            # pygame.draw.polygon(self.tmp_screen, fill_colour, points, 0)
+            pygame.draw.polygon(self.tmp_screen, outline_colour, points, ACTOR_PATH_WIDTH)
+            self.screen.blit(self.tmp_screen, (0, 0))
         else:
             pygame.draw.polygon(self.screen, fill_colour, points, 0)
             pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
@@ -289,13 +295,11 @@ class Simulation:
 
         x = max(self.next_agent_x, self.ego.pos[0] + (1.0))
 
-        dx = 0.005 * self.generator.uniform()
-
         while (len(self.actor_list) < self.num_actors):
             rnd = self.generator.uniform()
             if rnd < 0.4:
                 scale = 1 + 9 * self.generator.uniform()
-                width = Obstacle.check_width(scale)
+                width = Obstacle.check_width(scale) + 0.005
 
                 if rnd < 0.25:
                     y = - LANE_WIDTH * 1.5 - self.generator.uniform()*0.1 - width/2
@@ -304,7 +308,7 @@ class Simulation:
 
                 actor = Obstacle(
                     id=self.ticks,
-                    pos=np.array([x+dx+width/2, y]),
+                    pos=np.array([x+width/2, y]),
                     speed=0.0,
                     scale=scale
                 )
@@ -324,6 +328,22 @@ class Simulation:
             #         speed=v,
             #         scale=scale
             #     )
+            elif rnd < 0.5:
+
+                # same side traffic
+                scale = 1
+                width = Car.check_width(scale) * 5
+
+                v = OPPONENT_CAR_SPEED*0.5
+                y = -LANE_WIDTH / 2
+
+                actor = Car(
+                    id=self.ticks,
+                    pos=np.array([x+width/2, y]),
+                    goal=np.array([self.ego.pos[0]+100000, y]),
+                    speed=v,
+                    scale=scale
+                )
             elif rnd < 0.55:
 
                 scale = 1
@@ -337,8 +357,8 @@ class Simulation:
 
                 actor = Car(
                     id=self.ticks,
-                    pos=np.array([x+dx+width/2, y]),
-                    goal=np.array([x+dx+width/2, -y]),
+                    pos=np.array([x+width/2, y]),
+                    goal=np.array([x+width/2, -y]),
                     speed=v,
                     scale=scale
                 )
@@ -354,8 +374,8 @@ class Simulation:
 
                 actor = Pedestrian(
                     id=self.ticks,
-                    pos=np.array([x+dx+width/2, y]),
-                    goal=np.array([x+dx+width/2, -y]),
+                    pos=np.array([x+width/2, y]),
+                    goal=np.array([x+width/2, -y]),
                     speed=v,
                     scale=scale
                 )
@@ -367,14 +387,14 @@ class Simulation:
                 y = 0.1 + self.generator.uniform()*0.3
                 actor = Blank(
                     id=self.ticks,
-                    pos=np.array([x+dx+width/2, y]),
+                    pos=np.array([x+width/2, y]),
                     speed=0.0,
                     scale=scale
                 )
 
             self.actor_list.append(actor)
-            dx += actor.get_width() + 0.005 * self.generator.uniform()
-            self.next_agent_x = x + dx
+            x += width + 0.005 * self.generator.uniform()
+            self.next_agent_x = x
 
         if max_simulation_time is not None:
             if self.sim_time > max_simulation_time:
@@ -420,7 +440,7 @@ class Simulation:
 
             self._draw_ego()
 
-            self._policy.draw()
+            # self._policy.draw()
 
             # visibility first as it will (currently) nuke everything else
             self._draw_visibility()
