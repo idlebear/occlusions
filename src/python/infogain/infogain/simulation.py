@@ -312,22 +312,22 @@ class Simulation:
                     speed=0.0,
                     scale=scale
                 )
-            # elif rnd < 0.5:
+            elif rnd < 0.45:
 
-            #     # oncoming traffic
-            #     scale = 1
-            #     width = Car.check_width(scale) * 2
+                # oncoming traffic
+                scale = 1
+                width = Car.check_width(scale) * 2
 
-            #     v = OPPONENT_CAR_SPEED
-            #     y = LANE_WIDTH / 2
+                v = OPPONENT_CAR_SPEED
+                y = LANE_WIDTH / 2
 
-            #     actor = Car(
-            #         id=self.ticks,
-            #         pos=np.array([x+dx+width/2, y]),
-            #         goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
-            #         speed=v,
-            #         scale=scale
-            #     )
+                actor = Car(
+                    id=self.ticks,
+                    pos=np.array([x+width/2, y]),
+                    goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
+                    speed=v,
+                    scale=scale
+                )
             elif rnd < 0.5:
 
                 # same side traffic
@@ -344,41 +344,41 @@ class Simulation:
                     speed=v,
                     scale=scale
                 )
-            elif rnd < 0.55:
+            # elif rnd < 0.55:
 
-                scale = 1
-                width = Car.check_width(scale)
+            #     scale = 1
+            #     width = Car.check_width(scale)
 
-                v = OPPONENT_CAR_SPEED
+            #     v = OPPONENT_CAR_SPEED
 
-                y = 2
-                if rnd < 0.625:
-                    y = -y
+            #     y = 2
+            #     if rnd < 0.625:
+            #         y = -y
 
-                actor = Car(
-                    id=self.ticks,
-                    pos=np.array([x+width/2, y]),
-                    goal=np.array([x+width/2, -y]),
-                    speed=v,
-                    scale=scale
-                )
-            elif rnd < 0.95:
+            #     actor = Car(
+            #         id=self.ticks,
+            #         pos=np.array([x+width/2, y]),
+            #         goal=np.array([x+width/2, -y]),
+            #         speed=v,
+            #         scale=scale
+            #     )
+            # elif rnd < 0.95:
 
-                scale = 1
-                width = Pedestrian.check_width(scale)
+            #     scale = 1
+            #     width = Pedestrian.check_width(scale)
 
-                v = OPPONENT_PEDESTRIAN_SPEED
-                y = 0.4
-                if rnd < 0.7875:
-                    y = -y
+            #     v = OPPONENT_PEDESTRIAN_SPEED
+            #     y = 0.4
+            #     if rnd < 0.7875:
+            #         y = -y
 
-                actor = Pedestrian(
-                    id=self.ticks,
-                    pos=np.array([x+width/2, y]),
-                    goal=np.array([x+width/2, -y]),
-                    speed=v,
-                    scale=scale
-                )
+            #     actor = Pedestrian(
+            #         id=self.ticks,
+            #         pos=np.array([x+width/2, y]),
+            #         goal=np.array([x+width/2, -y]),
+            #         speed=v,
+            #         scale=scale
+            #     )
             else:
                 # do nothing (space)
                 scale = 1 + 9 * self.generator.uniform()
@@ -404,7 +404,12 @@ class Simulation:
         # do it here for now for visualization
         self.visibility = self.calculate_visibility()
 
-        self._policy.execute(self.ego, self.actor_list, self.sim_time, tick_time)
+        actors = []
+        for actor in self.actor_list:
+            if type(actor) is not Blank:
+                actors.append(actor)
+
+        self._policy.execute(self.ego, actors, self.visibility, self.sim_time, tick_time)
 
         finished_actors = []
         for i, actor in enumerate(self.actor_list[::-1]):

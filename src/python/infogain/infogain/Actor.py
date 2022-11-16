@@ -1,5 +1,5 @@
 from config import DISTANCE_TOLERANCE, TICK_TIME, ACTOR_PATH_WIDTH
-from math import sqrt, atan2
+from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
 
@@ -17,6 +17,7 @@ class Actor:
         self.min_v = -np.inf
         self.max_brake = np.inf
         self.max_accel = np.inf
+        self.max_delta = np.pi / 6.0
 
         self.colour = colour
         self.outline_colour = outline_colour
@@ -29,30 +30,23 @@ class Actor:
             # straight along the x-axis
             self.orientation = 0
 
+        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
+
     def distance_to(self, pos):
         return np.linalg.norm(self.pos - pos)
 
     def _move(self, dt):
         """move towards the goal
         """
-
         if not self.reached_goal:
-
             if self.goal is not None:
                 dir = self.goal - self.pos
                 dist = np.linalg.norm(dir)
-
-                # normalize the distance
-                dir = dir / dist
             else:
-                dir = np.array([1, 0])
                 dist = np.inf
 
             if (dist > self.speed*dt):
-                self.pos = np.round(self.pos + dir * self.speed * dt, 5)
-                # moving -- update the orientation
-                self.orientation = atan2(dir[1], dir[0])
-
+                self.pos = np.round(self.pos + self.v * dt, 5)
             else:
                 # arrived at the goal
                 self.pos = self.goal
@@ -60,14 +54,30 @@ class Actor:
 
     def set_goal(self, goal):
         self.goal = goal
+        if goal is not None:
+            dir = self.goal - self.pos
+            self.orientation = atan2(dir[1], dir[0])
+        else:
+            self.orientation = 0
+
         self.reached_goal = False
 
     def accelerate(self, a, dt):
         a = np.clip(a, -self.max_brake, self.max_accel)
         self.speed = np.clip(self.speed + a * dt, self.min_v, self.max_v)
+        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
 
-    def get_speed(self):
-        return self.speed
+    def turn(self, delta, dt):
+        delta = np.clip(delta, -self.max_delta, self.max_delta)
+        self.orientation = self.orientation + delta * dt
+        if self.orientation > np.pi:
+            self.orientation -= 2 * np.pi
+        elif self.orientation < -np.pi:
+            self.orientation -= 2 * np.pi
+        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
+
+    def get_v(self):
+        return self.v
 
     def tick(self, dt=TICK_TIME):
         """a time step
@@ -88,6 +98,10 @@ class Actor:
 
     def get_width(self):
         return 0.02 * self.scale
+
+    def contains( self, loc ):
+        return self.get_width() >= self.distance_to( loc )
+            
 
 
 class Car(Actor):
