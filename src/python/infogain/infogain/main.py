@@ -75,9 +75,6 @@ def simulate(args, delivery_log=None):
             # pygame.display.update()
             clock.tick(1 / args.tick_time * args.simulation_speed)
 
-    if len(sim.serviced_tasks) > 0:
-        print("Average service time:", sim._avg_served_time/len(sim.serviced_tasks))
-    print("Total serviced:", len(sim.serviced_tasks))
     return sim
 
 
