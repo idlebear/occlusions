@@ -10,6 +10,12 @@ from policies.VelocityGrid import VelocityGrid
 
 from config import EGO_X_OFFSET, EGO_Y_OFFSET
 
+GRID_HEIGHT = 0.5
+GRID_WIDTH = 1.0
+GRID_RESOLUTION = 0.02
+GRID_ORIGIN_Y_OFFSET = -GRID_HEIGHT / 2
+GRID_ORIGIN_X_OFFSET = EGO_X_OFFSET
+
 class AwesomePolicy(BasePolicy):
     def __init__(self, generator, policy_args=None) -> None:
         super().__init__(policy_args)
@@ -46,7 +52,7 @@ class AwesomePolicy(BasePolicy):
             except KeyError:
                 self.window = None
 
-        self.grid = VelocityGrid( height=0.5, width=1.0, resolution=0.025, origin=(EGO_X_OFFSET, EGO_Y_OFFSET/2), debug=True )
+        self.grid = VelocityGrid( height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET), debug=True )
 
     def execute(self, ego, actors, visibility=None, current_time=0, max_solver_time=30):
         """basic policy
@@ -57,7 +63,7 @@ class AwesomePolicy(BasePolicy):
         """
 
         # update the location of the grid
-        self.grid.move_origin( (ego.pos[0]+EGO_X_OFFSET, EGO_Y_OFFSET/2) )
+        self.grid.move_origin( (ego.pos[0]+GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET) )
         self.grid.decay( 0.8 )
 
         if visibility is not None:
