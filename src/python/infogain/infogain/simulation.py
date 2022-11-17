@@ -407,7 +407,10 @@ class Simulation:
         actors = []
         for actor in self.actor_list:
             if type(actor) is not Blank:
-                actors.append(actor)
+                for i in range(self.visibility.n()):
+                    if actor.contains( (self.visibility[i].x(), self.visibility[i].y())):
+                        actors.append(actor)
+                        break
 
         self._policy.execute(self.ego, actors, self.visibility, self.sim_time, tick_time)
 

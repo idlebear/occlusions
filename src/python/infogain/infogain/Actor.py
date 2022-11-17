@@ -30,12 +30,12 @@ class Actor:
             # straight along the x-axis
             self.orientation = 0
 
-        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
-
+        self.__update_v_and_rot()
+        
     def distance_to(self, pos):
         return np.linalg.norm(self.pos - pos)
 
-    def _move(self, dt):
+    def __move(self, dt):
         """move towards the goal
         """
         if not self.reached_goal:
@@ -52,6 +52,8 @@ class Actor:
                 self.pos = self.goal
                 self.reached_goal = True
 
+            self.__update_v_and_rot()
+
     def set_goal(self, goal):
         self.goal = goal
         if goal is not None:
@@ -59,14 +61,28 @@ class Actor:
             self.orientation = atan2(dir[1], dir[0])
         else:
             self.orientation = 0
+        self.__update_v_and_rot()
 
         self.reached_goal = False
+
+    def __update_v_and_rot(self):
+        self.v = np.round( np.array( [ self.speed * np.cos( self.orientation ), self.speed * np.sin(self.orientation)]), 5)
+        self.rot = np.array(
+            [
+                [np.cos(self.orientation), -np.sin(self.orientation)],
+                [np.sin(self.orientation), np.cos(self.orientation)],
+            ]
+        )
+        poly = (self.rot @ self.get_poly().T).T + self.pos
+        min_d = np.min( poly, axis=0 )
+        max_d = np.max( poly, axis=0 )
+        self.bounding_box = ( *min_d, *max_d )
 
     def accelerate(self, a, dt):
         a = np.clip(a, -self.max_brake, self.max_accel)
         self.speed = np.clip(self.speed + a * dt, self.min_v, self.max_v)
-        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
-
+        self.__update_v_and_rot()
+        
     def turn(self, delta, dt):
         delta = np.clip(delta, -self.max_delta, self.max_delta)
         self.orientation = self.orientation + delta * dt
@@ -74,15 +90,16 @@ class Actor:
             self.orientation -= 2 * np.pi
         elif self.orientation < -np.pi:
             self.orientation -= 2 * np.pi
-        self.v = np.round( np.array( [ self.speed * cos( self.orientation ), self.speed * sin(self.orientation)]), 5)
-
+        self.__update_v_and_rot()
+        
     def get_v(self):
         return self.v
 
     def tick(self, dt=TICK_TIME):
         """a time step
         """
-        self._move(dt)
+        if self.speed:
+            self.__move(dt)
 
     def at_goal(self):
         return self.reached_goal
@@ -100,9 +117,8 @@ class Actor:
         return 0.02 * self.scale
 
     def contains( self, loc ):
-        return self.get_width() >= self.distance_to( loc )
+        return loc[0] >= self.bounding_box[0] and loc[1] >= self.bounding_box[1] and loc[0] <= self.bounding_box[2] and loc[1] <= self.bounding_box[3]
             
-
 
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
