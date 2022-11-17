@@ -1,5 +1,5 @@
 import numpy as np
-from generator import Generator
+from generators.generator import Generator
 
 
 class UniformGen(Generator):
