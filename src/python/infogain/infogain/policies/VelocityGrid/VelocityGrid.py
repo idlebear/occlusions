@@ -57,6 +57,9 @@ class VelocityGrid:
         # allocate a mutex/lock
         self.mutex = Lock()
 
+    def get_grid_size( self ):
+        return self.probabilityMap.shape
+
     def decay(self, rate):
         self.mutex.acquire()
         try:
