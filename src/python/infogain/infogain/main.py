@@ -8,7 +8,7 @@ import pygame
 from importlib import import_module
 from os import path, mkdir
 from time import time, sleep
-rom pickle import load, dump
+from pickle import load, dump
 from math import floor
 
 
