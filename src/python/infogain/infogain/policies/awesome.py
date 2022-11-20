@@ -88,7 +88,11 @@ class AwesomePolicy(BasePolicy):
         if visibility is not None:
             self.grid.update( ego.pos, visibility=visibility, agents=actors )
 
-        forecast = flow( self.grid.get_probability_map(), self.grid.get_velocity_map(), scale=GRID_RESOLUTION, timesteps=FORECAST_COUNT, dt=FORECAST_DT, mode='bilinear')
+        forecast = flow(self.grid.get_probability_map(), 
+                        self.grid.get_velocity_map(), 
+                        scale=GRID_RESOLUTION,
+                        timesteps=FORECAST_COUNT, 
+                        dt=FORECAST_DT, mode='bilinear')
         
         if DEBUG:
             # draw the probability and velocity grid

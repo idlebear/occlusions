@@ -16,6 +16,11 @@ from config import *
 from Actor import Actor
 from policies.flow.flow import flow
 
+import matplotlib.pylab as plt
+import numpy as np
+from PIL import Image
+    
+
 from config import *
 
 GRID_HEIGHT = 0.2
@@ -29,7 +34,7 @@ FORECAST_COUNT = 5
 FORECAST_DT = 0.1
 
 class TreeSearchPolicy(RandomPolicy):
-    def __init__(self, generator, policy_args=None) -> None:
+    def __init__(self, generator=None, policy_args=None) -> None:
         super().__init__(policy_args)
         
         try:
@@ -50,6 +55,11 @@ class TreeSearchPolicy(RandomPolicy):
                                 resolution=GRID_RESOLUTION, 
                                 origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET) )
         
+        self.maps = []
+        self.map_fig, self.map_ax = plt.subplots(1, 5, figsize=(15, 5))
+        H,W = self.grid.get_grid_size()
+        for _i in range(5):
+            self.maps.append( self.map_ax[_i].imshow(np.zeros([H, W, 3], dtype=np.uint8)) )
 
     def _get_next_state(self, current_state : list, action : list):
         """returns the next state of the ego vehicle after taking action
@@ -65,20 +75,38 @@ class TreeSearchPolicy(RandomPolicy):
             current_state[0] + action[0] * TICK_TIME,
             current_state[1] + action[1] * TICK_TIME
         ]
+    
+    
+    def plot_state(self, state: State) -> None:
+        """
+        plot the state and its children
+        """
+                
+        # draw the probability and velocity grid
+        map_img = Image.fromarray((1- state.env.probabilityMap)*255).convert('RGB')
+        self.maps[0].set_data(map_img)
+
+        for _i in range(1, min([5, len(state.children) + 1])):
+            map_img = Image.fromarray((1- state.children[_i - 1].probabilityMap)*255).convert('RGB')
+            self.maps[_i].set_data(map_img)
+        self.map_fig.canvas.draw()
+        self.map_fig.canvas.flush_events()
+                
+        plt.show()
         
-        
-    def create_decision_tree(self, ego : Actor, velocity_grid : VelocityGrid) -> DecisionTree:
+    def create_decision_tree(self, ego : Actor) -> DecisionTree:
         """
         create the decision tree given the velocity grids
         """
 
         current_state = State(
-            ego.pos,
-            ego.speed,
-            velocity_grid
+            [0, 0],
+            [0, 0],
+            self.grid
         )
-        
         current_state.get_children()
+        self.plot_state(current_state)
+        
         return
         # create the root node 
         tree = DecisionTree()
@@ -117,14 +145,7 @@ class TreeSearchPolicy(RandomPolicy):
             if tree_depth > max_depth:
                 break
     
-    def execute(
-            self, 
-            ego, 
-            actors,
-            velocity_grid,
-            visibility=None,
-            current_time=0, 
-            max_solver_time=30, dt=0.1):
+    def execute(self, ego, actors, visibility=None, current_time=0, max_solver_time=30, dt=0.1):
         """tree search policy
 
         Args:
@@ -136,21 +157,14 @@ class TreeSearchPolicy(RandomPolicy):
         """
         
         # update the location of the grid
-        self.grid.move_origin( (ego.pos[0]+GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET) )
-        self.grid.decay( 0.8 )
+        # self.grid.move_origin( (ego.pos[0]+GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET) )
+        # self.grid.decay( 0.8 )
 
-
-        forecast = flow( 
-                        self.grid.get_probability_map(), 
-                        self.grid.get_velocity_map(), 
-                        scale=GRID_RESOLUTION, 
-                        timesteps=FORECAST_COUNT, 
-                        dt=FORECAST_DT, 
-                        mode='bilinear')
-        
-        self.create_decision_tree(ego, velocity_grid)       
+        # self.grid.update( ego.pos, visibility=visibility, agents=actors )
+        self.create_decision_tree(ego)       
         
         
         
 def get_policy_fn(generator, policy_args=None):
     return TreeSearchPolicy(generator, policy_args=policy_args)
+
