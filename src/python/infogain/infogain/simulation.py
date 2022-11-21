@@ -412,7 +412,7 @@ class Simulation:
                         actors.append(actor)
                         break
 
-        self._policy.execute(self.ego, actors, self.visibility, self.sim_time, tick_time)
+        self._policy.execute(self.ego, actors, self.visibility, current_time=self.sim_time, tick_time=tick_time)
 
         finished_actors = []
         for i, actor in enumerate(self.actor_list[::-1]):
@@ -446,7 +446,7 @@ class Simulation:
 
             self._draw_ego()
 
-            # self._policy.draw()
+            self._policy.draw()
 
             # visibility first as it will (currently) nuke everything else
             self._draw_visibility()

@@ -10,13 +10,14 @@ from PIL import Image
 from policies.flow.flow import flow
 from policies.policy import BasePolicy
 from policies.VelocityGrid import VelocityGrid
+from simulation import get_location
 
 
 from config import EGO_X_OFFSET, EGO_Y_OFFSET
 
 GRID_HEIGHT = 0.2
 GRID_WIDTH = 1.0
-GRID_RESOLUTION = 0.01
+GRID_RESOLUTION = 0.05
 GRID_ORIGIN_Y_OFFSET = -GRID_HEIGHT / 2
 GRID_ORIGIN_X_OFFSET = EGO_X_OFFSET
 
@@ -73,7 +74,7 @@ class AwesomePolicy(BasePolicy):
             plt.show(block=False)
 
 
-    def execute(self, ego, actors, visibility=None, current_time=0, max_solver_time=30):
+    def execute(self, ego, actors, visibility=None, tick_time=0.1, current_time=0, max_solver_time=30):
         """basic policy
 
         Args:
@@ -82,6 +83,8 @@ class AwesomePolicy(BasePolicy):
         """
 
         # update the location of the grid
+        self.ego_pos = ego.pos
+        self.ego_poly = ego.get_poly()
         self.grid.move_origin( (ego.pos[0]+GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET) )
         self.grid.decay( 0.8 )
 
@@ -103,10 +106,33 @@ class AwesomePolicy(BasePolicy):
             self.map_fig.canvas.draw()
             self.map_fig.canvas.flush_events()
 
+        # if ego.pos[1] > 0.1:
+        #     ego.turn( -np.pi / 12.0, tick_time )
+        # elif ego.pos[1] < -0.1:
+        #     ego.turn( np.pi / 12.0, tick_time )
+        # else:
+        #     ego.turn( np.random.random() * np.pi/12.0 - np.pi/24.0, tick_time )
+
+        steps = 20
+        u = [ (np.random.random() * 0.2 - 0.1, np.random.random() * np.pi/6.0 - np.pi/12.0) for s in range(steps) ]
+        # u = [ (0, np.pi/6.0) for s in range(steps//4) ] + [ (0, -np.pi/6.0) for s in range(steps//2)] + [ (0, np.pi/6.0) for s in range(steps//4) ] 
+        self.rollout = ego.project( u, 0.1 )
+
         return False
 
     def draw(self):
-        pass
+        for (pos,orientation) in self.rollout:
+            actor_pos = get_location(origin=self.ego_pos, location=pos)
+
+            rot = np.array(
+                [
+                    [np.cos(orientation), np.sin(orientation)],
+                    [-np.sin(orientation), np.cos(orientation)],
+                ]
+            )
+            pts = (rot @ self.ego_poly.T).T + actor_pos
+            self.window.draw_polygon(outline_colour='darkorange', fill_colour='peachpuff', points=pts)
+
 
 
 def get_policy_fn(generator, policy_args=None):

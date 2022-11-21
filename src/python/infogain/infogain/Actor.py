@@ -125,6 +125,25 @@ class Actor:
         self.__update_v_and_rot()
         self.collided = True
 
+    def project( self, u, dt ):
+        '''
+        Project a future position based on a supplied control and state
+        '''
+        
+        virt_self = type(self)( id=self.id, pos=self.pos, goal=self.goal, speed=self.speed )
+        states = []
+
+        for (a,delta) in u:
+            
+            virt_self.accelerate( a, dt )
+            virt_self.turn( delta, dt )
+            virt_self.tick(dt)
+
+            states.append( (virt_self.pos, virt_self.orientation))
+
+        return states
+        
+
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
