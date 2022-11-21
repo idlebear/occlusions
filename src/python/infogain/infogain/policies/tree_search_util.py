@@ -1,5 +1,41 @@
 from math import inf
+from config import TICK_TIME
+import itertools
+from policies.VelocityGrid import VelocityGrid
+from copy import deepcopy
+import numpy as np
 
+class State:
+    def __init__(self, pos, speed, env):
+        self.pos = pos
+        self.speed = speed
+        self.env = env
+        self.children = []
+    
+    def get_children(self):
+        """get the different outcome of the environment
+
+        Returns: the set of velocity grids 
+        """
+        self.children = []
+        cells_to_branch = []
+        # get the set of cells with none zero or 1 probability
+        for _i in range(self.env.grid_rows):
+            for _j in range(self.env.grid_rows):
+                if self.env.probabilityMap[_i][_j] != 0 and self.env.probabilityMap[_i][_j] != 1:
+                    cells_to_branch.append((_i, _j))
+        
+        for L in range(len(cells_to_branch) + 1):
+            for subset in itertools.combinations(cells_to_branch, L):
+                env = VelocityGrid(1, 1)
+                env.probabilityMap = deepcopy(self.env.probabilityMap)
+                for cell in subset:
+                    env.probabilityMap[cell[0]][cell[1]] = 0
+                env.probabilityMap[(env.probabilityMap > 0) & (env.probabilityMap < 1)] = 1
+                self.children.append(env)
+                
+                    
+        
 class Action:
     def __init__(self, idx, reward = inf):
         self.action_idx = idx
@@ -64,6 +100,9 @@ def test():
     tree.add_node(node1)
     tree.add_node(node2)
     tree.DFS()
+
+
+
 if __name__ == "__main__":
     test()
     try:
