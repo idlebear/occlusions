@@ -61,6 +61,9 @@ class TreeSearchPolicy(RandomPolicy):
         for _i in range(5):
             self.maps.append( self.map_ax[_i].imshow(np.zeros([H, W, 3], dtype=np.uint8)) )
 
+        plt.show(block=False)  # only need to put up the map window once and update it in place
+        
+
     def _get_next_state(self, current_state : list, action : list):
         """returns the next state of the ego vehicle after taking action
 
@@ -92,8 +95,6 @@ class TreeSearchPolicy(RandomPolicy):
         self.map_fig.canvas.draw()
         self.map_fig.canvas.flush_events()
                 
-        plt.show()
-        
     def create_decision_tree(self, ego : Actor) -> DecisionTree:
         """
         create the decision tree given the velocity grids
