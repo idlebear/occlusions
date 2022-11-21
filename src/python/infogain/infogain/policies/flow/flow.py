@@ -79,6 +79,11 @@ def flow(probability_grid, velocity_grid, scale=1, timesteps=1, dt=0.1, mode='ne
         p21 = y2prop * x1prop
         p22 = y2prop * x2prop
 
+        p11_mask = p11 > 0
+        p12_mask = p12 > 0
+        p21_mask = p21 > 0
+        p22_mask = p22 > 0
+
         # after proportioning the blame, clip the indices so they
         # still fit in the grid -- this is why the edges are padded
         x1 = np.clip(x1, 0, W-1).astype(int)
@@ -91,19 +96,19 @@ def flow(probability_grid, velocity_grid, scale=1, timesteps=1, dt=0.1, mode='ne
         k_prob_21[y2, x1] = k_prob_21[y2, x1] + probability_grid * p21
         k_prob_22[y2, x2] = k_prob_22[y2, x2] + probability_grid * p22
 
-        k_v[y1, x1, 0] += velocity_grid[:, :, 0] * (p11 > 0)
-        k_v[y1, x2, 0] += velocity_grid[:, :, 0] * (p12 > 0)
-        k_v[y2, x1, 0] += velocity_grid[:, :, 0] * (p21 > 0)
-        k_v[y2, x2, 0] += velocity_grid[:, :, 0] * (p22 > 0)
-        k_v[y1, x1, 1] += velocity_grid[:, :, 1] * (p11 > 0)
-        k_v[y1, x2, 1] += velocity_grid[:, :, 1] * (p12 > 0)
-        k_v[y2, x1, 1] += velocity_grid[:, :, 1] * (p21 > 0)
-        k_v[y2, x2, 1] += velocity_grid[:, :, 1] * (p22 > 0)
+        k_v[y1, x1, 0] += velocity_grid[:, :, 0] * p11_mask
+        k_v[y1, x2, 0] += velocity_grid[:, :, 0] * p12_mask
+        k_v[y2, x1, 0] += velocity_grid[:, :, 0] * p21_mask
+        k_v[y2, x2, 0] += velocity_grid[:, :, 0] * p22_mask
+        k_v[y1, x1, 1] += velocity_grid[:, :, 1] * p11_mask
+        k_v[y1, x2, 1] += velocity_grid[:, :, 1] * p12_mask
+        k_v[y2, x1, 1] += velocity_grid[:, :, 1] * p21_mask
+        k_v[y2, x2, 1] += velocity_grid[:, :, 1] * p22_mask
 
-        k_v_count[y1, x1] += mask * (p11 > 0)
-        k_v_count[y1, x2] += mask * (p12 > 0)
-        k_v_count[y2, x1] += mask * (p21 > 0)
-        k_v_count[y2, x2] += mask * (p22 > 0)
+        k_v_count[y1, x1] += mask * p11_mask
+        k_v_count[y1, x2] += mask * p12_mask
+        k_v_count[y2, x1] += mask * p21_mask
+        k_v_count[y2, x2] += mask * p22_mask
 
         # k_prob_11 = arrange_by_index(probability_grid * p11, x1, y1)
         # k_prob_12 = arrange_by_index(probability_grid * p12, x2, y1)
