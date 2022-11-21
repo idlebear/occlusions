@@ -119,6 +119,11 @@ class Actor:
     def contains( self, loc ):
         return loc[0] >= self.bounding_box[0] and loc[1] >= self.bounding_box[1] and loc[0] <= self.bounding_box[2] and loc[1] <= self.bounding_box[3]
             
+    def set_collided( self, colour='black' ):
+        self.colour = colour
+        self.speed = 0
+        self.__update_v_and_rot()
+        self.collided = True
 
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):

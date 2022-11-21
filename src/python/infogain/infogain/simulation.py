@@ -312,7 +312,7 @@ class Simulation:
                     speed=0.0,
                     scale=scale
                 )
-            elif rnd < 0.45:
+            elif rnd < 0.7:
 
                 # oncoming traffic
                 scale = 1
@@ -328,7 +328,7 @@ class Simulation:
                     speed=v,
                     scale=scale
                 )
-            elif rnd < 0.5:
+            elif rnd < 0.9:
 
                 # same side traffic
                 scale = 1
@@ -419,9 +419,7 @@ class Simulation:
             actor.tick(tick_time)
             if not actor.collided and actor.distance_to(self.ego.pos) <= COLLISION_DISTANCE:
                 self.collisions += 1
-                actor.colour = 'black'
-                actor.speed = 0
-                actor.collided = True
+                actor.set_collided()
 
             if actor.at_goal() or (actor.pos[0] < self.ego.pos[0] and actor.distance_to(self.ego.pos) > 0.5):
                 finished_actors.append(actor)
