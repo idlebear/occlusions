@@ -13,13 +13,9 @@ from policies.VelocityGrid import VelocityGrid
 from simulation import get_location
 
 
-from config import EGO_X_OFFSET, EGO_Y_OFFSET
+from config import EGO_X_OFFSET, EGO_Y_OFFSET, GRID_HEIGHT, GRID_WIDTH, GRID_RESOLUTION
+from config import GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET
 
-GRID_HEIGHT = 0.2
-GRID_WIDTH = 1.0
-GRID_RESOLUTION = 0.05
-GRID_ORIGIN_Y_OFFSET = -GRID_HEIGHT / 2
-GRID_ORIGIN_X_OFFSET = EGO_X_OFFSET
 
 DEBUG = True
 FORECAST_COUNT = 5
@@ -114,8 +110,8 @@ class AwesomePolicy(BasePolicy):
         #     ego.turn( np.random.random() * np.pi/12.0 - np.pi/24.0, tick_time )
 
         steps = 20
-        u = [ (np.random.random() * 0.2 - 0.1, np.random.random() * np.pi/6.0 - np.pi/12.0) for s in range(steps) ]
-        # u = [ (0, np.pi/6.0) for s in range(steps//4) ] + [ (0, -np.pi/6.0) for s in range(steps//2)] + [ (0, np.pi/6.0) for s in range(steps//4) ] 
+        # u = [ (np.random.random() * 0.2 - 0.1, np.random.random() * np.pi/6.0 - np.pi/12.0) for s in range(steps) ]
+        u = [ (0, np.pi/6.0) for s in range(steps//4) ] + [ (0, -np.pi/6.0) for s in range(steps//2)] + [ (0, np.pi/6.0) for s in range(steps//4) ] 
         self.rollout = ego.project( u, 0.1 )
 
         return False

@@ -8,6 +8,7 @@ import pygame
 from random import random, expovariate, seed
 import visilibity as vis
 
+from policies.VelocityGrid import VelocityGrid
 
 # local functions/imports
 from Actor import Actor, Pedestrian, Car, Obstacle, Blank
@@ -107,16 +108,16 @@ class Window:
 
 
 class Simulation:
-    def __init__(self, policy_name, policy_args=None, generator_name='uniform', generator_args=None, num_actors=1, pois_lambda=0.01, screen=None, service_time=SERVICE_TIME,
+    def __init__(self, generator_name='uniform', generator_args=None, num_actors=1, pois_lambda=0.01, screen=None, service_time=SERVICE_TIME,
                  speed=ACTOR_SPEED, margin=SCREEN_MARGIN, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
-                 max_time=MAX_SIMULATION_TIME, max_tasks=MAX_SERVICED_TASKS, record_data=False, sectors=1, delivery_log=None):
+                 max_time=MAX_SIMULATION_TIME, tick_time=TICK_TIME, record_data=False, ):
         self.num_actors = num_actors
-        self.actor_speed = speed
+        self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
 
         self.record_data = record_data
         self.max_time = max_time
-        self.max_tasks = max_tasks
+        self.tick_time = tick_time
 
         self.service_time = service_time
 
@@ -125,13 +126,14 @@ class Simulation:
         else:
             self.window = None
 
-        self.delivery_log = delivery_log
-
         # load the draw method
         self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
-        # load the policy
-        self.load_policy(policy_name=policy_name, policy_args=policy_args)
+        # # load the policy
+        # self.load_policy(policy_name=policy_name, policy_args=policy_args)
+
+        self.grid = VelocityGrid( height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET) )
+        self.observation_shape = self.grid.get_grid_size()
 
         # preload all the the tasks
         self.reset()
@@ -144,7 +146,7 @@ class Simulation:
             id=0,
             pos=np.array([0.0, -LANE_WIDTH / 2]),
             goal=None,
-            speed=0.5,
+            speed=0,
             colour='red',
             outline_colour='darkred',
             scale=1.1
@@ -161,13 +163,7 @@ class Simulation:
         self.ticks = 0
         self.collisions = 0
 
-    def load_policy(self, policy_name, policy_args):
-        # load the policy
-        self.policy_name = policy_name
-        policy_args['window'] = self.window
-        self.policy_args = policy_args
-        policy_mod = import_module('.'+self.policy_name, package='policies')
-        self._policy = policy_mod.get_policy_fn(self.generator, policy_args)
+        self.grid.reset()
 
     def load_generator(self, generator_name, generator_args):
         # load the generator
@@ -271,28 +267,7 @@ class Simulation:
 
         return vis_poly
 
-    ##################################################################################
-    # Simulator step functions
-    ##################################################################################
-
-    def _tick_actor(self, actor, tick_time):
-        """step of simulation for each actor
-
-        Args:
-            actor_index (_type_): the index of the actor
-        """
-        actor.tick()
-
-        # TODO: should check for collisions....
-
-    def tick(self, tick_time, max_simulation_time):
-        """[summary]
-        """
-
-        # one clock tick for the simulation time
-        self.sim_time += tick_time
-        self.ticks += 1
-
+    def _generate_new_agents( self ):
         x = max(self.next_agent_x, self.ego.pos[0] + (1.0))
 
         while (len(self.actor_list) < self.num_actors):
@@ -396,9 +371,35 @@ class Simulation:
             x += width + 0.005 * self.generator.uniform()
             self.next_agent_x = x
 
-        if max_simulation_time is not None:
-            if self.sim_time > max_simulation_time:
-                return -1
+
+    ##################################################################################
+    # Simulator step functions
+    ##################################################################################
+
+    def _tick_actor(self, actor, tick_time):
+        """step of simulation for each actor
+
+        Args:
+            actor_index (_type_): the index of the actor
+        """
+        actor.tick()
+
+
+    def tick(self, action ):
+        """[summary]
+        """
+
+        # one clock tick for the simulation time
+        self.sim_time += self.tick_time
+        self.ticks += 1
+
+        # apply the requested action to the ego vehicle
+        self.ego.accelerate( action[0], dt=self.tick_time )
+        self.ego.turn( action[0], dt=self.tick_time )
+
+        self._generate_new_agents()
+
+
 
         # calculate the cone of danger for an assumed velocity -- this should be in the policy but we'll
         # do it here for now for visualization
@@ -434,21 +435,15 @@ class Simulation:
             if actor.at_goal():
                 actor.set_goal(self.generator.random(2))
 
-        if self.window is not None:
 
-            #  draw the limits of the environment
+    def render( self ):
+        if self.window is not None:
             self.window.clear()
 
             self._draw_road()
-
             for actor in self.actor_list:
                 self._draw_actor(actor)
 
             self._draw_ego()
-
-            self._policy.draw()
-
-            # visibility first as it will (currently) nuke everything else
             self._draw_visibility()
-
             self._draw_status()

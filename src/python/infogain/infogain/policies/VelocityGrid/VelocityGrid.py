@@ -35,14 +35,11 @@ class VelocityGrid:
         self.logOcc = log( pOcc / (1-pOcc) )
         self.pFree = pFree
         self.logFree = log( pFree / (1-pFree))
-        
         self.l0 = log(pUnk/(1-pUnk))
 
         self.origin = origin
         self.grid_rows = int(height / resolution)
         self.grid_cols = int(width / resolution)
-        self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]) * self.l0
-        self.velocityMap = np.zeros([self.grid_rows, self.grid_cols, 2])
 
         self.debug = debug
         if self.debug:
@@ -54,8 +51,18 @@ class VelocityGrid:
 
             plt.show(block=False)
 
+        self.reset()
+
         # allocate a mutex/lock
         self.mutex = Lock()
+
+    def reset( self ):
+        self.mutex.acquire()
+        try:
+            self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]) * self.l0
+            self.velocityMap = np.zeros([self.grid_rows, self.grid_cols, 2])
+        finally:
+            self.mutex.release()
 
     def get_grid_size( self ):
         return self.probabilityMap.shape

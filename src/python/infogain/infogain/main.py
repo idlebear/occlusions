@@ -51,6 +51,7 @@ def simulate(args, delivery_log=None):
         num_actors=args.actors,
         pois_lambda=args.lambd,
         screen=surface if args.show_sim or args.record_data else None,
+        tick_time=args.tick_time,
         max_time=args.max_time,
     )
 

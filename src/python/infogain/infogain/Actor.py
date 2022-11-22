@@ -79,12 +79,17 @@ class Actor:
         self.bounding_box = ( *min_d, *max_d )
 
     def accelerate(self, a, dt):
-        a = np.clip(a, -self.max_brake, self.max_accel)
+        # clip the requested control to +/- 100% and calculate the actual acceleration
+        a = np.clip(a, -1.0, 1.0)
+        a = a * self.max_accel if a > 0 else a * self.max_brake
+
         self.speed = np.clip(self.speed + a * dt, self.min_v, self.max_v)
         self.__update_v_and_rot()
         
     def turn(self, delta, dt):
-        delta = np.clip(delta, -self.max_delta, self.max_delta)
+        # clip the steering angle to the max lim
+        delta = np.clip(delta, -1.0, 1.0)
+        delta *= self.max_delta
         self.orientation = self.orientation + delta * dt
         if self.orientation > np.pi:
             self.orientation -= 2 * np.pi
