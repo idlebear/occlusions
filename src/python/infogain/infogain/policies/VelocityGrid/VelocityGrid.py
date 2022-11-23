@@ -51,10 +51,12 @@ class VelocityGrid:
 
             plt.show(block=False)
 
-        self.reset()
-
         # allocate a mutex/lock
         self.mutex = Lock()
+
+        # complete the initialization
+        self.reset()
+
 
     def reset( self ):
         self.mutex.acquire()
@@ -65,7 +67,7 @@ class VelocityGrid:
             self.mutex.release()
 
     def get_grid_size( self ):
-        return self.probabilityMap.shape
+        return [ *self.probabilityMap.shape, 3 ]
 
     def decay(self, rate):
         self.mutex.acquire()

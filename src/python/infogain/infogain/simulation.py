@@ -2,8 +2,9 @@
 from copy import deepcopy
 from importlib import import_module
 from math import sqrt, exp
-from matplotlib.pyplot import show
+import matplotlib.pyplot as plt 
 import numpy as np
+from PIL import Image
 import pygame
 from random import random, expovariate, seed
 import visilibity as vis
@@ -14,6 +15,22 @@ from policies.VelocityGrid import VelocityGrid
 from Actor import Actor, Pedestrian, Car, Obstacle, Blank
 from config import *
 
+DEBUG = 0
+FORECAST_COUNT = 5
+FORECAST_INTERVAL = 0.1
+
+# rewards - a high penalty for colliding with anything, a small penalty for 
+# deviating from the desired velocity, a slightly smaller one for deviating from
+# the desired Y position, and a positive reward for moving forward
+REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
+REWARD_DEVIATION_V = -1
+REWARD_DEVIATION_Y = -10
+REWARD_FORWARD_MOTION = 1
+
+DESIRED_LANE_POSITION = -LANE_WIDTH / 2
+
+MAX_V = 10.0  # define a max v for scaling the observation output to keep it in the
+              # range [0,1]
 
 def get_location(origin, location):
     return [location[0]-origin[0] - EGO_X_OFFSET, 1 - location[1] + EGO_Y_OFFSET]
@@ -64,15 +81,13 @@ class Window:
 
         if use_transparency:
             self.tmp_screen.fill((0, 0, 0, 0))
-
-            # TODO: Drawing this filled polygon is hella slow, taking the sim from faster than real-time to somewhere around
-            #       half speed.  Removed for now, but it's just not as pretty...  there may be an update to resolve the issue
-            #       in pygame, but for the time being, our poly is going to be clear....
-            # pygame.draw.polygon(self.tmp_screen, fill_colour, points, 0)
+            if fill_colour is not None:
+                pygame.draw.polygon(self.tmp_screen, fill_colour, points, 0)
             pygame.draw.polygon(self.tmp_screen, outline_colour, points, ACTOR_PATH_WIDTH)
             self.screen.blit(self.tmp_screen, (0, 0))
         else:
-            pygame.draw.polygon(self.screen, fill_colour, points, 0)
+            if fill_colour is not None:
+                pygame.draw.polygon(self.screen, fill_colour, points, 0)
             pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
 
     def draw_status(self, collisions, sim_time):
@@ -129,22 +144,27 @@ class Simulation:
         # load the draw method
         self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
-        # # load the policy
-        # self.load_policy(policy_name=policy_name, policy_args=policy_args)
-
         self.grid = VelocityGrid( height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET) )
         self.observation_shape = self.grid.get_grid_size()
+        # if DEBUG:
+        #     self.maps = []
+        #     num_plots = FORECAST_COUNT + 1
+        #     self.map_fig, self.map_ax = plt.subplots(num_plots, 1, figsize=(5, 15))
+        #     H,W,D = self.grid.get_grid_size()
+        #     for i in range(num_plots):
+        #         self.maps.append( self.map_ax[i].imshow(np.zeros([H, W, 3], dtype=np.uint8)) )
 
-        # preload all the the tasks
+        #     plt.show(block=False)
+
         self.reset()
 
-    def reset(self, task_list=None):
+    def reset(self):
         # reset the random number generator
         self.generator.reset()
 
         self.ego = Car(
             id=0,
-            pos=np.array([0.0, -LANE_WIDTH / 2]),
+            pos=np.array([0.0, DESIRED_LANE_POSITION]),
             goal=None,
             speed=0,
             colour='red',
@@ -164,6 +184,8 @@ class Simulation:
         self.collisions = 0
 
         self.grid.reset()
+
+        return self._get_next_observation()
 
     def load_generator(self, generator_name, generator_args):
         # load the generator
@@ -213,9 +235,6 @@ class Simulation:
     def _draw_ego(self):
         self._draw_actor(self.ego)
 
-        # loc = self._get_location_on_screen(origin=self.ego.pos, location=self.ego.pos)
-        # pygame.draw.circle(self.screen, color='tomato', center=(loc[0], loc[1]), radius=self.d_s*self._env_size, width=2)
-
     def _draw_visibility(self):
         if self.visibility is not None:
             pts = []
@@ -224,7 +243,10 @@ class Simulation:
 
             TGREEN = (150, 220, 150, 100)
             TBLACK = (0, 0, 0, 200)
-            self.window.draw_polygon(outline_colour=TBLACK, fill_colour=TGREEN, points=pts, use_transparency=True)
+            # TODO: Drawing this filled polygon is hella slow, taking the sim from faster than real-time to somewhere around
+            #       half speed.  Removed for now, but it's just not as pretty...  there may be an update to resolve the issue
+            #       in pygame, but for the time being, our poly is going to be clear....
+            self.window.draw_polygon(outline_colour=TBLACK, fill_colour=None, points=pts, use_transparency=True)
 
     def _draw_status(self):
         self.window.draw_status(self.collisions, self.sim_time)
@@ -272,7 +294,7 @@ class Simulation:
 
         while (len(self.actor_list) < self.num_actors):
             rnd = self.generator.uniform()
-            if rnd < 0.4:
+            if rnd < 0.3:
                 scale = 1 + 9 * self.generator.uniform()
                 width = Obstacle.check_width(scale) + 0.005
 
@@ -287,7 +309,7 @@ class Simulation:
                     speed=0.0,
                     scale=scale
                 )
-            elif rnd < 0.7:
+            elif rnd < 0.6:
 
                 # oncoming traffic
                 scale = 1
@@ -372,6 +394,25 @@ class Simulation:
             self.next_agent_x = x
 
 
+    def _get_next_observation( self ):
+        # calculate the visibility polygon and use it to determine which agents are visible to the
+        # AV.  Note that this is an alternative to implementing some sort LIDAR simulation
+        self.visibility = self.calculate_visibility()
+
+        actors = []
+        for actor in self.actor_list:
+            if type(actor) is not Blank:
+                for i in range(self.visibility.n()):
+                    if actor.contains( (self.visibility[i].x(), self.visibility[i].y())):
+                        actors.append(actor)
+                        break
+
+        # update the observation                            
+        self.grid.update( self.ego.pos, visibility=self.visibility, agents=actors )
+        observation = np.append( np.expand_dims(self.grid.get_probability_map(), axis=2), self.grid.get_velocity_map()/MAX_V, axis=2 )
+        return observation
+
+
     ##################################################################################
     # Simulator step functions
     ##################################################################################
@@ -399,42 +440,38 @@ class Simulation:
 
         self._generate_new_agents()
 
-
-
-        # calculate the cone of danger for an assumed velocity -- this should be in the policy but we'll
-        # do it here for now for visualization
-        self.visibility = self.calculate_visibility()
-
-        actors = []
-        for actor in self.actor_list:
-            if type(actor) is not Blank:
-                for i in range(self.visibility.n()):
-                    if actor.contains( (self.visibility[i].x(), self.visibility[i].y())):
-                        actors.append(actor)
-                        break
-
-        self._policy.execute(self.ego, actors, self.visibility, current_time=self.sim_time, tick_time=tick_time)
-
+        # move everyone
         finished_actors = []
+        collisions = 0
+        self.ego.tick(self.tick_time)
         for i, actor in enumerate(self.actor_list[::-1]):
-            actor.tick(tick_time)
+            actor.tick(self.tick_time)
             if not actor.collided and actor.distance_to(self.ego.pos) <= COLLISION_DISTANCE:
-                self.collisions += 1
+                collisions += 1
                 actor.set_collided()
 
             if actor.at_goal() or (actor.pos[0] < self.ego.pos[0] and actor.distance_to(self.ego.pos) > 0.5):
                 finished_actors.append(actor)
 
-        self.ego.tick(tick_time)
+        if abs(self.ego.pos[1]) > LANE_WIDTH:
+            collisions += 1 # off the road 
 
         # clean up
         for actor in finished_actors:
             self.actor_list.remove(actor)
 
-        for actor in self.actor_list:
-            if actor.at_goal():
-                actor.set_goal(self.generator.random(2))
+        #update the observation
+        observation = self._get_next_observation()
 
+        # calculate the reward
+        y_error = abs( self.ego.pos[1] - DESIRED_LANE_POSITION )
+        v_error = abs( self.ego.speed - self.actor_target_speed )
+        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V 
+
+        # check if this episode is finished
+        done = collisions != 0
+
+        return observation, reward, done, {}
 
     def render( self ):
         if self.window is not None:
@@ -447,3 +484,12 @@ class Simulation:
             self._draw_ego()
             self._draw_visibility()
             self._draw_status()
+
+        # if DEBUG:
+        #     # draw the probability and velocity grid
+        #     for i, (prob,v) in enumerate(forecast):
+        #         map_img = Image.fromarray(np.flipud(((1-prob)*255.0).astype(np.uint8))).convert('RGB')
+        #         self.maps[i].set_data(map_img)
+
+        #     self.map_fig.canvas.draw()
+        #     self.map_fig.canvas.flush_events()
