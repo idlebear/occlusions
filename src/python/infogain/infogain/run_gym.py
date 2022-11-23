@@ -10,14 +10,17 @@ from OcclusionGym import OcclusionEnv
 # Parallel environments
 env = make_vec_env(OcclusionEnv, n_envs=4, env_kwargs={ 'num_actors': 10 })
 
-model = PPO("MlpPolicy", env, verbose=1)
-try:
-    model.load( 'ppo_occlusions.model' )
-except IOError:
-    pass 
-model.learn(total_timesteps=25000)
+for i in range( 100 ):
+    model = PPO("MlpPolicy", env, verbose=1, tensorboard_log="./occlusion_log")
+    try:
+        model.load( 'ppo_occlusions.model' )
+        print( 'Previous model loaded')
+    except IOError:
+        print( 'No model to load -- starting fresh')
 
-model.save( 'ppo_occlusions.model')
+    model.learn(total_timesteps=50000)
+
+    model.save( 'ppo_occlusions.model')
 
 obs = env.reset()
 for i in range(2000):

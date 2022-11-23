@@ -51,10 +51,10 @@ class OcclusionEnv( gym.Env ):
         )
 
         # define the action space -- the car can go from full acceleration (100%/1) to full brake (-100%/-1) and can steer +/- 100%
-        self.action_space = spaces.Box( low=np.array([-1, -1]), high=np.array([1, 1]), dtype=np.float32)
+        self.action_space = spaces.Box( low=np.array([-1, -1]).astype(np.float32), high=np.array([1, 1]).astype(np.float32), dtype=np.float32)
 
         # similarly the observation space is the current observation rendered as an array
-        self.observation_space = spaces.Box( low=0.0, high=1.0, shape=self.sim.observation_shape )
+        self.observation_space = spaces.Box( low=np.float32(0.0), high=np.float32(1.0), shape=self.sim.observation_shape )
 
 
     def step( self, action ):

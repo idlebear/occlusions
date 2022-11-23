@@ -61,8 +61,8 @@ class VelocityGrid:
     def reset( self ):
         self.mutex.acquire()
         try:
-            self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]) * self.l0
-            self.velocityMap = np.zeros([self.grid_rows, self.grid_cols, 2])
+            self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]).astype(np.float32) * self.l0
+            self.velocityMap = np.zeros([self.grid_rows, self.grid_cols, 2]).astype(np.float32)
         finally:
             self.mutex.release()
 

@@ -23,9 +23,9 @@ FORECAST_INTERVAL = 0.1
 # deviating from the desired velocity, a slightly smaller one for deviating from
 # the desired Y position, and a positive reward for moving forward
 REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
-REWARD_DEVIATION_V = -1
-REWARD_DEVIATION_Y = -10
-REWARD_FORWARD_MOTION = 1
+REWARD_DEVIATION_V = -10.0
+REWARD_DEVIATION_Y = -100.0
+REWARD_FORWARD_MOTION = 0.01   # a small positive reward for not dying
 
 DESIRED_LANE_POSITION = -LANE_WIDTH / 2
 
