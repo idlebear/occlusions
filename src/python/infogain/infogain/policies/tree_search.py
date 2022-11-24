@@ -95,6 +95,8 @@ class TreeSearchPolicy(RandomPolicy):
         self.map_fig.canvas.draw()
         self.map_fig.canvas.flush_events()
                 
+        plt.show()
+
     def create_decision_tree(self, ego : Actor) -> DecisionTree:
         """
         create the decision tree given the velocity grids

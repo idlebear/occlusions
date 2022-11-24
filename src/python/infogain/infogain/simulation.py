@@ -2,7 +2,7 @@
 from copy import deepcopy
 from importlib import import_module
 from math import sqrt, exp
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 import numpy as np
 from PIL import Image
 import pygame
@@ -19,18 +19,18 @@ DEBUG = 0
 FORECAST_COUNT = 5
 FORECAST_INTERVAL = 0.1
 
-# rewards - a high penalty for colliding with anything, a small penalty for
+# rewards - a high penalty for colliding with anything, a small penalty for 
 # deviating from the desired velocity, a slightly smaller one for deviating from
 # the desired Y position, and a positive reward for moving forward
 REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
-REWARD_DEVIATION_V = -10.0
+REWARD_DEVIATION_V = -100.0
 REWARD_DEVIATION_Y = -100.0
 REWARD_FORWARD_MOTION = 0.01   # a small positive reward for not dying
 
 DESIRED_LANE_POSITION = -LANE_WIDTH / 2
 
 MAX_V = 10.0  # define a max v for scaling the observation output to keep it in the
-# range [0,1]
+              # range [0,1]
 
 
 def get_location(origin, location):
@@ -314,7 +314,7 @@ class Simulation:
 
                 # oncoming traffic
                 scale = 1
-                width = Car.check_width(scale) * 2
+                width = Car.check_width(scale) * 5.0
 
                 v = OPPONENT_CAR_SPEED
                 y = LANE_WIDTH / 2
@@ -330,7 +330,7 @@ class Simulation:
 
                 # same side traffic
                 scale = 1
-                width = Car.check_width(scale) * 5
+                width = Car.check_width(scale) * 5.0
 
                 v = OPPONENT_CAR_SPEED*0.5
                 y = -LANE_WIDTH / 2
@@ -408,8 +408,10 @@ class Simulation:
                             actors.append(actor)
                             break
 
-            # update the observation
+            # update the observation                            
             self.grid.update(self.ego.pos, visibility=self.visibility, agents=actors)
+        else:
+            print( "Error in updating observation!" )
 
         observation = np.append(np.expand_dims(self.grid.get_probability_map(), axis=2), self.grid.get_velocity_map()/MAX_V, axis=2)
         return observation
@@ -466,7 +468,7 @@ class Simulation:
         # calculate the reward
         y_error = abs(self.ego.pos[1] - DESIRED_LANE_POSITION)
         v_error = abs(self.ego.speed - self.actor_target_speed)
-        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V
+        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V + REWARD_FORWARD_MOTION * self.ego.pos[0]
 
         # check if this episode is finished
         done = collisions != 0
