@@ -2,7 +2,7 @@
 from copy import deepcopy
 from importlib import import_module
 from math import sqrt, exp
-import matplotlib.pyplot as plt 
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import pygame
@@ -19,7 +19,7 @@ DEBUG = 0
 FORECAST_COUNT = 5
 FORECAST_INTERVAL = 0.1
 
-# rewards - a high penalty for colliding with anything, a small penalty for 
+# rewards - a high penalty for colliding with anything, a small penalty for
 # deviating from the desired velocity, a slightly smaller one for deviating from
 # the desired Y position, and a positive reward for moving forward
 REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
@@ -30,7 +30,8 @@ REWARD_FORWARD_MOTION = 0.01   # a small positive reward for not dying
 DESIRED_LANE_POSITION = -LANE_WIDTH / 2
 
 MAX_V = 10.0  # define a max v for scaling the observation output to keep it in the
-              # range [0,1]
+# range [0,1]
+
 
 def get_location(origin, location):
     return [location[0]-origin[0] - EGO_X_OFFSET, 1 - location[1] + EGO_Y_OFFSET]
@@ -144,7 +145,7 @@ class Simulation:
         # load the draw method
         self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
-        self.grid = VelocityGrid( height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET) )
+        self.grid = VelocityGrid(height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET))
         self.observation_shape = self.grid.get_grid_size()
         # if DEBUG:
         #     self.maps = []
@@ -289,7 +290,7 @@ class Simulation:
 
         return vis_poly
 
-    def _generate_new_agents( self ):
+    def _generate_new_agents(self):
         x = max(self.next_agent_x, self.ego.pos[0] + (1.0))
 
         while (len(self.actor_list) < self.num_actors):
@@ -393,25 +394,25 @@ class Simulation:
             x += width + 0.005 * self.generator.uniform()
             self.next_agent_x = x
 
-
-    def _get_next_observation( self ):
+    def _get_next_observation(self):
         # calculate the visibility polygon and use it to determine which agents are visible to the
         # AV.  Note that this is an alternative to implementing some sort LIDAR simulation
         self.visibility = self.calculate_visibility()
 
-        actors = []
-        for actor in self.actor_list:
-            if type(actor) is not Blank:
-                for i in range(self.visibility.n()):
-                    if actor.contains( (self.visibility[i].x(), self.visibility[i].y())):
-                        actors.append(actor)
-                        break
+        if self.visibility is not None:
+            actors = [self.ego]
+            for actor in self.actor_list:
+                if type(actor) is not Blank:
+                    for i in range(self.visibility.n()):
+                        if actor.contains((self.visibility[i].x(), self.visibility[i].y())):
+                            actors.append(actor)
+                            break
 
-        # update the observation                            
-        self.grid.update( self.ego.pos, visibility=self.visibility, agents=actors )
-        observation = np.append( np.expand_dims(self.grid.get_probability_map(), axis=2), self.grid.get_velocity_map()/MAX_V, axis=2 )
+            # update the observation
+            self.grid.update(self.ego.pos, visibility=self.visibility, agents=actors)
+
+        observation = np.append(np.expand_dims(self.grid.get_probability_map(), axis=2), self.grid.get_velocity_map()/MAX_V, axis=2)
         return observation
-
 
     ##################################################################################
     # Simulator step functions
@@ -425,8 +426,7 @@ class Simulation:
         """
         actor.tick()
 
-
-    def tick(self, action ):
+    def tick(self, action):
         """[summary]
         """
 
@@ -435,8 +435,8 @@ class Simulation:
         self.ticks += 1
 
         # apply the requested action to the ego vehicle
-        self.ego.accelerate( action[0], dt=self.tick_time )
-        self.ego.turn( action[0], dt=self.tick_time )
+        self.ego.accelerate(action[0], dt=self.tick_time)
+        self.ego.turn(action[0], dt=self.tick_time)
 
         self._generate_new_agents()
 
@@ -454,26 +454,26 @@ class Simulation:
                 finished_actors.append(actor)
 
         if abs(self.ego.pos[1]) > LANE_WIDTH:
-            collisions += 1 # off the road 
+            collisions += 1  # off the road
 
         # clean up
         for actor in finished_actors:
             self.actor_list.remove(actor)
 
-        #update the observation
+        # update the observation
         observation = self._get_next_observation()
 
         # calculate the reward
-        y_error = abs( self.ego.pos[1] - DESIRED_LANE_POSITION )
-        v_error = abs( self.ego.speed - self.actor_target_speed )
-        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V 
+        y_error = abs(self.ego.pos[1] - DESIRED_LANE_POSITION)
+        v_error = abs(self.ego.speed - self.actor_target_speed)
+        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V
 
         # check if this episode is finished
         done = collisions != 0
 
         return observation, reward, done, {}
 
-    def render( self ):
+    def render(self):
         if self.window is not None:
             self.window.clear()
 

@@ -11,17 +11,17 @@ from scipy import signal
 from shapely.geometry import Polygon, Point
 from threading import Lock
 
-from policies.VelocityGrid.util  import clamp
+from policies.VelocityGrid.util import clamp
 
 
 # Clamp probability to maximum and minimum values to prevent overflow and subsequent
 # irrational behaviour
-MIN_PROBABILITY = -600.0
-MAX_PROBABILITY = 600.0
+MIN_PROBABILITY = -60.0
+MAX_PROBABILITY = 60.0
 
 
 """
-For each sensed element in the environment, we store both the probability of occupancy and the 
+For each sensed element in the environment, we store both the probability of occupancy and the
 apparent velocity (assuming an oracle or some other subsystem provides it)
 
 """
@@ -32,9 +32,9 @@ class VelocityGrid:
     def __init__(self, height, width, resolution=1, origin=(0, 0), pUnk=0.5, pOcc=0.7, pFree=0.3, debug=False):
         self.resolution = resolution
         self.pOcc = pOcc
-        self.logOcc = log( pOcc / (1-pOcc) )
+        self.logOcc = log(pOcc / (1-pOcc))
         self.pFree = pFree
-        self.logFree = log( pFree / (1-pFree))
+        self.logFree = log(pFree / (1-pFree))
         self.l0 = log(pUnk/(1-pUnk))
 
         self.origin = origin
@@ -47,7 +47,7 @@ class VelocityGrid:
             num_plots = 3
             self.map_fig, self.map_ax = plt.subplots(num_plots, 1, figsize=(5, 15))
             for i in range(num_plots):
-                self.maps.append( self.map_ax[i].imshow(np.zeros([self.grid_rows, self.grid_cols, 3], dtype=np.uint8)) )
+                self.maps.append(self.map_ax[i].imshow(np.zeros([self.grid_rows, self.grid_cols, 3], dtype=np.uint8)))
 
             plt.show(block=False)
 
@@ -57,8 +57,7 @@ class VelocityGrid:
         # complete the initialization
         self.reset()
 
-
-    def reset( self ):
+    def reset(self):
         self.mutex.acquire()
         try:
             self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]).astype(np.float32) * self.l0
@@ -66,8 +65,8 @@ class VelocityGrid:
         finally:
             self.mutex.release()
 
-    def get_grid_size( self ):
-        return [ *self.probabilityMap.shape, 3 ]
+    def get_grid_size(self):
+        return [*self.probabilityMap.shape, 3]
 
     def decay(self, rate):
         self.mutex.acquire()
@@ -122,7 +121,7 @@ class VelocityGrid:
             tmp_vel_grid[new_y_min:new_y_max, new_x_min:new_x_max, :] = self.velocityMap[old_y_min:old_y_max, old_x_min:old_x_max, :]
             self.velocityMap = tmp_vel_grid
 
-    def update(self, X, visibility, agents ):
+    def update(self, X, visibility, agents):
         '''
         @desc Update the grid with the latest observation data -- note that this currently
         requires the use of rays to indicate line of sight.  With no actual lidar/scanner
@@ -137,42 +136,41 @@ class VelocityGrid:
                 for i in range(visibility.n()):
                     pts.append([visibility[i].x(), visibility[i].y()])
 
-                view_polygon = Polygon( pts )
+                view_polygon = Polygon(pts)
 
             self.velocityMap *= 0
-            for x in range( self.grid_cols ):
-                for y in range( self.grid_rows ):
-                    cell_loc = np.array( [self.origin[0] + (x+0.5) * self.resolution, self.origin[1] + (y+0.5) * self.resolution] )
+            for x in range(self.grid_cols):
+                for y in range(self.grid_rows):
+                    cell_loc = np.array([self.origin[0] + (x+0.5) * self.resolution, self.origin[1] + (y+0.5) * self.resolution])
 
                     assigned = False
                     for agent in agents:
-                        if agent.contains( cell_loc ):
+                        if agent.contains(cell_loc):
                             self.probabilityMap[y, x] = clamp(self.probabilityMap[y, x] + self.logOcc - self.l0, MIN_PROBABILITY, MAX_PROBABILITY)
-                            self.velocityMap[y, x,:] = agent.v
+                            self.velocityMap[y, x, :] = agent.v
                             assigned = True
                             break
 
                     if not assigned:
-                        if view_polygon is not None and view_polygon.contains( Point( *cell_loc ) ):
+                        if view_polygon is not None and view_polygon.contains(Point(*cell_loc)):
                             self.probabilityMap[y, x] = clamp(self.probabilityMap[y, x] + self.logFree - self.l0, MIN_PROBABILITY, MAX_PROBABILITY)
-                            self.velocityMap[y,x,:] = 0
+                            self.velocityMap[y, x, :] = 0
 
             if self.debug:
                 # draw the probability and velocity grid
                 map_img = Image.fromarray(np.flipud(((1-self.__probabilityMap())*255.0).astype(np.uint8))).convert('RGB')
                 self.maps[0].set_data(map_img)
 
-                map_img = Image.fromarray( np.flipud((self.velocityMap[:,:,0] == 0).astype(np.uint8)*255) ).convert('RGB')
+                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 0] == 0).astype(np.uint8)*255)).convert('RGB')
                 self.maps[1].set_data(map_img)
-                map_img = Image.fromarray( np.flipud((self.velocityMap[:,:,1] == 0).astype(np.uint8)*255) ).convert('RGB')
+                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 1] == 0).astype(np.uint8)*255)).convert('RGB')
                 self.maps[2].set_data(map_img)
 
                 self.map_fig.canvas.draw()
                 self.map_fig.canvas.flush_events()
-                    
+
         finally:
             self.mutex.release()
-
 
     def get_probability_map(self):
         # return the current state as a probabilistic representation
@@ -199,7 +197,7 @@ class VelocityGrid:
             self.mutex.release()
 
     def __velocityMap(self):
-        return np.array( self.velocityMap )
+        return np.array(self.velocityMap)
 
     def plot(self, fig, robotPos=None, title=None):
         '''
