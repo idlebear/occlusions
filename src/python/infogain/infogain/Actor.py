@@ -1,4 +1,4 @@
-from config import DISTANCE_TOLERANCE, TICK_TIME, ACTOR_PATH_WIDTH
+from config import DISTANCE_TOLERANCE, TICK_TIME, ACTOR_PATH_WIDTH, MAX_CAR_SPEED
 from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
@@ -17,7 +17,7 @@ class Actor:
         self.min_v = -np.inf
         self.max_brake = np.inf
         self.max_accel = np.inf
-        self.max_delta = np.pi / 6.0
+        self.max_delta = np.pi / 4.0
 
         self.colour = colour
         self.outline_colour = outline_colour
@@ -31,7 +31,7 @@ class Actor:
             self.orientation = 0
 
         self.__update_v_and_rot()
-        
+
     def distance_to(self, pos):
         return np.linalg.norm(self.pos - pos)
 
@@ -66,7 +66,7 @@ class Actor:
         self.reached_goal = False
 
     def __update_v_and_rot(self):
-        self.v = np.round( np.array( [ self.speed * np.cos( self.orientation ), self.speed * np.sin(self.orientation)]), 5)
+        self.v = np.round(np.array([self.speed * np.cos(self.orientation), self.speed * np.sin(self.orientation)]), 5)
         self.rot = np.array(
             [
                 [np.cos(self.orientation), -np.sin(self.orientation)],
@@ -74,9 +74,9 @@ class Actor:
             ]
         )
         poly = (self.rot @ self.get_poly().T).T + self.pos
-        min_d = np.min( poly, axis=0 )
-        max_d = np.max( poly, axis=0 )
-        self.bounding_box = ( *min_d, *max_d )
+        min_d = np.min(poly, axis=0)
+        max_d = np.max(poly, axis=0)
+        self.bounding_box = (*min_d, *max_d)
 
     def accelerate(self, a, dt):
         # clip the requested control to +/- 100% and calculate the actual acceleration
@@ -85,7 +85,7 @@ class Actor:
 
         self.speed = np.clip(self.speed + a * dt, self.min_v, self.max_v)
         self.__update_v_and_rot()
-        
+
     def turn(self, delta, dt):
         # clip the steering angle to the max lim
         delta = np.clip(delta, -1.0, 1.0)
@@ -94,9 +94,9 @@ class Actor:
         if self.orientation > np.pi:
             self.orientation -= 2 * np.pi
         elif self.orientation < -np.pi:
-            self.orientation -= 2 * np.pi
+            self.orientation += 2 * np.pi
         self.__update_v_and_rot()
-        
+
     def get_v(self):
         return self.v
 
@@ -118,44 +118,44 @@ class Actor:
             [0.01, 0.01],
         ]) * self.scale
 
-    def get_width(self):
-        return 0.02 * self.scale
+    def get_size(self):
+        return self.bounding_box[2] - self.bounding_box[0], self.bounding_box[3] - self.bounding_box[1]
 
-    def contains( self, loc ):
+    def contains(self, loc):
         return loc[0] >= self.bounding_box[0] and loc[1] >= self.bounding_box[1] and loc[0] <= self.bounding_box[2] and loc[1] <= self.bounding_box[3]
-            
-    def set_collided( self, colour='black' ):
+
+    def set_collided(self, colour='black'):
         self.colour = colour
         self.speed = 0
         self.__update_v_and_rot()
         self.collided = True
 
-    def project( self, u, dt ):
+    def project(self, u, dt):
         '''
         Project a future position based on a supplied control and state
         '''
-        
-        virt_self = type(self)( id=self.id, pos=self.pos, goal=self.goal, speed=self.speed )
+
+        virt_self = type(self)(id=self.id, pos=self.pos, goal=self.goal, speed=self.speed)
         states = []
 
-        for (a,delta) in u:
-            
-            virt_self.accelerate( a, dt )
-            virt_self.turn( delta, dt )
+        for (a, delta) in u:
+
+            virt_self.accelerate(a, dt)
+            virt_self.turn(delta, dt)
             virt_self.tick(dt)
 
-            states.append( (virt_self.pos, virt_self.orientation))
+            states.append((virt_self.pos, virt_self.orientation))
 
         return states
-        
+
 
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
-        self.max_v = 0.4
+        self.max_v = MAX_CAR_SPEED
         self.min_v = 0
-        self.max_brake = 0.75
-        self.max_accel = 0.75
+        self.max_brake = 1.5
+        self.max_accel = 1.5
 
     def get_poly(self):
         return np.array([
@@ -166,9 +166,6 @@ class Car(Actor):
             [0.025, 0],
         ]) * self.scale
 
-    def get_width(self):
-        return 0.05 * self.scale
-
     @staticmethod
     def check_width(scale):
         return 0.05 * scale
@@ -177,7 +174,7 @@ class Car(Actor):
 class Pedestrian(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='blue', outline_colour='darkblue', scale=1):
         super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
-        self.max_v = 0.3
+        self.max_v = MAX_PEDESTRIAN_SPEED
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
@@ -190,9 +187,6 @@ class Pedestrian(Actor):
             [0, -0.015],
             [0.01, 0],
         ]) * self.scale
-
-    def get_width(self):
-        return 0.035 * self.scale
 
     @staticmethod
     def check_width(scale):
@@ -216,9 +210,6 @@ class Obstacle(Actor):
             [0.01, 0.01],
         ]) * self.scale
 
-    def get_width(self):
-        return 0.02 * self.scale
-
     @staticmethod
     def check_width(scale):
         return 0.02 * scale
@@ -240,9 +231,6 @@ class Blank(Actor):
             [0.01, -0.01],
             [0.01, 0.01],
         ]) * self.scale
-
-    def get_width(self):
-        return 0.02 * self.scale
 
     @staticmethod
     def check_width(scale):

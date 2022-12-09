@@ -2,7 +2,7 @@
 from copy import deepcopy
 from importlib import import_module
 from math import sqrt, exp
-import matplotlib.pyplot as plt 
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import pygame
@@ -10,6 +10,7 @@ from random import random, expovariate, seed
 import visilibity as vis
 
 from policies.VelocityGrid import VelocityGrid
+from policies.flow.flow import flow
 
 # local functions/imports
 from Actor import Actor, Pedestrian, Car, Obstacle, Blank
@@ -19,18 +20,18 @@ DEBUG = 0
 FORECAST_COUNT = 5
 FORECAST_INTERVAL = 0.1
 
-# rewards - a high penalty for colliding with anything, a small penalty for 
+# rewards - a high penalty for colliding with anything, a small penalty for
 # deviating from the desired velocity, a slightly smaller one for deviating from
 # the desired Y position, and a positive reward for moving forward
 REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
-REWARD_DEVIATION_V = -100.0
-REWARD_DEVIATION_Y = -100.0
-REWARD_FORWARD_MOTION = 0.01   # a small positive reward for not dying
+REWARD_DEVIATION_V = 100.0
+REWARD_DEVIATION_Y = -10
+REWARD_PASSING = 1000
+REWARD_GOAL = 100
 
 DESIRED_LANE_POSITION = -LANE_WIDTH / 2
 
-MAX_V = 10.0  # define a max v for scaling the observation output to keep it in the
-              # range [0,1]
+GOAL = [1000, DESIRED_LANE_POSITION]
 
 
 def get_location(origin, location):
@@ -126,13 +127,12 @@ class Window:
 class Simulation:
     def __init__(self, generator_name='uniform', generator_args=None, num_actors=1, pois_lambda=0.01, screen=None, service_time=SERVICE_TIME,
                  speed=ACTOR_SPEED, margin=SCREEN_MARGIN, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
-                 max_time=MAX_SIMULATION_TIME, tick_time=TICK_TIME, record_data=False, ):
+                 tick_time=TICK_TIME, record_data=False, ):
         self.num_actors = num_actors
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
 
         self.record_data = record_data
-        self.max_time = max_time
         self.tick_time = tick_time
 
         self.service_time = service_time
@@ -147,15 +147,8 @@ class Simulation:
 
         self.grid = VelocityGrid(height=GRID_HEIGHT, width=GRID_WIDTH, resolution=GRID_RESOLUTION, origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET))
         self.observation_shape = self.grid.get_grid_size()
-        # if DEBUG:
-        #     self.maps = []
-        #     num_plots = FORECAST_COUNT + 1
-        #     self.map_fig, self.map_ax = plt.subplots(num_plots, 1, figsize=(5, 15))
-        #     H,W,D = self.grid.get_grid_size()
-        #     for i in range(num_plots):
-        #         self.maps.append( self.map_ax[i].imshow(np.zeros([H, W, 3], dtype=np.uint8)) )
 
-        #     plt.show(block=False)
+        self.maps = None
 
         self.reset()
 
@@ -395,6 +388,9 @@ class Simulation:
             self.next_agent_x = x
 
     def _get_next_observation(self):
+        self.grid.move_origin((self.ego.pos[0]+GRID_ORIGIN_X_OFFSET, GRID_ORIGIN_Y_OFFSET))
+        self.grid.decay(0.8)
+
         # calculate the visibility polygon and use it to determine which agents are visible to the
         # AV.  Note that this is an alternative to implementing some sort LIDAR simulation
         self.visibility = self.calculate_visibility()
@@ -408,12 +404,17 @@ class Simulation:
                             actors.append(actor)
                             break
 
-            # update the observation                            
+            # update the observation
             self.grid.update(self.ego.pos, visibility=self.visibility, agents=actors)
         else:
-            print( "Error in updating observation!" )
+            print("Error in updating observation!")
 
-        observation = np.append(np.expand_dims(self.grid.get_probability_map(), axis=2), self.grid.get_velocity_map()/MAX_V, axis=2)
+        # rescale the velocity grid to be on the range [0,1]
+        velocityMap = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
+        observation = np.append(np.expand_dims(self.grid.get_probability_map(), axis=2), velocityMap, axis=2)
+
+        observation = (observation * 255.0).astype(np.uint8)
+
         return observation
 
     ##################################################################################
@@ -438,7 +439,7 @@ class Simulation:
 
         # apply the requested action to the ego vehicle
         self.ego.accelerate(action[0], dt=self.tick_time)
-        self.ego.turn(action[0], dt=self.tick_time)
+        self.ego.turn(action[1], dt=self.tick_time)
 
         self._generate_new_agents()
 
@@ -459,6 +460,7 @@ class Simulation:
             collisions += 1  # off the road
 
         # clean up
+        passed = len(finished_actors)
         for actor in finished_actors:
             self.actor_list.remove(actor)
 
@@ -466,16 +468,29 @@ class Simulation:
         observation = self._get_next_observation()
 
         # calculate the reward
-        y_error = abs(self.ego.pos[1] - DESIRED_LANE_POSITION)
-        v_error = abs(self.ego.speed - self.actor_target_speed)
-        reward = collisions * REWARD_COLLISION + y_error * REWARD_DEVIATION_Y + v_error * REWARD_DEVIATION_V + REWARD_FORWARD_MOTION * self.ego.pos[0]
+        y_reward = ((self.ego.pos[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
+        v_reward = (self.actor_target_speed**2 - (self.actor_target_speed - self.ego.speed)**2)*REWARD_DEVIATION_V
+        p_reward = passed * REWARD_PASSING
+        # c_reward = collisions * REWARD_COLLISION
+        g_distance = np.linalg.norm([self.ego.pos[0] - GOAL[0], self.ego.pos[1] - GOAL[1]])
+        if g_distance < 0.05:
+            print("Reached goal!")
+            done = True
 
         # check if this episode is finished
         done = collisions != 0
 
+        g_reward = 0
+        if done:
+            g_reward = (GOAL[0] - g_distance) / GOAL[0] * REWARD_GOAL
+
+        reward = g_reward + v_reward + y_reward + p_reward
+
+        # print(f'Reward: v:{v_reward}, y:{y_reward}, passing: {p_reward}, goal:{g_reward}, total: {reward}')
+
         return observation, reward, done, {}
 
-    def render(self):
+    def render(self, debug=False):
         if self.window is not None:
             self.window.clear()
 
@@ -487,11 +502,25 @@ class Simulation:
             self._draw_visibility()
             self._draw_status()
 
-        # if DEBUG:
-        #     # draw the probability and velocity grid
-        #     for i, (prob,v) in enumerate(forecast):
-        #         map_img = Image.fromarray(np.flipud(((1-prob)*255.0).astype(np.uint8))).convert('RGB')
-        #         self.maps[i].set_data(map_img)
+        if debug:
 
-        #     self.map_fig.canvas.draw()
-        #     self.map_fig.canvas.flush_events()
+            if self.maps is None:
+                self.maps = []
+                num_plots = FORECAST_COUNT + 1
+                self.map_fig, self.map_ax = plt.subplots(num_plots, 1, figsize=(5, 15))
+                H, W, D = self.grid.get_grid_size()
+                for i in range(num_plots):
+                    self.maps.append(self.map_ax[i].imshow(np.zeros([H, W, 3], dtype=np.uint8)))
+
+                plt.show(block=False)
+
+            # draw the probability and velocity grids
+            forecast = flow(self.grid.get_probability_map(), self.grid.get_velocity_map(), scale=self.grid.resolution,
+                            timesteps=FORECAST_COUNT, dt=FORECAST_INTERVAL, mode='bilinear')
+
+            for i, (prob, v) in enumerate(forecast):
+                map_img = Image.fromarray(np.flipud(((1-prob)*255.0).astype(np.uint8))).convert('RGB')
+                self.maps[i].set_data(map_img)
+
+            self.map_fig.canvas.draw()
+            self.map_fig.canvas.flush_events()
