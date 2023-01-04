@@ -47,10 +47,7 @@ def main(args):
 
         obs = env.reset()
     else:
-        env = OcclusionEnv(kwargs={
-            'num_actors': args.actors,
-            'seed': args.seed,
-        })
+        env = OcclusionEnv(num_actors=args.actors, seed=args.seed)
 
     for i in range(2000):
         if args.debug:

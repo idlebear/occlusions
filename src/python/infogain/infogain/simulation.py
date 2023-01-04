@@ -26,6 +26,7 @@ FORECAST_INTERVAL = 0.1
 REWARD_COLLISION = -100000     # note that this includes leaving the road surface!
 REWARD_DEVIATION_V = 100.0
 REWARD_DEVIATION_Y = -10
+REWARD_DEVIATION_X = 10
 REWARD_PASSING = 1000
 REWARD_GOAL = 100
 
@@ -171,6 +172,7 @@ class Simulation:
         self.sim_time = 0.
         self.next_time = 0.
         self.sim_start_time = 0.
+        self.last_distance = GOAL[0]
 
         self.next_agent_x = -np.inf
 
@@ -410,10 +412,16 @@ class Simulation:
             print("Error in updating observation!")
 
         # rescale the velocity grid to be on the range [0,1]
-        velocityMap = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
-        observation = np.append(np.expand_dims(self.grid.get_probability_map(), axis=2), velocityMap, axis=2)
+        velocity_map = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
 
-        observation = (observation * 255.0).astype(np.uint8)
+        rs, re = int(self.observation_shape[0]/2-ROAD_WIDTH/GRID_RESOLUTION/2), int(self.observation_shape[0]/2+ROAD_WIDTH/GRID_RESOLUTION/2)
+
+        probability_map = self.grid.get_probability_map()
+        probability_map[0:rs, :] = np.maximum(probability_map[0:rs, :], 0.1)
+        probability_map[re+1:, :] = np.maximum(probability_map[re+1:, :], 0.1)
+        observation = np.append(np.expand_dims(probability_map, axis=2), velocity_map, axis=2)
+
+        observation = np.flipud((observation * 255.0).astype(np.uint8))
 
         return observation
 
@@ -468,23 +476,30 @@ class Simulation:
         observation = self._get_next_observation()
 
         # calculate the reward
-        y_reward = ((self.ego.pos[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
-        v_reward = (self.actor_target_speed**2 - (self.actor_target_speed - self.ego.speed)**2)*REWARD_DEVIATION_V
+        # y_reward = ((self.ego.pos[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
+        y_reward = -exp(-(self.ego.pos[1] - DESIRED_LANE_POSITION)**2)
+        # v_reward = (self.actor_target_speed**2 - (self.actor_target_speed - self.ego.speed)**2)*REWARD_DEVIATION_V
+        v_reward = exp(-(self.actor_target_speed - self.ego.speed)**2)
         p_reward = passed * REWARD_PASSING
         # c_reward = collisions * REWARD_COLLISION
         g_distance = np.linalg.norm([self.ego.pos[0] - GOAL[0], self.ego.pos[1] - GOAL[1]])
-        if g_distance < 0.05:
-            print("Reached goal!")
-            done = True
+        if g_distance < GOAL[0]:
+            d_reward = 1 - (g_distance / GOAL[0])**(0.4)
+            if g_distance < 0.05:
+                print("Reached goal!")
+                done = True
+        else:
+            d_reward = 0
+        # self.last_distance = g_distance
 
         # check if this episode is finished
         done = collisions != 0
 
         g_reward = 0
-        if done:
-            g_reward = (GOAL[0] - g_distance) / GOAL[0] * REWARD_GOAL
+        # if done:
+        #     g_reward = (GOAL[0] - g_distance) / GOAL[0] * REWARD_GOAL
 
-        reward = g_reward + v_reward + y_reward + p_reward
+        reward = g_reward + v_reward + y_reward + p_reward + d_reward
 
         # print(f'Reward: v:{v_reward}, y:{y_reward}, passing: {p_reward}, goal:{g_reward}, total: {reward}')
 
