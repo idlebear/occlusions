@@ -8,11 +8,15 @@ import numpy as np
 from PIL import Image
 from random import shuffle
 from scipy import signal
-from shapely.geometry import Polygon, Point
+from shapely.geometry import Polygon, Point, MultiPoint
 from threading import Lock
+import time
 
 from policies.VelocityGrid.util import clamp
 
+from config import MAX_CAR_SPEED
+
+import polycheck
 
 # Clamp probability to maximum and minimum values to prevent overflow and subsequent
 # irrational behaviour
@@ -29,7 +33,7 @@ apparent velocity (assuming an oracle or some other subsystem provides it)
 
 class VelocityGrid:
 
-    def __init__(self, height, width, resolution=1, origin=(0, 0), pUnk=0.5, pOcc=0.7, pFree=0.3, debug=False):
+    def __init__(self, height, width, resolution=1, origin=(0, 0), pUnk=0.5, pOcc=0.8, pFree=0.3, debug=False):
         self.resolution = resolution
         self.pOcc = pOcc
         self.logOcc = log(pOcc / (1-pOcc))
@@ -62,6 +66,13 @@ class VelocityGrid:
         try:
             self.probabilityMap = np.ones([self.grid_rows, self.grid_cols]).astype(np.float32) * self.l0
             self.velocityMap = np.zeros([self.grid_rows, self.grid_cols, 2]).astype(np.float32)
+
+            # set up a grid of points in a convenient form for checking visibility
+            xx, yy = np.meshgrid(np.arange(self.grid_cols), np.arange(self.grid_rows), indexing='xy')
+            xx = xx * self.resolution + 0.5 * self.resolution
+            yy = yy * self.resolution + 0.5 * self.resolution
+            self.grid_pts = np.array([[x, y] for x, y in zip(xx.flatten(), yy.flatten())])
+
         finally:
             self.mutex.release()
 
@@ -136,34 +147,66 @@ class VelocityGrid:
                 for i in range(visibility.n()):
                     pts.append([visibility[i].x(), visibility[i].y()])
 
-                view_polygon = Polygon(pts)
+                # view_polygon = Polygon(pts)
+                # construct a copy of the view polygon, relative to the vehicle/origin
+                view_polygon = np.array(pts) - self.origin
 
-            self.velocityMap *= 0
-            for x in range(self.grid_cols):
-                for y in range(self.grid_rows):
-                    cell_loc = np.array([self.origin[0] + (x+0.5) * self.resolution, self.origin[1] + (y+0.5) * self.resolution])
+                res = np.zeros([len(self.grid_pts), 1]).reshape(-1, 1).astype(np.uint32)
+                polycheck.contains(view_polygon, self.grid_pts, res)
+                res = res.reshape(self.probabilityMap.shape)
+                self.probabilityMap += res * (self.logFree - self.l0)
 
-                    assigned = False
-                    for agent in agents:
-                        if agent.contains(cell_loc):
-                            self.probabilityMap[y, x] = clamp(self.probabilityMap[y, x] + self.logOcc - self.l0, MIN_PROBABILITY, MAX_PROBABILITY)
-                            self.velocityMap[y, x, :] = agent.v
-                            assigned = True
-                            break
+                # zero any existing velocities
+                self.velocityMap *= 0
 
-                    if not assigned:
-                        if view_polygon is not None and view_polygon.contains(Point(*cell_loc)):
-                            self.probabilityMap[y, x] = clamp(self.probabilityMap[y, x] + self.logFree - self.l0, MIN_PROBABILITY, MAX_PROBABILITY)
-                            self.velocityMap[y, x, :] = 0
+                # add the visible agents to the velocity map
+                for agent in agents:
+                    dx, dy = agent.get_size()
+                    corrected_pos = agent.pos - self.origin
+
+                    for x in np.arange(corrected_pos[0] - dx/2, corrected_pos[0] + dx/2, self.resolution):
+                        for y in np.arange(corrected_pos[1] - dy/2, corrected_pos[1] + dy/2, self.resolution):
+                            cx = int(x/self.resolution)
+                            cy = int(y/self.resolution)
+
+                            if cx >= 0 and cy >= 0:
+                                try:
+                                    self.probabilityMap[cy, cx] = self.probabilityMap[cy, cx] + self.logOcc - self.l0
+                                    self.velocityMap[cy, cx, :] = agent.v
+                                except IndexError:
+                                    pass  # off the grid
+
+                # for x in range(self.grid_cols):
+                #     for y in range(self.grid_rows):
+                #         cell_loc = np.array([self.origin[0] + (x+0.5) * self.resolution, self.origin[1] + (y+0.5) * self.resolution])
+
+                #         assigned = False
+                #         for agent in agents:
+                #             if agent.contains(cell_loc):
+                #                 self.probabilityMap[y, x] = self.probabilityMap[y, x] + self.logOcc - self.l0
+                #                 self.velocityMap[y, x, :] = agent.v
+                #                 assigned = True
+                #                 break
+
+                # if not assigned:
+                #     # pretend we can see it...
+                #     self.probabilityMap[y, x] = self.probabilityMap[y, x] + self.logFree - self.l0
+                #     # TODO: This is hella-slow -- going to assume visibility for the time being since
+                #     #       we aren't looking at occlusions from buildings, just dodging.  Simplify until
+                #     #       we know we have a working system...
+                # #     if view_polygon is not None and view_polygon.contains(Point(*cell_loc)):
+                # #         self.probabilityMap[y, x] = self.probabilityMap[y, x] + self.logFree - self.l0
+
+                self.probabilityMap = np.clip(self.probabilityMap, MIN_PROBABILITY, MAX_PROBABILITY)
 
             if self.debug:
                 # draw the probability and velocity grid
                 map_img = Image.fromarray(np.flipud(((1-self.__probabilityMap())*255.0).astype(np.uint8))).convert('RGB')
                 self.maps[0].set_data(map_img)
 
-                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 0] == 0).astype(np.uint8)*255)).convert('RGB')
+                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 0]/MAX_CAR_SPEED)*255.0)).astype(np.uint8).convert('RGB')
                 self.maps[1].set_data(map_img)
-                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 1] == 0).astype(np.uint8)*255)).convert('RGB')
+                map_img = Image.fromarray(np.flipud((self.velocityMap[:, :, 1]/MAX_CAR_SPEED)*255.0)).astype(np.uint8).convert('RGB')
                 self.maps[2].set_data(map_img)
 
                 self.map_fig.canvas.draw()
