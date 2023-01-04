@@ -22,17 +22,15 @@ class OcclusionEnv(gym.Env):
         super().__init__()
 
         # set defaults, then check for updated values
-        num_actors = 5
-        seed = 42
-        if kwargs is not None:
-            try:
-                num_actors = kwargs['num_actors']
-            except KeyError:
-                pass
-            try:
-                seed = kwargs['seed']
-            except KeyError:
-                pass
+        try:
+            num_actors = kwargs['num_actors']
+        except KeyError:
+            num_actors = 5
+
+        try:
+            seed = kwargs['seed']
+        except KeyError:
+            seed = 42
 
         pygame.init()
         size = (SCREEN_WIDTH, SCREEN_HEIGHT)
