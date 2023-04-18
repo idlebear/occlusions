@@ -2,14 +2,14 @@ from config import DISTANCE_TOLERANCE, TICK_TIME, ACTOR_PATH_WIDTH, MAX_CAR_SPEE
 from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
+from enum import Enum
 
 
 class Actor:
-    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1.0, colour='grey', outline_colour='darkgrey', scale=1.0):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=0, colour='grey', outline_colour='darkgrey', scale=1.0):
         self.id = id
         self.pos = pos
 
-        self.speed = speed
         self.reached_goal = False
         self.collided = False
 
@@ -17,7 +17,7 @@ class Actor:
         self.min_v = -np.inf
         self.max_brake = np.inf
         self.max_accel = np.inf
-        self.max_delta = np.pi / 4.0
+        self.max_omega = np.pi / 4.0
 
         self.colour = colour
         self.outline_colour = outline_colour
@@ -30,7 +30,10 @@ class Actor:
             # straight along the x-axis
             self.orientation = 0
 
-        self.__update_v_and_rot()
+        # unless specified, actor is initially at rest
+        self.set_control([speed, 0])
+
+        self.__update_bounding_box()
 
     def distance_to(self, pos):
         return np.linalg.norm(self.pos - pos)
@@ -38,78 +41,45 @@ class Actor:
     def __move(self, dt):
         """move towards the goal
         """
-        if not self.reached_goal:
-            if self.goal is not None:
-                dir = self.goal - self.pos
-                dist = np.linalg.norm(dir)
-            else:
-                dist = np.inf
-
-            if (dist > self.speed*dt):
-                self.pos = np.round(self.pos + self.v * dt, 5)
-            else:
-                # arrived at the goal
-                self.pos = self.goal
-                self.reached_goal = True
-
-            self.__update_v_and_rot()
-
-    def set_goal(self, goal):
-        self.goal = goal
-        if goal is not None:
-            dir = self.goal - self.pos
-            self.orientation = atan2(dir[1], dir[0])
-        else:
-            self.orientation = 0
-        self.__update_v_and_rot()
-
-        self.reached_goal = False
-
-    def __update_v_and_rot(self):
-        self.v = np.round(np.array([self.speed * np.cos(self.orientation), self.speed * np.sin(self.orientation)]), 5)
-        self.rot = np.array(
-            [
-                [np.cos(self.orientation), -np.sin(self.orientation)],
-                [np.sin(self.orientation), np.cos(self.orientation)],
-            ]
-        )
-        poly = (self.rot @ self.get_poly().T).T + self.pos
-        min_d = np.min(poly, axis=0)
-        max_d = np.max(poly, axis=0)
-        self.bounding_box = (*min_d, *max_d)
-
-    def accelerate(self, a, dt):
-        # clip the requested control to +/- 100% and calculate the actual acceleration
-        a = np.clip(a, -1.0, 1.0)
-        a = a * self.max_accel if a > 0 else a * self.max_brake
-
-        self.speed = np.clip(self.speed + a * dt, self.min_v, self.max_v)
-        self.__update_v_and_rot()
-
-    def turn(self, delta, dt):
-        # clip the steering angle to the max lim
-        delta = np.clip(delta, -1.0, 1.0)
-        delta *= self.max_delta
-        self.orientation = self.orientation + delta * dt
+        self.orientation = self.orientation + self.omega * dt
         if self.orientation > np.pi:
             self.orientation -= 2 * np.pi
         elif self.orientation < -np.pi:
             self.orientation += 2 * np.pi
-        self.__update_v_and_rot()
 
-    def get_v(self):
-        return self.v
+        self.pos = self.pos + self.v * dt
+        self.__update_bounding_box()
+
+        if self.goal is not None:
+            if not self.reached_goal:
+                dist = np.linalg.norm(self.goal - self.pos)
+                if abs(dist - self.speed) < 0:
+                    self.reached_goal = True
+
+    def set_goal(self, goal):
+        self.goal = goal
+        self.reached_goal = False
+
+    def __update_bounding_box(self):
+        poly = self.get_poly()
+        min_d = np.min(poly, axis=0)
+        max_d = np.max(poly, axis=0)
+        self.bounding_box = (*min_d, *max_d)
+
+    def set_control(self, u):
+        self.speed = np.clip(u[0], self.min_v, self.max_v)
+        self.v = np.round(np.array([self.speed * np.cos(self.orientation), self.speed * np.sin(self.orientation)]), 5)
+        self.omega = np.clip(u[1], -self.max_omega, self.max_omega)
 
     def tick(self, dt=TICK_TIME):
         """a time step
         """
-        if self.speed:
-            self.__move(dt)
+        self.__move(dt)
 
     def at_goal(self):
         return self.reached_goal
 
-    def get_poly(self):
+    def _poly(self):
         return np.array([
             [0.01, 0.01],
             [-0.01, 0.01],
@@ -127,7 +97,6 @@ class Actor:
     def set_collided(self, colour='black'):
         self.colour = colour
         self.speed = 0
-        self.__update_v_and_rot()
         self.collided = True
 
     def project(self, u, dt):
@@ -148,16 +117,38 @@ class Actor:
 
         return states
 
+    def get_poly(self):
+        self.rot = np.array(
+            [
+                [np.cos(self.orientation), -np.sin(self.orientation)],
+                [np.sin(self.orientation), np.cos(self.orientation)],
+            ]
+        )
+        poly = (self.rot @ self._poly().T).T + self.pos
+        return poly
+
+    def get_state(self):
+        state = {
+            'pos': self.pos,
+            'v': self.v,
+            'orientation': self.orientation,
+            'speed': self.speed,
+            'omega': self.omega,
+            'collided': self.collided,
+            'poly': self.get_poly(),
+        }
+        return state
+
 
 class Car(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='lightblue', outline_colour='dodgerblue', scale=1):
-        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+        super().__init__(id, pos=pos, goal=goal, speed=speed, colour=colour, outline_colour=outline_colour, scale=scale)
         self.max_v = MAX_CAR_SPEED
         self.min_v = 0
         self.max_brake = 1.5
         self.max_accel = 1.5
 
-    def get_poly(self):
+    def _poly(self):
         return np.array([
             [0.025, 0],
             [-0.025, 0.02],
@@ -173,13 +164,13 @@ class Car(Actor):
 
 class Pedestrian(Actor):
     def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='blue', outline_colour='darkblue', scale=1):
-        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+        super().__init__(id, pos=pos, goal=goal, speed=speed, colour=colour, outline_colour=outline_colour, scale=scale)
         self.max_v = MAX_PEDESTRIAN_SPEED
         self.min_v = 0
         self.max_brake = 0.75
         self.max_accel = 0.75
 
-    def get_poly(self):
+    def _poly(self):
         return np.array([
             [0.01, 0],
             [0, 0.015],
@@ -201,7 +192,7 @@ class Obstacle(Actor):
         self.max_brake = 0
         self.max_accel = 0
 
-    def get_poly(self):
+    def _poly(self):
         return np.array([
             [0.01, 0.01],
             [-0.01, 0.01],
@@ -223,7 +214,7 @@ class Blank(Actor):
         self.max_brake = 0
         self.max_accel = 0
 
-    def get_poly(self):
+    def _poly(self):
         return np.array([
             [0.01, 0.01],
             [-0.01, 0.01],

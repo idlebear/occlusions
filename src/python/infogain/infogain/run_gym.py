@@ -12,13 +12,17 @@ from stable_baselines3.common.evaluation import evaluate_policy
 
 from OcclusionGym import OcclusionEnv
 
+from mpc_controller import MPC, Vehicle
+
 from typing import Callable
 
 from config import *
 
+from mpc_controller import MPC
+
 
 def main(args):
-    if not args.debug:
+    if args.method == 'rl':
 
         # Parallel environments
         if args.multipass:
@@ -27,34 +31,74 @@ def main(args):
             env = make_vec_env(OcclusionEnv, n_envs=args.instances, env_kwargs={'num_actors': args.actors})
 
         model = PPO("CnnPolicy", env, verbose=1, tensorboard_log="./occlusion_log")
-        if args.demo:
-            try:
-                model.load('ppo_occlusions.model')
-                print('Previous model loaded')
-            except IOError:
-                print('No model to load -- starting fresh')
+        try:
+            model.load('ppo_occlusions.model')
+            print('Previous model loaded')
+        except IOError:
+            print('No model to load -- starting fresh')
 
-        else:
-            try:
-                model.load('ppo_occlusions.model')
-                print('Previous model loaded')
-            except IOError:
-                print('No model to load -- starting fresh')
-
+        if not args.skip_training:
             for i in range(args.epochs):
                 model.learn(total_timesteps=args.timesteps)
                 model.save(f'ppo_occlusions_{i}.model')
 
-        obs = env.reset()
     else:
+
         env = OcclusionEnv(num_actors=args.actors, seed=args.seed)
 
-    for i in range(2000):
-        if args.debug:
+        if args.method == 'mpc':
+            x_fin = [40, 0, 0]
+            x_init = [0, 0, 0]
+            v_des = 1
+
+            Q = np.array([[1, 0, 0],
+                          [0, 1, 0],
+                          [0, 0, 0.1]])
+
+            Qf = np.array([[1/40.0, 0, 0],
+                           [0, 1/40.0, 0],
+                           [0, 0, 0.1/40.0]])
+
+            R = np.array([[1, 0],
+                          [0, 1]])
+
+            agents = [[10, 0.00, 2], [20, 4, 1]]
+            # agents = [[20, 4, 2]]
+
+            planning_horizon = 15
+            control_len = Vehicle.control_len
+            state_len = Vehicle.state_len
+
+            # TODO: Using no active agents for the time being -- eventually we'll need to build a
+            #       list of the near agents, and add factors so the remainder are ignored.
+            mpc = MPC(state_len=state_len, control_len=control_len, planning_horizon=planning_horizon,
+                      num_agents=0, step_fn=Vehicle.runge_kutta_step, Q=Q, Qf=Qf, R=R, dt=env.sim.tick_time)
+
+    # reset the environment and collect the first observation and current state
+    obs, info = env.reset()
+
+    while True:
+        if args.method == 'random':
             # fixed forward motion (for testing)
-            action = np.random.randint(6, 9)
-        else:
+            action = np.array([np.random.random()*4 - 2, np.random.randint(-1, 2)*np.pi/6])
+        elif args.method == 'rl':
             action, _states = model.predict(obs)
+        elif args.method == 'mpc':
+            action = mpc.next(obs, info)
+        else:
+            # fixed forward motion (for testing)
+            ego_state = info['ego']
+            best_dir = np.argmax(np.array(info['information_gain']))
+            if best_dir == 0:
+                w = -np.pi/4
+            elif best_dir == 1:
+                w = -ego_state['orientation']
+            elif best_dir == 2:
+                w = np.pi/4
+            else:
+                w = 0
+            action = (1, w)
+
         obs, rewards, done, info = env.step(action)
         env.render()
 
@@ -124,13 +168,17 @@ if __name__ == "__main__":
         action='store_true',
         help='Display the simulation window')
     argparser.add_argument(
+        '--skip-training',
+        action='store_true',
+        help='skip the rl training and just run the inference engine')
+    argparser.add_argument(
         '--debug',
         action='store_true',
         help='Dummy mode -- just display the env')
     argparser.add_argument(
-        '--demo',
-        action='store_true',
-        help='Demo mode: show the model doing its thing')
+        '--method', default='none',
+        type=str,
+        help='control method to be used: none, rl, mpc')
     argparser.add_argument(
         '--multipass',
         action='store_true',

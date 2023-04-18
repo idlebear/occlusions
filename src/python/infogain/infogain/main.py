@@ -38,21 +38,12 @@ def simulate(args, delivery_log=None):
     generator_args['max_time'] = args.max_time
 
     sim = Simulation(
-        policy_name=args.policy,
-        policy_args={
-            'max_v': 0.07,
-            'min_v': 0,
-            'max_accel': 0.05,
-            'max_brake': 0.045,
-            'screen': screen,
-        },
         generator_name=args.generator,
         generator_args=generator_args,
         num_actors=args.actors,
         pois_lambda=args.lambd,
         screen=surface if args.show_sim or args.record_data else None,
         tick_time=args.tick_time,
-        max_time=args.max_time,
     )
 
     if args.seed is not None:
@@ -66,7 +57,7 @@ def simulate(args, delivery_log=None):
                 if event.type == pygame.QUIT:
                     return
 
-        rval = sim.tick(tick_time=args.tick_time, max_simulation_time=args.max_time)
+        rval = sim.tick(, max_simulation_time=args.max_time)
         if rval == -1:
             break
 
