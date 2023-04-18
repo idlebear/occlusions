@@ -20,9 +20,9 @@ def print_matrix( index, A, cols=11, caption=None ):
     print('%')
     print('\\begin{table*}')
     if caption is not None:
-        print( f'\\caption{{{caption}}}')
+        print(f'\\caption{{{caption}}}')
     else:
-        print( f'\\caption{{Matrix}}')
+        print(f'\\caption{{Matrix}}')
     
     print('\\label{table:task-time-data}')
     print('\\begin{center}')
@@ -42,8 +42,8 @@ def print_matrix( index, A, cols=11, caption=None ):
     print('\\midrule')
 
     for n in range(N):
-        s = f'({index}):'
-        for m in range( M ):
+        s = f'{index}'
+        for m in range(M):
             s += f'& {A[n,m]:.3} '
         s += "\\\\"
         print(s)
@@ -56,13 +56,13 @@ def print_matrix( index, A, cols=11, caption=None ):
     print('%%%%%')
 
 
-def main( args ):
+def main(args):
 
     num_states = 15
     num_predictions = 10
 
     # a simple, linear example
-    current_state = np.zeros( (1, num_states ))
+    current_state = np.zeros((1, num_states))
 
     future_states = [current_state]
 
@@ -152,14 +152,14 @@ def main( args ):
     print('% Table Data for matrix')
     print('%')
     print('\\begin{table*}')
-    print( f'\\caption{{Collision Probability}}')
-    
+    print(f'\\caption{{Collision Probability}}')
+
     print('\\label{table:task-time-data}')
     print('\\begin{center}')
 
     cols = 2
-    column_str = '\\begin{tabular}{@{} l c c c c@{}}'
-    heading_str = f'State &  $\\mathbb{{P}}(X_i=1)$ &  $\\mathbb{{P}}_{{\\textsc{{collision}}}}$ &  $\\mathbb{{P}}_{{\\textsc{{collision (alt)}}}}$ &  $\\mathbb{{P}}_{{\\textsc{{Upper Bound}}}}$\\\\'
+    column_str = '\\begin{tabular}{@{} l c c @{}}'
+    heading_str = f'State &  $\\mathbb{{P}}(X_i=1)$ &  $\\mathbb{{P}}_{{\\textsc{{collision}}}}$ \\\\'
 
     print(column_str)
     # print('\\toprule')
@@ -168,19 +168,15 @@ def main( args ):
     print('\\midrule')
 
     prob_no_collision = 1
-    prob_no_collision_alt = 1
     collision_upper_bound = 0
     for i in range(1, len(future_states)):
         try:
-            X_i = future_states[i][0, i-1] +  future_states[i][0, i] + future_states[i][0, i+1]
-            X_i_alt = 1 - (1 - future_states[i][0, i-1])*(1 - future_states[i][0, i])*(1 - future_states[i][0, i+1])
-            prob_no_collision *= ( 1 - X_i )
-            prob_no_collision_alt *= ( 1 - X_i_alt )
+            X_i = future_states[i][0, i-1] + future_states[i][0, i] + future_states[i][0, i+1]
+            prob_no_collision *= (1 - X_i)
             collision_upper_bound += X_i
-            print( f'$X_{i}$ &  {X_i: .4} & {(1 - prob_no_collision):.4} & {(1 - prob_no_collision_alt):.4} & {collision_upper_bound:.4}  \\\\')
+            print(f'$X_{i}$ &  {X_i: .4} & {(1 - prob_no_collision):.4} \\\\')
         except IndexError:
             pass
-
 
     print('\\bottomrule')
     print('\\end{tabular}')
