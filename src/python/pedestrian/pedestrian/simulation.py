@@ -236,7 +236,7 @@ class Simulation:
     def _generate_new_agents(self):
         while (len(self.actor_list) < self.num_actors):
             rnd = self.generator.uniform()
-            if rnd:  # < 0.5:
+            if 0:  # rnd < 0.5:
                 radius = 0.1 + np.random.random()*0.1
                 v = 0.2 + np.random.random()*0.5
 
@@ -326,11 +326,11 @@ class Simulation:
 
             self._draw_status()
 
-        # if DEBUG:
-        #     # draw the probability and velocity grid
-        #     for i, (prob,v) in enumerate(forecast):
-        #         map_img = Image.fromarray(np.flipud(((1-prob)*255.0).astype(np.uint8))).convert('RGB')
-        #         self.maps[i].set_data(map_img)
+        if DEBUG:
+            # draw the probability and velocity grid
+            for i, (prob, v) in enumerate(forecast):
+                map_img = Image.fromarray(np.flipud(((1-prob)*255.0).astype(np.uint8))).convert('RGB')
+                self.maps[i].set_data(map_img)
 
-        #     self.map_fig.canvas.draw()
-        #     self.map_fig.canvas.flush_events()
+            self.map_fig.canvas.draw()
+            self.map_fig.canvas.flush_events()

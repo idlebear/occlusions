@@ -16,8 +16,8 @@ from config import EPSILON
 
 # Clamp probability to maximum and minimum values to prevent overflow and subsequent
 # irrational behaviour
-MIN_PROBABILITY = -20.0
-MAX_PROBABILITY = 20.0
+MIN_PROBABILITY = -1.0
+MAX_PROBABILITY = 1.0
 
 
 """

@@ -11,6 +11,8 @@ from time import time, sleep
 from pickle import load, dump
 from math import floor
 
+LAMBDA = 0.1
+
 
 def simulate(args, delivery_log=None):
 
