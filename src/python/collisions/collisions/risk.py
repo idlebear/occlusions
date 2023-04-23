@@ -5,6 +5,12 @@ from enum import Enum
 import numpy as np
 
 
+import matplotlib
+import matplotlib.pyplot as plt
+import scienceplots
+
+plt.style.use(['science','ieee'])
+
 class AgentMode( Enum ):
     RANDOM = 0
     FIXED = 1
@@ -201,7 +207,9 @@ def run_trials( args ):
 
     self_start = 0
 
-    results = np.zeros((1,args.trials))
+    result_sample_rate = 10
+    results = np.zeros((args.trials,))
+    result_summary = np.zeros((args.trials//result_sample_rate,))
 
     for i in range(args.trials):
 
@@ -224,11 +232,19 @@ def run_trials( args ):
 
             if abs(agent_pos - self_pos) <= 1:
                 # collision
-                results[0,i] = 1
+                results[i] = 1
                 break
+        
+        if i and not i % result_sample_rate:
+            result_summary[i//result_sample_rate] = np.sum(results)/(i+1) 
 
     collision_count = np.sum(results)
     print( f'{collision_count} collisions in {args.trials} trials: {collision_count/args.trials} probability of collision')
+
+
+    plt.style.use(['science','ieee'])
+
+    plt.figure
 
 
 
