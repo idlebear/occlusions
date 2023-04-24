@@ -3,13 +3,14 @@
 import argparse
 from enum import Enum
 import numpy as np
-
+import pandas as pd
 
 import matplotlib
 import matplotlib.pyplot as plt
-import scienceplots
+# import scienceplots
+import seaborn as sb
 
-plt.style.use(['science', 'ieee'])
+# plt.style.use(['science', 'ieee'])
 
 
 class AgentMode(Enum):
@@ -22,6 +23,13 @@ def print_matrix(index, A, cols=11, caption=None):
 
     M = min(cols, M)
 
+    if type(index) == list or type(index) == np.ndarray:
+        if len(index) != N:
+            print( "Ignoring improper labels!")
+        labels = index
+    else:
+        labels = [index for _ in range(N)]
+
     print('%%%%%')
     print('% Table Data for matrix')
     print('%')
@@ -30,7 +38,7 @@ def print_matrix(index, A, cols=11, caption=None):
         print(f'\\caption{{{caption}}}')
     else:
         print(f'\\caption{{Matrix}}')
-
+    
     print('\\label{table:task-time-data}')
     print('\\begin{center}')
 
@@ -49,7 +57,11 @@ def print_matrix(index, A, cols=11, caption=None):
     print('\\midrule')
 
     for n in range(N):
-        s = f'{index}'
+        try:
+            s = f' {labels[n]} '
+        except IndexError:
+            s = ' '
+
         for m in range(M):
             s += f'& {A[n,m]:.3} '
         s += "\\\\"
@@ -202,7 +214,8 @@ def run_trials(args):
 
     result_sample_rate = 10
     results = np.zeros((args.trials,))
-    result_summary = np.zeros((args.trials//result_sample_rate,))
+    result_summary = []
+    result_index = []
 
     for i in range(args.trials):
 
@@ -214,10 +227,10 @@ def run_trials(args):
 
         # ten steps along the trajectory
         for p in range(args.steps):
-
+            
             # move self
             self_pos += 1
-
+            
             # move agent
             if agent_mode == AgentMode.RANDOM:
                 agent_action = gen.choice(agent_behaviours)
@@ -227,16 +240,17 @@ def run_trials(args):
                 # collision
                 results[i] = 1
                 break
-
-        if i and not i % result_sample_rate:
-            result_summary[i//result_sample_rate] = np.sum(results)/(i+1)
+        
+            if i and not (i % result_sample_rate):
+                result_summary.append( np.sum(results)/(i+1) ) 
+                result_index.append( i+1 )
 
     collision_count = np.sum(results)
     print(f'{collision_count} collisions in {args.trials} trials: {collision_count/args.trials} probability of collision')
 
-    plt.style.use(['science', 'ieee'])
-
-    plt.figure
+    ax,fig = plt.subplots()
+    plt.plot( result_index, result_summary )
+    plt.show()
 
 
 def generate_observability(generator, steps, p=0.5):
@@ -247,66 +261,165 @@ def predict_modal_probability(args):
     # (re)set the random generator
     gen = np.random.default_rng(seed=args.seed)
 
-    # find the observability for this trial
-    observable = generate_observability(generator=gen, steps=args.steps, p=args.observability)
 
-    agent_behaviours = [-1, 1]  # really just left/right...
-    agent_mode = AgentMode.FIXED
-    num_states = args.steps + 5  # some overflow space if necessary...
+    collected_data = []
 
-    agent_start = 5
-    initial_agent_behaviour = gen.choice(range(len(agent_behaviours)))
+    for observability in np.arange( 0.9, 0.91, 0.1 ):
 
-    av_belief = np.zeros((len(agent_behaviours), args.steps))
+        collected_collision_vars = []
+        collected_collision_predictions = []
+        for trial in range(args.trials):
 
-    # a simple, linear example
-    current_state = np.zeros((len(agent_behaviours), num_states))
+            # find the observability for this trial
+            observable = generate_observability(generator=gen, steps=args.steps, p=observability)
 
-    future_states = []
+            agent_behaviours = [-1, 1]  # really just left/right...
+            agent_mode = AgentMode.FIXED
+            num_states = args.steps + 5  # some overflow space if necessary...
 
-    # construct the behaviour matrices based on the assigned behaviours
-    behaviour_kernals = [
-        np.array([1, 0, 0]),          # move left
-        np.array([0, 0, 1]),          # move right
-        np.array([1.0/3.0, 1.0/3.0, 1.0/3.0,]),      # unknown
-    ]
+            agent_start = 5
+            initial_agent_behaviour = 0 # gen.choice(range(len(agent_behaviours)))
 
-    if observable[0]:
-        # initial distribution -- again, simple with the agent only found in one cell
-        current_state[initial_agent_behaviour, agent_start] = 1.0
-    else:
-        # only have an approximate position, but unable to observe the direction of travel
-        current_state[:, agent_start] = 1.0/len(agent_behaviours)
+            av_belief = np.zeros((len(agent_behaviours), args.steps))
 
-    for i in range(args.steps):
-        # calculate the current belief
-        if observable[i]:
-            # we can make an observation -- update the belief based on measured direction
-            next_state = np.array([np.convolve(current_state[0], behaviour_kernals[0], mode='same')*args.consistency +
-                                   np.convolve(current_state[1], behaviour_kernals[0], mode='same')*(1-args.consistency),
-                                   np.convolve(current_state[1], behaviour_kernals[1], mode='same')*args.consistency +
-                                   np.convolve(current_state[0], behaviour_kernals[1], mode='same')*(1-args.consistency)
-                                   ])
-        else:
-            # no observation is possible, just a general blur
-            next_state = np.array([np.convolve(current_state[0], behaviour_kernals[2], mode='same'),
-                                   np.convolve(current_state[1], behaviour_kernals[2], mode='same')
-                                   ])
+            # a simple, linear example
+            current_state = np.zeros((len(agent_behaviours), num_states))
 
-        print(next_state)
-        print(f'total probability: {np.sum(next_state)}  (should be 1!)')
+            future_states = []
 
-        future_states.append(next_state)
-        current_state = next_state
+            # construct the behaviour matrices based on the assigned behaviours
+            behaviour_kernals = [
+                np.array([1, 0, 0]),          # move left
+                np.array([0, 0, 1]),          # move right
+                np.array([1.0/3.0, 1.0/6.0, 0,]),      # unknown left
+                np.array([0, 1.0/6.0, 1.0/3.0,]),      # unknown right
+            ]
 
-    # predict occupation
-    total_occupancy = []
-    for state in future_states:
-        total_occupancy.append(np.sum(state, axis=0))
-    total_occupancy = np.array(total_occupancy).squeeze()
+            if observable[0]:
+                # initial distribution -- again, simple with the agent only found in one cell
+                current_state[initial_agent_behaviour, agent_start] = 1.0
+            else:
+                # only have an approximate position, but unable to observe the direction of travel
+                current_state[:, agent_start] = 1.0/len(agent_behaviours)
 
-    # print the results
-    print_matrix('pred', total_occupancy)
+            future_states.append(current_state)
+
+            for i in range(args.steps):
+                # calculate the current belief
+                if observable[i]:
+                    # we can make an observation -- update the belief based on measured direction
+                    next_state = np.array([np.convolve(current_state[0], behaviour_kernals[0], mode='same')*args.consistency +
+                                        np.convolve(current_state[1], behaviour_kernals[0], mode='same')*(1-args.consistency),
+                                        np.convolve(current_state[1], behaviour_kernals[1], mode='same')*args.consistency +
+                                        np.convolve(current_state[0], behaviour_kernals[1], mode='same')*(1-args.consistency)
+                                        ])
+                else:
+                    # no observation is possible, just a general blur
+                    next_state = np.array([np.convolve(current_state[0], behaviour_kernals[2], mode='same') +
+                                        np.convolve(current_state[1], behaviour_kernals[2], mode='same'),
+                                        np.convolve(current_state[0], behaviour_kernals[3], mode='same') +
+                                        np.convolve(current_state[1], behaviour_kernals[3], mode='same'),
+                                        ])
+
+                # print(next_state)
+                # print(f'total probability: {np.sum(next_state)}  (should be 1!)')
+
+                future_states.append(next_state)
+                current_state = next_state
+
+                # clear the current footprint of the AV (assuming no collision)
+                current_state[:,i-1:i+2] = 0
+
+                # and normalize
+                total_probability = np.sum( current_state )
+                if total_probability:
+                    current_state /= total_probability
+
+            # summarize occupancy (ignore behaviour since it doesn't matter at this point)
+            total_occupancy = []
+            for state in future_states:
+                total_occupancy.append(np.sum(state, axis=0))
+            total_occupancy = np.array(total_occupancy).squeeze()
+
+            prob_no_collision = 1
+            collision_upper_bound = 0
+
+            for i in range(1, len(future_states)):
+                try:
+                    X_i = np.sum( future_states[i][:, i-1:i+2])
+                    prob_no_collision *= (1 - X_i)
+
+                    entry = {
+                        'observability':  observability, 
+                        'trial':          trial,
+                        'X_i':            i, 
+                        'occupancy':      X_i,
+                        'collision_prob': 1 - prob_no_collision
+                    }
+                    collected_data.append( entry )
+                except IndexError:
+                    pass
+
+            prob_no_collision = 1
+            collision_upper_bound = 0
+            for i in range(1, len(future_states)):
+                try:
+                    X_i = np.sum( future_states[i][:, i-1:i+2])
+                    prob_no_collision *= (1 - X_i)
+                    collision_upper_bound += X_i
+                    print(f'$X_{i}$ &  {X_i: .4} & {(1 - prob_no_collision):.4} \\\\')
+                except IndexError:
+                    pass
+
+
+    df = pd.DataFrame( collected_data )
+
+    fig, ax = plt.subplots()
+    fig.subplots_adjust(left=.15, bottom=.16, right=.99, top=.97)
+
+    sb.lineplot(x='X_i', y='collision_prob', hue='observability', data=df)
+
+    plt.show()
+
+    # # print the results
+    # print_matrix(observable, total_occupancy)
+
+    # print('%%%%%')
+    # print('% Table Data for matrix')
+    # print('%')
+    # print('\\begin{table*}')
+    # print(f'\\caption{{Collision Probability}}')
+
+    # print('\\label{table:task-time-data}')
+    # print('\\begin{center}')
+
+    # cols = 2
+    # column_str = '\\begin{tabular}{@{} l c c @{}}'
+    # heading_str = f'State &  $\\mathbb{{P}}(X_i=1)$ &  $\\mathbb{{P}}_{{\\textsc{{collision}}}}$ \\\\'
+
+    # print(column_str)
+    # # print('\\toprule')
+    # print(heading_str)
+
+    # print('\\midrule')
+
+    # prob_no_collision = 1
+    # collision_upper_bound = 0
+    # for i in range(1, len(future_states)):
+    #     try:
+    #         X_i = np.sum( future_states[i][:, i-1:i+2])
+    #         prob_no_collision *= (1 - X_i)
+    #         collision_upper_bound += X_i
+    #         print(f'$X_{i}$ &  {X_i: .4} & {(1 - prob_no_collision):.4} \\\\')
+    #     except IndexError:
+    #         pass
+
+    # print('\\bottomrule')
+    # print('\\end{tabular}')
+    # print('\\end{center}')
+    # print('\\end{table*}')
+    # print('%')
+    # print('%%%%%')
 
 
 def run_modal_trial(args):
