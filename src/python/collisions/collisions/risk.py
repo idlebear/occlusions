@@ -25,7 +25,7 @@ def print_matrix(index, A, cols=11, caption=None):
 
     if type(index) == list or type(index) == np.ndarray:
         if len(index) != N:
-            print( "Ignoring improper labels!")
+            print("Ignoring improper labels!")
         labels = index
     else:
         labels = [index for _ in range(N)]
@@ -38,7 +38,7 @@ def print_matrix(index, A, cols=11, caption=None):
         print(f'\\caption{{{caption}}}')
     else:
         print(f'\\caption{{Matrix}}')
-    
+
     print('\\label{table:task-time-data}')
     print('\\begin{center}')
 
@@ -227,10 +227,10 @@ def run_trials(args):
 
         # ten steps along the trajectory
         for p in range(args.steps):
-            
+
             # move self
             self_pos += 1
-            
+
             # move agent
             if agent_mode == AgentMode.RANDOM:
                 agent_action = gen.choice(agent_behaviours)
@@ -240,16 +240,16 @@ def run_trials(args):
                 # collision
                 results[i] = 1
                 break
-        
+
             if i and not (i % result_sample_rate):
-                result_summary.append( np.sum(results)/(i+1) ) 
-                result_index.append( i+1 )
+                result_summary.append(np.sum(results)/(i+1))
+                result_index.append(i+1)
 
     collision_count = np.sum(results)
     print(f'{collision_count} collisions in {args.trials} trials: {collision_count/args.trials} probability of collision')
 
-    ax,fig = plt.subplots()
-    plt.plot( result_index, result_summary )
+    ax, fig = plt.subplots()
+    plt.plot(result_index, result_summary)
     plt.show()
 
 
@@ -261,10 +261,9 @@ def predict_modal_probability(args):
     # (re)set the random generator
     gen = np.random.default_rng(seed=args.seed)
 
-
     collected_data = []
 
-    for observability in np.arange( 0.9, 0.91, 0.1 ):
+    for observability in np.arange(0.0, 1.01, 0.1):
 
         collected_collision_vars = []
         collected_collision_predictions = []
@@ -278,7 +277,7 @@ def predict_modal_probability(args):
             num_states = args.steps + 5  # some overflow space if necessary...
 
             agent_start = 5
-            initial_agent_behaviour = 0 # gen.choice(range(len(agent_behaviours)))
+            initial_agent_behaviour = 0  # gen.choice(range(len(agent_behaviours)))
 
             av_belief = np.zeros((len(agent_behaviours), args.steps))
 
@@ -309,17 +308,17 @@ def predict_modal_probability(args):
                 if observable[i]:
                     # we can make an observation -- update the belief based on measured direction
                     next_state = np.array([np.convolve(current_state[0], behaviour_kernals[0], mode='same')*args.consistency +
-                                        np.convolve(current_state[1], behaviour_kernals[0], mode='same')*(1-args.consistency),
-                                        np.convolve(current_state[1], behaviour_kernals[1], mode='same')*args.consistency +
-                                        np.convolve(current_state[0], behaviour_kernals[1], mode='same')*(1-args.consistency)
-                                        ])
+                                           np.convolve(current_state[1], behaviour_kernals[0], mode='same')*(1-args.consistency),
+                                           np.convolve(current_state[1], behaviour_kernals[1], mode='same')*args.consistency +
+                                           np.convolve(current_state[0], behaviour_kernals[1], mode='same')*(1-args.consistency)
+                                           ])
                 else:
                     # no observation is possible, just a general blur
                     next_state = np.array([np.convolve(current_state[0], behaviour_kernals[2], mode='same') +
-                                        np.convolve(current_state[1], behaviour_kernals[2], mode='same'),
-                                        np.convolve(current_state[0], behaviour_kernals[3], mode='same') +
-                                        np.convolve(current_state[1], behaviour_kernals[3], mode='same'),
-                                        ])
+                                           np.convolve(current_state[1], behaviour_kernals[2], mode='same'),
+                                           np.convolve(current_state[0], behaviour_kernals[3], mode='same') +
+                                           np.convolve(current_state[1], behaviour_kernals[3], mode='same'),
+                                           ])
 
                 # print(next_state)
                 # print(f'total probability: {np.sum(next_state)}  (should be 1!)')
@@ -328,10 +327,10 @@ def predict_modal_probability(args):
                 current_state = next_state
 
                 # clear the current footprint of the AV (assuming no collision)
-                current_state[:,i-1:i+2] = 0
+                current_state[:, i-1:i+2] = 0
 
                 # and normalize
-                total_probability = np.sum( current_state )
+                total_probability = np.sum(current_state)
                 if total_probability:
                     current_state /= total_probability
 
@@ -346,17 +345,17 @@ def predict_modal_probability(args):
 
             for i in range(1, len(future_states)):
                 try:
-                    X_i = np.sum( future_states[i][:, i-1:i+2])
+                    X_i = np.sum(future_states[i][:, i-1:i+2])
                     prob_no_collision *= (1 - X_i)
 
                     entry = {
-                        'observability':  observability, 
+                        'observability':  observability,
                         'trial':          trial,
-                        'X_i':            i, 
+                        'X_i':            i,
                         'occupancy':      X_i,
                         'collision_prob': 1 - prob_no_collision
                     }
-                    collected_data.append( entry )
+                    collected_data.append(entry)
                 except IndexError:
                     pass
 
@@ -364,15 +363,14 @@ def predict_modal_probability(args):
             collision_upper_bound = 0
             for i in range(1, len(future_states)):
                 try:
-                    X_i = np.sum( future_states[i][:, i-1:i+2])
+                    X_i = np.sum(future_states[i][:, i-1:i+2])
                     prob_no_collision *= (1 - X_i)
                     collision_upper_bound += X_i
                     print(f'$X_{i}$ &  {X_i: .4} & {(1 - prob_no_collision):.4} \\\\')
                 except IndexError:
                     pass
 
-
-    df = pd.DataFrame( collected_data )
+    df = pd.DataFrame(collected_data)
 
     fig, ax = plt.subplots()
     fig.subplots_adjust(left=.15, bottom=.16, right=.99, top=.97)
@@ -430,10 +428,9 @@ def run_modal_trial(args):
     # occupation
 
     agent_behaviours = [-1, 1]
-    agent_mode = AgentMode.FIXED
-    if args.mode == 'random':
-        agent_mode = AgentMode.RANDOM
+
     agent_start = 5
+    agent_behaviour_index = 0
 
     self_start = 0
 
@@ -441,8 +438,130 @@ def run_modal_trial(args):
     results = np.zeros((args.trials,))
     result_summary = np.zeros((args.trials//result_sample_rate,))
 
-    for i in range(args.trials):
-        pass
+    collected_data = []
+
+    for observability in np.arange(0, 1.01, 0.1):
+
+        for trial in range(args.trials):
+
+            # agent starts (or is assumed to start)
+            av_agent_pos_belief = [agent_start, agent_start]
+            av_agent_behaviour_belief = None
+            av_pos = self_start
+
+            # initialize the agent
+            agent_behaviour_index = gen.choice(range(len(agent_behaviours)))
+            agent_pos = agent_start
+
+            # find the observability for this trial
+            observable = generate_observability(generator=gen, steps=args.steps, p=observability)
+
+            stopped = None
+            collided = None
+            for step in range(args.steps):
+
+                # make an observation
+                if observable[step]:
+                    av_agent_behaviour_belief = agent_behaviours[agent_behaviour_index]
+                    av_agent_pos_belief = [agent_pos, agent_pos]
+                else:
+                    # TODO: This is a very crude approximation -- if we can't observe the agent, our
+                    #       belief of their behaviour should degrade, not just disappear
+                    av_agent_behaviour_belief = None
+
+                # decide to take a step or stop
+                if av_pos + 3 >= av_agent_pos_belief[0]:  # and av_pos <= av_agent_pos_belief[1]:
+                    # our next step is fraught with peril
+                    stopped = step
+                    break
+
+                # step both the agent and the av
+                av_pos += 1
+
+                # check whether the agent is going to switch direction
+                if gen.random() > args.consistency:
+                    agent_behaviour_index = 0 if agent_behaviour_index == 1 else 1
+
+                agent_pos += agent_behaviours[agent_behaviour_index]
+
+                # check for collision
+                if abs(agent_pos - av_pos) <= 1:
+                    collided = step
+                    break
+
+                # update the AV belief
+                if av_agent_behaviour_belief is not None:
+                    av_agent_pos_belief[0] += av_agent_behaviour_belief
+                    av_agent_pos_belief[1] += av_agent_behaviour_belief
+                else:
+                    av_agent_pos_belief[0] += agent_behaviours[0]
+                    av_agent_pos_belief[1] += agent_behaviours[1]
+
+            # post-process and write the results
+            unnecessary = False
+            if stopped is not None:
+                if agent_pos - av_pos > 3:
+                    unnecessary = True
+
+            if collided is None and stopped is None:
+                # made it to the end
+                stopped = args.steps
+
+            entry = {
+                'observability': observability,
+                'trial': trial,
+                'stopped': stopped,
+                'collided': collided,
+                'unnecessary_stop': unnecessary,
+            }
+
+            collected_data.append(entry)
+
+    df = pd.DataFrame(collected_data)
+
+    observability_set = list(set(df['observability']))
+    observability_set.sort()
+
+    print('%%%%%')
+    print('% Observability Data')
+    print('%')
+    print('\\begin{table*}')
+    print(f'\\caption{{Collisions and Early Stopping}}')
+    print('\\label{table:task-time-data}')
+    print('\\begin{center}')
+
+    column_str = '\\begin{tabular}{@{} l c c c @{}}'
+    heading_str = f'\%Observable &  Collisions &  Unnecessary Stops & Total Trials \\\\'
+
+    print(column_str)
+    print('\\toprule')
+    print(heading_str)
+
+    print('\\midrule')
+
+    unnecessary_stops = []
+    for obs in observability_set:
+        df_slice = df[df['observability'] == obs]
+        num_entries = len(df_slice)
+        num_collisions = len(df_slice[~df_slice['collided'].isna()])
+        num_unnecessary = len(df_slice[df_slice['unnecessary_stop'] == True])
+        unnecessary_stops.append(num_unnecessary)
+
+        print(f'{obs} & {num_collisions} & {num_unnecessary} & {num_entries} \\\\')
+
+    print('\\bottomrule')
+    print('\\end{tabular}')
+    print('\\end{center}')
+    print('\\end{table*}')
+    print('%')
+    print('%%%%%')
+
+    fig, ax = plt.subplots()
+    fig.subplots_adjust(left=.15, bottom=.16, right=.99, top=.97)
+
+    plt.plot(list(observability_set), unnecessary_stops)
+
+    plt.show()
 
 
 if __name__ == "__main__":
@@ -493,4 +612,5 @@ if __name__ == "__main__":
 
     # run_trials(args)
 
-    predict_modal_probability(args)
+    # predict_modal_probability(args)
+    run_modal_trial(args)
