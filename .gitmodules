@@ -1,0 +1,3 @@
+[submodule "src/thirdParty/polycheck"]
+	path = src/thirdParty/polycheck
+	url = https://github.com/idlebear/polycheck.git

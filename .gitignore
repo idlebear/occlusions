@@ -1,6 +1,7 @@
 # Created by https://www.toptal.com/developers/gitignore/api/c++,python,clion,matlab,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=c++,python,clion,matlab,visualstudiocode
 
+*.swp
 ### C++ ###
 # Prerequisites
 *.d

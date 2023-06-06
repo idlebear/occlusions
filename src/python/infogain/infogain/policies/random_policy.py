@@ -5,7 +5,7 @@ from copy import deepcopy
 from time import time
 import numpy as np
 
-from policies.policy import BasePolicy
+from  policies.policy import BasePolicy
 from simulation import get_location
 
 import config
