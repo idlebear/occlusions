@@ -6,7 +6,7 @@ from enum import Enum
 
 
 class Actor:
-    def __init__(self, id=0, pos=[0, 0], goal=None, speed=0, colour='grey', outline_colour='darkgrey', scale=1.0):
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=0, colour='grey', outline_colour='darkgrey', scale=1.0, ratio=1.0):
         self.id = id
         self.pos = pos
 
@@ -22,6 +22,7 @@ class Actor:
         self.colour = colour
         self.outline_colour = outline_colour
         self.scale = scale
+        self.ratio = ratio
 
         self.goal = goal
         if goal is not None:
@@ -89,7 +90,7 @@ class Actor:
         ]) * self.scale
 
     def get_size(self):
-        return self.bounding_box[2] - self.bounding_box[0], self.bounding_box[3] - self.bounding_box[1]
+        return np.array([self.bounding_box[2] - self.bounding_box[0], self.bounding_box[3] - self.bounding_box[1]])
 
     def contains(self, loc):
         return loc[0] >= self.bounding_box[0] and loc[1] >= self.bounding_box[1] and loc[0] <= self.bounding_box[2] and loc[1] <= self.bounding_box[3]
@@ -185,8 +186,9 @@ class Pedestrian(Actor):
 
 
 class Obstacle(Actor):
-    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='grey', outline_colour='darkgrey', scale=1):
-        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+    def __init__(self, id=0, pos=[0, 0], goal=None, speed=1, colour='grey', outline_colour='darkgrey', scale=1, ratio=1):
+        super().__init__(id, pos, goal, speed, colour, outline_colour, scale, ratio=ratio)
+
         self.max_v = 0
         self.min_v = 0
         self.max_brake = 0
@@ -194,11 +196,11 @@ class Obstacle(Actor):
 
     def _poly(self):
         return np.array([
-            [0.01, 0.01],
-            [-0.01, 0.01],
-            [-0.01, -0.01],
-            [0.01, -0.01],
-            [0.01, 0.01],
+            [0.01, 0.01*self.ratio],
+            [-0.01, 0.01*self.ratio],
+            [-0.01, -0.01*self.ratio],
+            [0.01, -0.01*self.ratio],
+            [0.01, 0.01*self.ratio],
         ]) * self.scale
 
     @staticmethod

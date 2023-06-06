@@ -64,7 +64,6 @@ class OcclusionEnv(gym.Env):
         '''
         Step the environment, taking a single action and returning the resulting reward and new state.
         '''
-        action = (action//NUM_ACCEL_ACTIONS-1, action % NUM_ACCEL_ACTIONS-1)
         return self.sim.tick(action)
 
     def reset(self):
