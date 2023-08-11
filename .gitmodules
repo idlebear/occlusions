@@ -1,3 +1,6 @@
 [submodule "src/thirdParty/polycheck"]
 	path = src/thirdParty/polycheck
 	url = https://github.com/idlebear/polycheck.git
+[submodule "src/thirdParty/dogm_py"]
+	path = src/thirdParty/dogm_py
+	url = https://github.com/idlebear/dogm_py.git
