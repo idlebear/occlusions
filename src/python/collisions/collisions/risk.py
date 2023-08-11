@@ -756,9 +756,24 @@ if __name__ == "__main__":
         help="Tendancy of an agent to keep doing what their already doing [0,1]",
     )
     argparser.add_argument(
+<<<<<<< HEAD
+        '-d', '--delta',
+        default=0.5,
+        type=float,
+        help='Occupancy threshold for determining stopping criteria')
+    argparser.add_argument(
+        '-e', '--error',
+        default=0,
+        type=float,
+        help='Probability of Sensor Error -- P( measure X | X is present )')
+    argparser.add_argument(
+        '-m', '--mode',
+        default='random',
+=======
         "-m",
         "--mode",
         default="random",
+>>>>>>> 466d2c8b90ceb3e4a8938d41a14cbdc8a3ef1954
         type=str,
         help="Type of Agent action: fixed | random",
     )
@@ -780,6 +795,8 @@ if __name__ == "__main__":
     argparser.add_argument(
         "--show-sim", action="store_true", help="Display the simulation window"
     )
+
+
 
     args = argparser.parse_args()
 
