@@ -4,6 +4,8 @@ from config import (
     ACTOR_PATH_WIDTH,
     MAX_CAR_SPEED,
     MAX_PEDESTRIAN_SPEED,
+    CAR_IMAGE_LENGTH,
+    CAR_IMAGE_WIDTH,
 )
 from math import sqrt, atan2, cos, sin
 import numpy as np
@@ -184,6 +186,12 @@ class Actor:
         }
         return state
 
+    def get_outline(self):
+        return self.get_poly()
+
+    def get_image(self):
+        return None
+
 
 class Car(Actor):
     def __init__(
@@ -195,6 +203,7 @@ class Car(Actor):
         colour="lightblue",
         outline_colour="dodgerblue",
         scale=1,
+        image_prefix="",
     ):
         super().__init__(
             id,
@@ -210,6 +219,12 @@ class Car(Actor):
         self.max_brake = 1.5
         self.max_accel = 1.5
 
+        # art objects
+        self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
+        self.actor_image = pygame.transform.scale(
+            self.actor_image, (CAR_IMAGE_LENGTH, CAR_IMAGE_WIDTH)
+        )
+
     def _poly(self):
         return (
             np.array(
@@ -223,6 +238,9 @@ class Car(Actor):
             )
             * self.scale
         )
+
+    def get_image(self):
+        return self.actor_image
 
     @staticmethod
     def check_width(scale):
@@ -347,3 +365,6 @@ class Blank(Actor):
     @staticmethod
     def check_width(scale):
         return 0.02 * scale
+
+    def get_outline(self):
+        return None

@@ -156,6 +156,17 @@ class Window:
                 pygame.draw.polygon(self.screen, fill_colour, points, 0)
             pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
 
+    # Quick image rotation
+    #   https://stackoverflow.com/questions/4183208/how-do-i-rotate-an-image-around-its-center-using-pygame
+    def draw_image(self, image, center, orientation):
+        center = (
+            self._xmargin + center[0] * self._env_size,
+            self._ymargin + center[1] * self._env_size,
+        )
+        rotated_image = pygame.transform.rotate(image, np.rad2deg(orientation))
+        new_rect = rotated_image.get_rect(center=image.get_rect(center=center).center)
+        self.screen.blit(rotated_image, new_rect)
+
     def draw_status(self, collisions, sim_time):
         #  draw the limits of the environment
         pygame.draw.rect(
@@ -373,11 +384,6 @@ class Simulation:
         end = get_location(origin=self.ego.pos, location=end)
         self.window.draw_line(start, end, colour, width)
 
-    def _get_actor_outline(self, actor):
-        actor_pos = get_location(origin=self.ego.pos, location=(0, 0))
-        poly = actor.get_poly()
-        return actor_pos + poly
-
     def _draw_road(self):
         x = int(self.ego.pos[0] - 0.5)
         y = 0
@@ -391,13 +397,25 @@ class Simulation:
             x += 0.2
 
     def _draw_actor(self, actor):
-        if type(actor) is not Blank:
-            pts = self._get_actor_outline(actor)
-            self.window.draw_polygon(
-                outline_colour=actor.outline_colour,
-                fill_colour=actor.colour,
-                points=pts,
+        actor_image = actor.get_image()
+        if actor_image is not None:
+            actor_pos = get_location(origin=self.ego.pos, location=actor.pos)
+            self.window.draw_image(
+                image=actor_image, center=actor_pos, orientation=actor.orientation
             )
+        else:
+            actor_poly = actor.get_outline()
+            if actor_poly is not None:
+                actor_pos = get_location(origin=self.ego.pos, location=(0, 0))
+                actor_poly += actor_pos
+
+                self.window.draw_polygon(
+                    outline_colour=actor.outline_colour,
+                    fill_colour=actor.colour,
+                    points=actor_poly,
+                )
+
+        # else: actor has no image or outline (blank)
 
     def _draw_ego(self):
         self._draw_actor(self.ego)
@@ -489,22 +507,22 @@ class Simulation:
                     speed=0.0,
                     scale=scale,
                 )
-            # elif rnd < 0.6:
+            elif rnd < 0.8:
+                # oncoming traffic
+                scale = 1
+                width = Car.check_width(scale) * 5.0
 
-            #     # oncoming traffic
-            #     scale = 1
-            #     width = Car.check_width(scale) * 5.0
+                v = OPPONENT_CAR_SPEED
+                y = LANE_WIDTH / 2
 
-            #     v = OPPONENT_CAR_SPEED
-            #     y = LANE_WIDTH / 2
-
-            #     actor = Car(
-            #         id=self.ticks,
-            #         pos=np.array([x+width/2, y]),
-            #         goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
-            #         speed=v,
-            #         scale=scale
-            #     )
+                actor = Car(
+                    id=self.ticks,
+                    pos=np.array([x + width / 2, y]),
+                    goal=np.array([self.ego.pos[0] - EGO_X_OFFSET, y]),
+                    speed=v,
+                    scale=scale,
+                    image_prefix="red_",
+                )
             # elif rnd < 0.9:
 
             #     # same side traffic

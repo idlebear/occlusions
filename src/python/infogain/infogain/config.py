@@ -10,7 +10,7 @@ NUM_EPOCHS = 10
 LAMBDA = 0.8
 SERVICE_TIME = 0
 TICK_TIME = 0.01
-BETA = 0.712    # constant for TSP length
+BETA = 0.712  # constant for TSP length
 
 EPSILON = 0.000001
 
@@ -23,11 +23,11 @@ ROAD_WIDTH = 2 * LANE_WIDTH
 DEFAULT_POLICY_NAME = "random"
 DEFAULT_GENERATOR_NAME = "uniform"
 GENERATOR_ARGS = {
-    'min': 0,
-    'max': 1,
-    'seed': None,
-    'dim': 2,
-    'mix': 0.5,
+    "min": 0,
+    "max": 1,
+    "seed": None,
+    "dim": 2,
+    "mix": 0.5,
 }
 
 SHOW_SIM = False
@@ -50,6 +50,10 @@ ACTOR_COMPLETE_PATH_COLOUR = (220, 220, 220, 255)
 ACTOR_COLOUR = (100, 100, 240, 255)
 ACTOR_PATH_COLOUR = (40, 40, 40, 255)
 ACTOR_PATH_WIDTH = 3
+
+CAR_IMAGE_LENGTH = 60
+CAR_IMAGE_WIDTH = 38
+
 STATUS_FONT_COLOUR = (0, 0, 0, 255)
 STATUS_FONT_SIZE = 32
 
