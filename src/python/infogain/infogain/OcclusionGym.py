@@ -13,22 +13,21 @@ NUM_TURN_ACTIONS = 3
 
 
 class OcclusionEnv(gym.Env):
-    '''
+    """
     Occlusion environment, reshaped for OpenAI Gym environment -- basically a thin wrapper of the Simulation code
-    '''
+    """
 
     def __init__(self, **kwargs) -> None:
-
         super().__init__()
 
         # set defaults, then check for updated values
         try:
-            num_actors = kwargs['num_actors']
+            num_actors = kwargs["num_actors"]
         except KeyError:
             num_actors = 5
 
         try:
-            seed = kwargs['seed']
+            seed = kwargs["seed"]
         except KeyError:
             seed = 42
 
@@ -36,19 +35,19 @@ class OcclusionEnv(gym.Env):
         size = (SCREEN_WIDTH, SCREEN_HEIGHT)
         self.screen = None
         self.surface = pygame.Surface(size, pygame.SRCALPHA)
-        pygame.display.set_caption('Simulation')
+        pygame.display.set_caption("Simulation")
         pygame.font.init()
 
         generator_args = GENERATOR_ARGS
-        generator_args['seed'] = seed
+        generator_args["seed"] = seed
 
         # Initialize the simulation
         self.sim = Simulation(
             screen=self.surface,
             num_actors=num_actors,
-            generator_name='uniform',
+            generator_name="uniform",
             generator_args=generator_args,
-            tick_time=TICK_TIME
+            tick_time=TICK_TIME,
         )
 
         # define the action space -- the car can go from full acceleration (100%/1) to full brake (-100%/-1) and can steer +/- 100%
@@ -61,18 +60,18 @@ class OcclusionEnv(gym.Env):
         self.observation_space = spaces.Box(low=0, high=255, shape=self.sim.observation_shape, dtype=np.uint8)
 
     def step(self, action):
-        '''
+        """
         Step the environment, taking a single action and returning the resulting reward and new state.
-        '''
+        """
         return self.sim.tick(action)
 
     def reset(self):
         return self.sim.reset()
 
-    def render(self, mode='human', close=False):
-        self.sim.render(debug=True)
+    def render(self, mode="human", close=False, u=None):
+        self.sim.render(debug=True, u=u)
 
-        if mode == 'human':
+        if mode == "human":
             if self.screen is None:
                 self.screen = pygame.display.set_mode((SCREEN_HEIGHT, SCREEN_WIDTH))
             self.screen.blit(self.surface, (0, 0))

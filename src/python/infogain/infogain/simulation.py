@@ -20,11 +20,12 @@ from dogm_py import DOGMParams
 from dogm_py import DOGM
 from dogm_py import VectorFloat
 from dogm_py import renderOccupancyGrid, renderDynamicOccupancyGrid
-from dogm_py import renderMeasurement
+
+# from dogm_py import renderMeasurement
 
 
 # local functions/imports
-from Actor import Actor, Pedestrian, Car, Obstacle, Blank
+from Actor import Actor, Pedestrian, Car, Obstacle, Blank, SkidSteer, VelocityCar
 from config import *
 
 DEBUG_INFORMATION_GAIN = True
@@ -99,9 +100,7 @@ class Window:
         self._env_size = screen_width - margin
         self._border_offset = 10
 
-        self.tmp_screen = pygame.Surface(
-            (self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA
-        )
+        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
 
     # def _get_location_on_screen(self, origin, location):
     #     return [
@@ -118,9 +117,14 @@ class Window:
         ex = self._xmargin + end[0] * self._env_size
         ey = self._ymargin + end[1] * self._env_size
 
-        pygame.draw.line(
-            self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width
-        )
+        pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
+
+    def draw_circle(self, centre, colour, radius=2):
+        cx = self._xmargin + centre[0] * self._env_size
+        cy = self._ymargin + centre[1] * self._env_size
+        radius = int(radius * self._env_size)
+
+        pygame.draw.circle(self.screen, color=colour, center=(cx, cy), radius=radius)
 
     def draw_rect(self, colour, location, height, width=None):
         if width is None:
@@ -138,18 +142,13 @@ class Window:
         )
 
     def draw_polygon(self, outline_colour, fill_colour, points, use_transparency=False):
-        points = [
-            [self._xmargin + x * self._env_size, self._ymargin + y * self._env_size]
-            for x, y in points
-        ]
+        points = [[self._xmargin + x * self._env_size, self._ymargin + y * self._env_size] for x, y in points]
 
         if use_transparency:
             self.tmp_screen.fill((0, 0, 0, 0))
             if fill_colour is not None:
                 pygame.draw.polygon(self.tmp_screen, fill_colour, points, 0)
-            pygame.draw.polygon(
-                self.tmp_screen, outline_colour, points, ACTOR_PATH_WIDTH
-            )
+            pygame.draw.polygon(self.tmp_screen, outline_colour, points, ACTOR_PATH_WIDTH)
             self.screen.blit(self.tmp_screen, (0, 0))
         else:
             if fill_colour is not None:
@@ -217,9 +216,7 @@ class Window:
         )
 
         text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(
-            text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN)
-        )
+        self.screen.blit(text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN))
 
 
 class Simulation:
@@ -258,9 +255,7 @@ class Simulation:
             self.window = None
 
         # load the draw method
-        self.load_generator(
-            generator_name=generator_name, generator_args=generator_args
-        )
+        self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
         self.grid = VelocityGrid(
             height=GRID_HEIGHT,
@@ -299,9 +294,7 @@ class Simulation:
             resolution=SCAN_RESOLUTION,
             stddev_range=SCAN_STDDEV_RANGE,
         )
-        self.lmg = LaserMeasurementGrid(
-            params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION
-        )
+        self.lmg = LaserMeasurementGrid(params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION)
 
         # TODO: ROI is fixed for the time being -- should move this to the ego/agent and make it relative to the vehicle speed.  Note that we should also
         #       position the ROI relative to the AV, but for now, we'll centre it on the road.
@@ -323,14 +316,14 @@ class Simulation:
         # reset the random number generator
         self.generator.reset()
 
-        self.ego = Car(
+        self.ego = VelocityCar(
             id=0,
-            pos=np.array([0.0, DESIRED_LANE_POSITION]),
+            x=np.array([0.0, DESIRED_LANE_POSITION, 0, 0, 0]),
             goal=None,
-            speed=0,
             colour="red",
             outline_colour="darkred",
             scale=1.1,
+            # params={"b": 0.05, "max_omega": 5},
         )
 
         self.actor_list = []
@@ -350,9 +343,7 @@ class Simulation:
         self.grid.reset()
 
         return (
-            self._get_next_observation(
-                self._calculate_future_visibility(), self.tick_time
-            ),
+            self._get_next_observation(self._calculate_future_visibility(), self.tick_time),
             self._get_info(),
         )
 
@@ -369,24 +360,28 @@ class Simulation:
     ############################################################################
 
     def _draw_line(self, start, end, colour, width=2):
-        start = get_location(origin=self.ego.pos, location=start)
-        end = get_location(origin=self.ego.pos, location=end)
+        start = get_location(origin=self.ego.x[0:2], location=start)
+        end = get_location(origin=self.ego.x[0:2], location=end)
         self.window.draw_line(start, end, colour, width)
 
+    def _draw_circle(self, centre, colour, radius=1):
+        centre = get_location(origin=self.ego.x[0:2], location=centre)
+        self.window.draw_circle(centre, colour, radius)
+
     def _get_actor_outline(self, actor):
-        actor_pos = get_location(origin=self.ego.pos, location=(0, 0))
+        actor_pos = get_location(origin=self.ego.x[0:2], location=(0, 0))
         poly = actor.get_poly()
         return actor_pos + poly
 
     def _draw_road(self):
-        x = int(self.ego.pos[0] - 0.5)
+        x = int(self.ego.x[0] - 0.5)
         y = 0
 
-        loc = get_location(origin=self.ego.pos, location=(x, y))
+        loc = get_location(origin=self.ego.x[0:2], location=(x, y))
         self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, 10)
 
         for _ in range(15):
-            loc = get_location(origin=self.ego.pos, location=(x, y - 0.0001))
+            loc = get_location(origin=self.ego.x[0:2], location=(x, y - 0.0001))
             self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.005, 0.1)
             x += 0.2
 
@@ -406,7 +401,7 @@ class Simulation:
         # if self.visibility is not None:
         #     pts = []
         #     for i in range(self.visibility.n()):
-        #         pts.append(get_location(origin=self.ego.pos, location=[self.visibility[i].x(), self.visibility[i].y()]))
+        #         pts.append(get_location(origin=self.ego.x, location=[self.visibility[i].x(), self.visibility[i].y()]))
 
         #     TGREEN = (150, 220, 150, 100)
         #     TBLACK = (0, 0, 0, 200)
@@ -423,9 +418,9 @@ class Simulation:
         pass
         # for i in range(0, SCAN_RAYS, 10):
         #     angle = SCAN_START_ANGLE + i * SCAN_ANGLE_INCREMENT
-        #     ex = self.ego.pos[0] + np.cos(angle) * self.scan_data[i]
-        #     ey = self.ego.pos[1] + np.sin(angle) * self.scan_data[i]
-        #     self._draw_line(self.ego.pos, (ex, ey), (200, 200, 0, 255), 2)
+        #     ex = self.ego.x[0] + np.cos(angle) * self.scan_data[i]
+        #     ey = self.ego.x[1] + np.sin(angle) * self.scan_data[i]
+        #     self._draw_line(self.ego.x, (ex, ey), (200, 200, 0, 255), 2)
 
     ##################################################################################
     # Simulator step functions
@@ -436,7 +431,7 @@ class Simulation:
         shapes = []
 
         # environment poly is counter clockwise and large enough to be off screen
-        ox = self.ego.pos[0] - 2
+        ox = self.ego.x[0] - 2
         oy = -2
         shapes.append(
             vis.Polygon(
@@ -453,10 +448,7 @@ class Simulation:
             if type(actor) is Blank:
                 continue
 
-            if (
-                actor.pos[0] > self.ego.pos[0] + EGO_X_OFFSET
-                and actor.pos[0] < self.ego.pos[0] + EGO_X_OFFSET + 1.5
-            ):
+            if actor.x[0] > self.ego.x[0] + EGO_X_OFFSET and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5:
                 pts = actor.get_poly()
                 poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
                 shapes.append(vis.Polygon(poly_pts))
@@ -464,33 +456,31 @@ class Simulation:
         vis_poly = None
         env = vis.Environment(shapes)
         if env.is_valid(EPSILON):
-            observer = vis.Point(self.ego.pos[0], self.ego.pos[1])
+            observer = vis.Point(self.ego.x[0], self.ego.x[1])
             vis_poly = vis.Visibility_Polygon(observer, env, EPSILON)
 
         return vis_poly
 
     def _generate_new_agents(self):
-        x = max(self.next_agent_x, self.ego.pos[0] + (1.0))
+        x = max(self.next_agent_x, self.ego.x[0] + (1.0))
 
         while len(self.actor_list) < self.num_actors:
             rnd = self.generator.uniform()
-            if rnd < 0.4:
-                scale = 1 + 9 * self.generator.uniform()
-                width = Obstacle.check_width(scale) + 0.005
+            # if rnd < 0.4:
+            #     scale = 1 + 9 * self.generator.uniform()
+            #     width = Obstacle.check_width(scale) + 0.005
 
-                if rnd < 0.2:
-                    y = -LANE_WIDTH * 1.5 - self.generator.uniform() * 0.1 - width / 2
-                else:
-                    y = LANE_WIDTH * 1.5 + self.generator.uniform() * 0.1 + width / 2
+            #     if rnd < 0.2:
+            #         y = -LANE_WIDTH * 1.5 - self.generator.uniform() * 0.1 - width / 2
+            #     else:
+            #         y = LANE_WIDTH * 1.5 + self.generator.uniform() * 0.1 + width / 2
 
-                actor = Obstacle(
-                    id=self.ticks,
-                    pos=np.array([x + width / 2, y]),
-                    speed=0.0,
-                    scale=scale,
-                )
+            #     actor = Obstacle(
+            #         id=self.ticks,
+            #         x=[x + width / 2, y, 0, 0, 0],
+            #         scale=scale,
+            #     )
             # elif rnd < 0.6:
-
             #     # oncoming traffic
             #     scale = 1
             #     width = Car.check_width(scale) * 5.0
@@ -500,62 +490,62 @@ class Simulation:
 
             #     actor = Car(
             #         id=self.ticks,
-            #         pos=np.array([x+width/2, y]),
-            #         goal=np.array([self.ego.pos[0]-EGO_X_OFFSET, y]),
-            #         speed=v,
-            #         scale=scale
+            #         x=[x + width / 2, y, -v, 0, -np.pi],
+            #         goal=np.array([self.ego.x[0] - EGO_X_OFFSET, y]),
+            #         scale=scale,
             #     )
             # elif rnd < 0.9:
+            if rnd < 0.9:
+                # same side traffic
+                scale = 1
+                width = Car.check_width(scale) * 5.0
 
-            #     # same side traffic
-            #     scale = 1
-            #     width = Car.check_width(scale) * 5.0
+                v = OPPONENT_CAR_SPEED * 0.5
+                y = -LANE_WIDTH / 2
 
-            #     v = OPPONENT_CAR_SPEED*0.5
-            #     y = -LANE_WIDTH / 2
+                actor = Car(
+                    id=self.ticks,
+                    x=np.array([x + width / 2, y, v, 0, 0]),
+                    goal=np.array([self.ego.x[0] + 100000, y]),
+                    scale=scale,
+                )
+            elif rnd < 0.55:
+                scale = 1
+                width = Car.check_width(scale)
 
-            #     actor = Car(
-            #         id=self.ticks,
-            #         pos=np.array([x+width/2, y]),
-            #         goal=np.array([self.ego.pos[0]+100000, y]),
-            #         speed=v,
-            #         scale=scale
-            #     )
-            # elif rnd < 0.55:
+                v = OPPONENT_CAR_SPEED
 
-            #     scale = 1
-            #     width = Car.check_width(scale)
+                y = 2
+                theta = np.pi / 2
+                if rnd < 0.625:
+                    v = -v
+                    y = -y
+                    theta = -theta
 
-            #     v = OPPONENT_CAR_SPEED
+                actor = Car(
+                    id=self.ticks,
+                    x=np.array([x + width / 2, y, 0, -v, theta]),
+                    goal=np.array([x + width / 2, -y]),
+                    scale=scale,
+                )
+            elif rnd < 0.95:
+                scale = 1
+                width = Pedestrian.check_width(scale)
 
-            #     y = 2
-            #     if rnd < 0.625:
-            #         y = -y
+                v = OPPONENT_PEDESTRIAN_SPEED
+                y = 0.4
+                theta = np.pi / 2
+                if rnd < 0.7875:
+                    v = -v
+                    y = -y
+                    theta = -theta
 
-            #     actor = Car(
-            #         id=self.ticks,
-            #         pos=np.array([x+width/2, y]),
-            #         goal=np.array([x+width/2, -y]),
-            #         speed=v,
-            #         scale=scale
-            #     )
-            # elif rnd < 0.95:
-
-            #     scale = 1
-            #     width = Pedestrian.check_width(scale)
-
-            #     v = OPPONENT_PEDESTRIAN_SPEED
-            #     y = 0.4
-            #     if rnd < 0.7875:
-            #         y = -y
-
-            #     actor = Pedestrian(
-            #         id=self.ticks,
-            #         pos=np.array([x+width/2, y]),
-            #         goal=np.array([x+width/2, -y]),
-            #         speed=v,
-            #         scale=scale
-            #     )
+                actor = Pedestrian(
+                    id=self.ticks,
+                    x=np.array([x + width / 2, y, 0, -v, theta]),
+                    goal=np.array([x + width / 2, -y]),
+                    scale=scale,
+                )
             else:
                 # do nothing (space)
                 scale = 1 + 9 * self.generator.uniform()
@@ -564,8 +554,7 @@ class Simulation:
                 y = 0.1 + self.generator.uniform() * 0.3
                 actor = Blank(
                     id=self.ticks,
-                    pos=np.array([x + width / 2, y]),
-                    speed=0.0,
+                    x=np.array([x + width / 2, y, 0, 0, 0]),
                     scale=scale,
                 )
 
@@ -574,13 +563,9 @@ class Simulation:
             self.next_agent_x = x
 
     def _get_next_observation(self, scan_data, dt):
-        grid_data = self.lmg.generateGrid(
-            VectorFloat(scan_data), self.ego.orientation * 180.0 / np.pi
-        )
-        self.dogm.updateGrid(grid_data, self.ego.pos[0], self.ego.pos[1], dt)
-        return renderOccupancyGrid(
-            self.dogm
-        )  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
+        grid_data = self.lmg.generateGrid(VectorFloat(scan_data), self.ego.x[4] * 180.0 / np.pi)
+        self.dogm.updateGrid(grid_data, self.ego.x[0], self.ego.x[1], dt)
+        return renderOccupancyGrid(self.dogm)  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
 
         # # rescale the velocity grid to be on the range [0,1]
         # velocity_map = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
@@ -626,9 +611,9 @@ class Simulation:
 
         faux_scan(
             polygon_list,
-            start_x=self.ego.pos[0],
-            start_y=self.ego.pos[1],
-            start_angle=SCAN_START_ANGLE + self.ego.orientation,
+            start_x=self.ego.x[0],
+            start_y=self.ego.x[1],
+            start_angle=SCAN_START_ANGLE + self.ego.x[4],
             angle_increment=SCAN_ANGLE_INCREMENT,
             num_rays=SCAN_RAYS,
             max_range=SCAN_RANGE,
@@ -643,19 +628,19 @@ class Simulation:
     def calculate_information_gain(self, occupancy_grid):
         obs_pts = [
             [
-                [self.ego.pos[0] + 0.04, self.ego.pos[1] - 0.04],
-                [self.ego.pos[0] + 0.08, self.ego.pos[1] - 0.04],
-                [self.ego.pos[0] + 0.12, self.ego.pos[1] - 0.04],
+                [self.ego.x[0] + 0.04, self.ego.x[1] - 0.04],
+                [self.ego.x[0] + 0.08, self.ego.x[1] - 0.04],
+                [self.ego.x[0] + 0.12, self.ego.x[1] - 0.04],
             ],
             [
-                [self.ego.pos[0] + 0.04, self.ego.pos[1]],
-                [self.ego.pos[0] + 0.08, self.ego.pos[1]],
-                [self.ego.pos[0] + 0.12, self.ego.pos[1]],
+                [self.ego.x[0] + 0.04, self.ego.x[1]],
+                [self.ego.x[0] + 0.08, self.ego.x[1]],
+                [self.ego.x[0] + 0.12, self.ego.x[1]],
             ],
             [
-                [self.ego.pos[0] + 0.04, self.ego.pos[1] + 0.04],
-                [self.ego.pos[0] + 0.08, self.ego.pos[1] + 0.04],
-                [self.ego.pos[0] + 0.12, self.ego.pos[1] + 0.04],
+                [self.ego.x[0] + 0.04, self.ego.x[1] + 0.04],
+                [self.ego.x[0] + 0.08, self.ego.x[1] + 0.04],
+                [self.ego.x[0] + 0.12, self.ego.x[1] + 0.04],
             ],
         ]
 
@@ -664,12 +649,8 @@ class Simulation:
             for row in obs_pts:
                 grid_pts = []
                 for pt in row:
-                    x = int(
-                        (pt[0] - self.ego.pos[0]) / GRID_RESOLUTION + GRID_SIZE // 2
-                    )
-                    y = int(
-                        (pt[1] - self.ego.pos[1]) / GRID_RESOLUTION + GRID_SIZE // 2
-                    )
+                    x = int((pt[0] - self.ego.x[0]) / GRID_RESOLUTION + GRID_SIZE // 2)
+                    y = int((pt[1] - self.ego.x[1]) / GRID_RESOLUTION + GRID_SIZE // 2)
                     grid_pts.append([x, y])
                 self.obs_pts.append(grid_pts)
 
@@ -677,17 +658,15 @@ class Simulation:
         for row in obs_pts:
             total_ig = 0
             for pt in row:
-                total_ig += self._calculate_information_gain_from(
-                    pt, occupancy_grid=occupancy_grid
-                )
+                total_ig += self._calculate_information_gain_from(pt, occupancy_grid=occupancy_grid)
             ig_results.append(total_ig)
 
         return ig_results
 
     def _calculate_information_gain_from(self, location, occupancy_grid):
         # only one position to sample from, map it to the grid, relative to the AV
-        obs_x = ((location[0] - self.ego.pos[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
-        obs_y = ((location[1] - self.ego.pos[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
+        obs_x = ((location[0] - self.ego.x[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
+        obs_y = ((location[1] - self.ego.x[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
         obs_pts = np.array([obs_x, obs_y]).reshape(1, 2)
 
         values = occupancy_grid[self.roi[:, 1], self.roi[:, 0]]
@@ -705,6 +684,16 @@ class Simulation:
         # BUGBUG: Notice that we are only calculating for one point at a time.
         return np.sum(log_result)
 
+    def draw_control_output(self, u):
+        start = self.ego.x[0:2]
+        states = self.ego.project(u, self.tick_time)
+
+        self._draw_circle(start, radius=0.01, colour="blue")
+        for state in states:
+            self._draw_line(start, state[0:2], colour="blue", width=1)
+            start = state[0:2]
+            self._draw_circle(start, radius=0.01, colour="blue")
+
     def draw_information_gain(self, ig_results):
         if DEBUG_INFORMATION_GAIN:
             min_ig = np.min(ig_results)
@@ -714,19 +703,11 @@ class Simulation:
             if self.ig_images is None:
                 num_maps = 2
                 num_rows = 1
-                self.ig_fig, self.ig_ax = plt.subplots(
-                    num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15)
-                )
+                self.ig_fig, self.ig_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15))
 
                 self.ig_images = []
-                self.ig_images.append(
-                    self.ig_ax[0].imshow(
-                        np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)
-                    )
-                )
-                self.ig_images.append(
-                    self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8))
-                )
+                self.ig_images.append(self.ig_ax[0].imshow(np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)))
+                self.ig_images.append(self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8)))
 
             grid = (renderOccupancyGrid(self.dogm) * 255.0).astype(np.uint8)
             for pt in self.roi:
@@ -807,20 +788,14 @@ class Simulation:
         self.ego.tick(self.tick_time)
         for i, actor in enumerate(self.actor_list[::-1]):
             actor.tick(self.tick_time)
-            if (
-                not actor.collided
-                and actor.distance_to(self.ego.pos) <= COLLISION_DISTANCE
-            ):
+            if not actor.collided and actor.distance_to(self.ego.x[0:2]) <= COLLISION_DISTANCE:
                 collisions += 1
                 actor.set_collided()
 
-            if actor.at_goal() or (
-                actor.pos[0] < self.ego.pos[0]
-                and actor.distance_to(self.ego.pos) > GRID_WIDTH / 2
-            ):
+            if actor.at_goal() or (actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > GRID_WIDTH / 2):
                 finished_actors.append(actor)
 
-        if abs(self.ego.pos[1]) > LANE_WIDTH:
+        if abs(self.ego.x[1]) > LANE_WIDTH:
             collisions += 1  # off the road
 
         # clean up
@@ -834,15 +809,13 @@ class Simulation:
         self.information_gain = self.calculate_information_gain(observation)
 
         # calculate the reward
-        # y_reward = ((self.ego.pos[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
-        y_reward = -exp(-((self.ego.pos[1] - DESIRED_LANE_POSITION) ** 2))
+        # y_reward = ((self.ego.x[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
+        y_reward = -exp(-((self.ego.x[1] - DESIRED_LANE_POSITION) ** 2))
         # v_reward = (self.actor_target_speed**2 - (self.actor_target_speed - self.ego.speed)**2)*REWARD_DEVIATION_V
         v_reward = exp(-((self.actor_target_speed - self.ego.speed) ** 2))
         p_reward = passed * REWARD_PASSING
         # c_reward = collisions * REWARD_COLLISION
-        g_distance = np.linalg.norm(
-            [self.ego.pos[0] - GOAL[0], self.ego.pos[1] - GOAL[1]]
-        )
+        g_distance = np.linalg.norm([self.ego.x[0] - GOAL[0], self.ego.x[1] - GOAL[1]])
         if g_distance < GOAL[0]:
             d_reward = 1 - (g_distance / GOAL[0]) ** (0.4)
             if g_distance < 0.05:
@@ -865,7 +838,7 @@ class Simulation:
 
         return observation, reward, done, self._get_info()
 
-    def render(self, debug=False):
+    def render(self, debug=False, u=None):
         if self.window is not None:
             self.window.clear()
 
@@ -902,9 +875,7 @@ class Simulation:
 
             if self.maps is None:
                 self.map_fig, self.map_ax = plt.subplots(num=FIG_MAPS)
-                self.maps = self.map_ax.imshow(
-                    np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8)
-                )
+                self.maps = self.map_ax.imshow(np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
                 plt.show(block=False)
 
             map_img = Image.fromarray(
@@ -919,6 +890,9 @@ class Simulation:
                 ).astype(np.uint8)
             ).convert("RGB")
             self.maps.set_data(map_img)
+
+            if u is not None:
+                self.draw_control_output(u)
 
             self.map_fig.canvas.draw()
             self.map_fig.canvas.flush_events()

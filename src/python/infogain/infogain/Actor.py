@@ -15,16 +15,28 @@ class Actor:
     def __init__(
         self,
         id=0,
-        pos=[0, 0],
+        x=[0, 0, 0, 0, 0],
         goal=None,
-        speed=0,
         colour="grey",
         outline_colour="darkgrey",
         scale=1.0,
         ratio=1.0,
+        params=None,
     ):
         self.id = id
-        self.pos = pos
+
+        # Acceleration model -- state is [x,y,dx,dy,theta], with control [accel,omega] and
+        # then state update is
+        # x' = x + dx dt
+        # y' = y + dy dt
+        # dx' = dx + a cos(theta) dt
+        # dy' = dy + a sin(theta) dt
+        # theta' = theta + omega dt
+
+        # unless specified, actor is initially at rest and no control is applied
+        self.x = np.array(x)
+        self.u = np.array([0.0, 0.0])
+        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
 
         self.reached_goal = False
         self.collided = False
@@ -41,86 +53,84 @@ class Actor:
         self.ratio = ratio
 
         self.goal = goal
-        if goal is not None:
-            self.orientation = atan2((goal[1] - pos[1]), (goal[0] - pos[0]))
-        else:
-            # straight along the x-axis
-            self.orientation = 0
 
-        # unless specified, actor is initially at rest
-        self.set_control([speed, 0])
+        self.poly_def = np.array(
+            [
+                [0.01, 0.01, 1],
+                [-0.01, 0.01, 1],
+                [-0.01, -0.01, 1],
+                [0.01, -0.01, 1],
+                [0.01, 0.01, 1],
+            ]
+        ).T
 
         self.__update_bounding_box()
 
     def distance_to(self, pos):
-        return np.linalg.norm(self.pos - pos)
+        return np.linalg.norm(self.x[0:2] - pos[0:2])
 
     def __move(self, dt):
         """move towards the goal"""
-        self.orientation = self.orientation + self.omega * dt
-        if self.orientation > np.pi:
-            self.orientation -= 2 * np.pi
-        elif self.orientation < -np.pi:
-            self.orientation += 2 * np.pi
 
-        self.pos = self.pos + self.v * dt
-        self.__update_bounding_box()
+        A = np.array(
+            [
+                [1, 0, dt, 0, 0],
+                [0, 1, 0, dt, 0],
+                [0, 0, 1, 0, 0],
+                [0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 1],
+            ]
+        )
+        B0 = np.array([0, 0, np.cos(self.x[4]), np.sin(self.x[4]), 0]) * dt
+        B1 = np.array([0, 0, 0, 0, 1]) * dt
 
-        if self.goal is not None:
-            if not self.reached_goal:
-                dist = np.linalg.norm(self.goal - self.pos)
-                if abs(dist - self.speed) < 0:
-                    self.reached_goal = True
+        self.x = A @ self.x + B0 * self.u[0] + B1 * self.u[1]
+        # BUGBUG -- may need to add bounds to constrain the measured theta -- but-- that may
+        #           lead to jumps in position...
 
     def set_goal(self, goal):
         self.goal = goal
-        if goal is not None:
-            dir = self.goal - self.pos
-            self.orientation = atan2(dir[1], dir[0])
-        else:
-            self.orientation = 0
-
         self.reached_goal = False
+        # if goal is not None:
+        #     dir = self.goal - self.pos
+        #     self.orientation = atan2(dir[1], dir[0])
+        # else:
+        #     self.orientation = 0
 
     def __update_bounding_box(self):
+        self.rot_bw = np.array(
+            [
+                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
+                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [0, 0, 1],
+            ]
+        )
+
         poly = self.get_poly()
         min_d = np.min(poly, axis=0)
         max_d = np.max(poly, axis=0)
         self.bounding_box = (*min_d, *max_d)
 
     def set_control(self, u):
-        self.speed = np.clip(u[0], self.min_v, self.max_v)
-        self.v = np.round(
-            np.array(
-                [
-                    self.speed * np.cos(self.orientation),
-                    self.speed * np.sin(self.orientation),
-                ]
-            ),
-            5,
-        )
-        self.omega = np.clip(u[1], -self.max_omega, self.max_omega)
+        self.u[0] = np.clip(u[0], -self.max_brake, self.max_accel)
+        self.u[1] = np.clip(u[1], -self.max_omega, self.max_omega)
 
     def tick(self, dt=TICK_TIME):
         """a time step"""
         self.__move(dt)
 
+        self.__update_bounding_box()
+
+        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+
+        if self.goal is not None:
+            if not self.reached_goal:
+                dist = np.linalg.norm(self.goal - self.x[0:2])
+                if abs(dist - self.speed) < 0:
+                    self.reached_goal = True
+
     def at_goal(self):
         return self.reached_goal
-
-    def _poly(self):
-        return (
-            np.array(
-                [
-                    [0.01, 0.01],
-                    [-0.01, 0.01],
-                    [-0.01, -0.01],
-                    [0.01, -0.01],
-                    [0.01, 0.01],
-                ]
-            )
-            * self.scale
-        )
 
     def get_size(self):
         return np.array(
@@ -141,6 +151,8 @@ class Actor:
     def set_collided(self, colour="black"):
         self.colour = colour
         self.speed = 0
+        self.x[2] = 0
+        self.x[3] = 0
         self.collided = True
 
     def project(self, u, dt):
@@ -148,39 +160,27 @@ class Actor:
         Project a future position based on a supplied control and state
         """
 
-        virt_self = type(self)(
-            id=self.id, pos=self.pos, goal=self.goal, speed=self.speed
-        )
+        virt_self = type(self)(id=self.id, x=self.x, goal=self.goal)
         states = []
 
-        for a, delta in u:
-            virt_self.accelerate(a, dt)
-            virt_self.turn(delta, dt)
+        for control in u:
+            virt_self.set_control(control)
             virt_self.tick(dt)
-
-            states.append((virt_self.pos, virt_self.orientation))
+            states.append(list(virt_self.x))
 
         return states
 
     def get_poly(self):
-        self.rot = np.array(
-            [
-                [np.cos(self.orientation), -np.sin(self.orientation)],
-                [np.sin(self.orientation), np.cos(self.orientation)],
-            ]
-        )
-        poly = (self.rot @ self._poly().T).T + self.pos
-        return poly
+        return (self.rot_bw @ self.poly_def)[0:2, ...].T * self.scale + self.x[0:2]
 
     def get_state(self):
         state = {
-            "pos": self.pos,
-            "v": self.v,
-            "orientation": self.orientation,
+            "x": self.x,
             "speed": self.speed,
-            "omega": self.omega,
+            "u": self.u,
             "collided": self.collided,
             "poly": self.get_poly(),
+            "bbox": self.bounding_box,
         }
         return state
 
@@ -189,18 +189,16 @@ class Car(Actor):
     def __init__(
         self,
         id=0,
-        pos=[0, 0],
+        x=[0, 0, 0, 0, 0],
         goal=None,
-        speed=1,
         colour="lightblue",
         outline_colour="dodgerblue",
         scale=1,
     ):
         super().__init__(
             id,
-            pos=pos,
+            x=x,
             goal=goal,
-            speed=speed,
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
@@ -210,19 +208,184 @@ class Car(Actor):
         self.max_brake = 1.5
         self.max_accel = 1.5
 
-    def _poly(self):
-        return (
-            np.array(
-                [
-                    [0.025, 0],
-                    [-0.025, 0.02],
-                    [-0.01, 0],
-                    [-0.025, -0.02],
-                    [0.025, 0],
-                ]
-            )
-            * self.scale
+        self.poly_def = np.array(
+            [
+                [0.025, 0, 1],
+                [-0.025, 0.02, 1],
+                [-0.01, 0, 1],
+                [-0.025, -0.02, 1],
+                [0.025, 0, 1],
+            ]
+        ).T
+
+    @staticmethod
+    def check_width(scale):
+        return 0.05 * scale
+
+
+# BUGBUG -- hacky car copy controlled by velocity only
+class VelocityCar(Actor):
+    def __init__(
+        self,
+        id=0,
+        x=[0, 0, 0, 0, 0],
+        goal=None,
+        colour="orange",
+        outline_colour="darkorange",
+        scale=1,
+        params=None,
+    ):
+        super().__init__(
+            id,
+            x=x,
+            goal=goal,
+            colour=colour,
+            outline_colour=outline_colour,
+            scale=scale,
         )
+
+        if params is None:
+            self.b = 1
+            self.max_omega = 5
+        else:
+            self.b = params["b"]
+            self.max_omega = params["max_omega"]
+
+        self.poly_def = np.array(
+            [
+                [0.025, 0.02, 1],
+                [-0.025, 0.02, 1],
+                [-0.025, -0.02, 1],
+                [0.025, -0.02, 1],
+                [0.03, 0, 1],
+                [0.025, 0.02, 1],
+            ]
+        ).T
+
+    def tick(self, dt=TICK_TIME):
+        """a time step"""
+        self.__move(dt)
+
+        self.__update_bounding_box()
+        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+
+        if self.goal is not None:
+            if not self.reached_goal:
+                dist = np.linalg.norm(self.goal - self.x[0:2])
+                if abs(dist - self.speed) < 0:
+                    self.reached_goal = True
+
+    def __move(self, dt):
+        self.speed = self.u[0]
+
+        self.x[2] = self.speed * np.cos(self.x[4])
+        self.x[3] = self.speed * np.sin(self.x[4])
+        self.x[0] = self.x[0] + self.x[2] * dt
+        self.x[1] = self.x[1] + self.x[3] * dt
+        self.x[4] = self.x[4] + self.u[1] * dt
+
+    def set_control(self, u):
+        self.u[0] = np.clip(u[0], self.min_v, self.max_v)
+        self.u[1] = np.clip(u[1], -self.max_omega, self.max_omega)
+
+    def __update_bounding_box(self):
+        self.rot_bw = np.array(
+            [
+                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
+                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [0, 0, 1],
+            ]
+        )
+
+        poly = self.get_poly()
+        min_d = np.min(poly, axis=0)
+        max_d = np.max(poly, axis=0)
+        self.bounding_box = (*min_d, *max_d)
+
+    @staticmethod
+    def check_width(scale):
+        return 0.05 * scale
+
+
+# Basic skid-steer model, as an ideallized differential drive
+class SkidSteer(Actor):
+    def __init__(
+        self,
+        id=0,
+        x=[0, 0, 0, 0, 0],
+        goal=None,
+        colour="orange",
+        outline_colour="darkorange",
+        scale=1,
+        params=None,
+    ):
+        super().__init__(
+            id,
+            x=x,
+            goal=goal,
+            colour=colour,
+            outline_colour=outline_colour,
+            scale=scale,
+        )
+
+        if params is None:
+            self.b = 1
+            self.max_omega = 5
+        else:
+            self.b = params["b"]
+            self.max_omega = params["max_omega"]
+
+        self.poly_def = np.array(
+            [
+                [0.025, 0.02, 1],
+                [-0.025, 0.02, 1],
+                [-0.025, -0.02, 1],
+                [0.025, -0.02, 1],
+                [0.03, 0, 1],
+                [0.025, 0.02, 1],
+            ]
+        ).T
+
+    def tick(self, dt=TICK_TIME):
+        """a time step"""
+        self.__move(dt)
+
+        self.__update_bounding_box()
+        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+
+        if self.goal is not None:
+            if not self.reached_goal:
+                dist = np.linalg.norm(self.goal - self.x[0:2])
+                if abs(dist - self.speed) < 0:
+                    self.reached_goal = True
+
+    def __move(self, dt):
+        self.speed = (self.u[0] + self.u[1]) / 2
+        w = (self.u[0] - self.u[1]) / self.b
+
+        self.x[2] = self.speed * np.cos(self.x[4])
+        self.x[3] = self.speed * np.sin(self.x[4])
+        self.x[0] = self.x[0] + self.x[2] * dt
+        self.x[1] = self.x[1] + self.x[3] * dt
+        self.x[4] = self.x[4] + w * dt
+
+    def set_control(self, u):
+        self.u[0] = np.clip(u[0], -self.max_omega, self.max_omega)
+        self.u[1] = np.clip(u[1], -self.max_omega, self.max_omega)
+
+    def __update_bounding_box(self):
+        self.rot_bw = np.array(
+            [
+                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
+                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [0, 0, 1],
+            ]
+        )
+
+        poly = self.get_poly()
+        min_d = np.min(poly, axis=0)
+        max_d = np.max(poly, axis=0)
+        self.bounding_box = (*min_d, *max_d)
 
     @staticmethod
     def check_width(scale):
@@ -233,18 +396,16 @@ class Pedestrian(Actor):
     def __init__(
         self,
         id=0,
-        pos=[0, 0],
+        x=[0, 0, 0, 0, 0],
         goal=None,
-        speed=1,
         colour="blue",
         outline_colour="darkblue",
         scale=1,
     ):
         super().__init__(
             id,
-            pos=pos,
+            x=x,
             goal=goal,
-            speed=speed,
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
@@ -254,19 +415,15 @@ class Pedestrian(Actor):
         self.max_brake = 0.75
         self.max_accel = 0.75
 
-    def _poly(self):
-        return (
-            np.array(
-                [
-                    [0.01, 0],
-                    [0, 0.015],
-                    [-0.01, 0],
-                    [0, -0.015],
-                    [0.01, 0],
-                ]
-            )
-            * self.scale
-        )
+        self.poly_def = np.array(
+            [
+                [0.01, 0, 1],
+                [0, 0.015, 1],
+                [-0.01, 0, 1],
+                [0, -0.015, 1],
+                [0.01, 0, 1],
+            ]
+        ).T
 
     @staticmethod
     def check_width(scale):
@@ -277,16 +434,20 @@ class Obstacle(Actor):
     def __init__(
         self,
         id=0,
-        pos=[0, 0],
+        x=[0, 0, 0, 0, 0],
         goal=None,
-        speed=1,
         colour="grey",
         outline_colour="darkgrey",
         scale=1,
         ratio=1,
     ):
         super().__init__(
-            id, pos, goal, speed, colour, outline_colour, scale, ratio=ratio
+            id,
+            x=x,
+            goal=goal,
+            colour=colour,
+            outline_colour=outline_colour,
+            scale=scale,
         )
 
         self.max_v = 0
@@ -294,19 +455,15 @@ class Obstacle(Actor):
         self.max_brake = 0
         self.max_accel = 0
 
-    def _poly(self):
-        return (
-            np.array(
-                [
-                    [0.01, 0.01 * self.ratio],
-                    [-0.01, 0.01 * self.ratio],
-                    [-0.01, -0.01 * self.ratio],
-                    [0.01, -0.01 * self.ratio],
-                    [0.01, 0.01 * self.ratio],
-                ]
-            )
-            * self.scale
-        )
+        self.poly_def = np.array(
+            [
+                [0.01, 0.01 * self.ratio, 1],
+                [-0.01, 0.01 * self.ratio, 1],
+                [-0.01, -0.01 * self.ratio, 1],
+                [0.01, -0.01 * self.ratio, 1],
+                [0.01, 0.01 * self.ratio, 1],
+            ]
+        ).T
 
     @staticmethod
     def check_width(scale):
@@ -317,32 +474,34 @@ class Blank(Actor):
     def __init__(
         self,
         id=0,
-        pos=[0, 0],
+        x=[0, 0, 0, 0, 0],
         goal=None,
-        speed=1,
         colour="white",
         outline_colour="darkgrey",
         scale=1,
     ):
-        super().__init__(id, pos, goal, speed, colour, outline_colour, scale)
+        super().__init__(
+            id,
+            x=x,
+            goal=goal,
+            colour=colour,
+            outline_colour=outline_colour,
+            scale=scale,
+        )
         self.max_v = 0
         self.min_v = 0
         self.max_brake = 0
         self.max_accel = 0
 
-    def _poly(self):
-        return (
-            np.array(
-                [
-                    [0.01, 0.01],
-                    [-0.01, 0.01],
-                    [-0.01, -0.01],
-                    [0.01, -0.01],
-                    [0.01, 0.01],
-                ]
-            )
-            * self.scale
-        )
+        self.poly_def = np.array(
+            [
+                [0.01, 0.01 * self.ratio, 1],
+                [-0.01, 0.01 * self.ratio, 1],
+                [-0.01, -0.01 * self.ratio, 1],
+                [0.01, -0.01 * self.ratio, 1],
+                [0.01, 0.01 * self.ratio, 1],
+            ]
+        ).T
 
     @staticmethod
     def check_width(scale):
