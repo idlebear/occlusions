@@ -25,7 +25,7 @@ from dogm_py import renderOccupancyGrid, renderDynamicOccupancyGrid
 
 
 # local functions/imports
-from Actor import Actor, Pedestrian, Car, Obstacle, Blank, SkidSteer, VelocityCar
+from Actor import Actor, Pedestrian, Car, Obstacle, Blank, SkidSteer, VelocityCar, STATE
 from config import *
 
 DEBUG_INFORMATION_GAIN = True
@@ -154,6 +154,17 @@ class Window:
             if fill_colour is not None:
                 pygame.draw.polygon(self.screen, fill_colour, points, 0)
             pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
+
+    # Quick image rotation
+    #   https://stackoverflow.com/questions/4183208/how-do-i-rotate-an-image-around-its-center-using-pygame
+    def draw_image(self, image, center, orientation):
+        center = (
+            self._xmargin + center[0] * self._env_size,
+            self._ymargin + center[1] * self._env_size,
+        )
+        rotated_image = pygame.transform.rotate(image, np.rad2deg(orientation))
+        new_rect = rotated_image.get_rect(center=image.get_rect(center=center).center)
+        self.screen.blit(rotated_image, new_rect)
 
     def draw_status(self, collisions, sim_time):
         #  draw the limits of the environment
@@ -386,13 +397,27 @@ class Simulation:
             x += 0.2
 
     def _draw_actor(self, actor):
-        if type(actor) is not Blank:
-            pts = self._get_actor_outline(actor)
-            self.window.draw_polygon(
-                outline_colour=actor.outline_colour,
-                fill_colour=actor.colour,
-                points=pts,
-            )
+        if not actor.is_real():
+            return
+
+        actor_image = actor.get_image()
+        if actor_image is not None:
+            actor_pos = get_location(origin=self.ego.x[0:2], location=actor.x[0:2])
+            # drawing with y inverted reverse the rotation to correct the display
+            self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
+        else:
+            actor_poly = actor.get_outline()
+            if actor_poly is not None:
+                # shift the poly relative to the ego instead of the origin
+                actor_poly += get_location(origin=self.ego.x[0:2], location=(0, 0))
+
+                self.window.draw_polygon(
+                    outline_colour=actor.outline_colour,
+                    fill_colour=actor.colour,
+                    points=actor_poly,
+                )
+
+        # else: actor has no image or outline (blank)
 
     def _draw_ego(self):
         self._draw_actor(self.ego)
@@ -495,7 +520,7 @@ class Simulation:
             #         scale=scale,
             #     )
             # elif rnd < 0.9:
-            if rnd < 0.9:
+            if rnd < 1:
                 # same side traffic
                 scale = 1
                 width = Car.check_width(scale) * 5.0
@@ -508,6 +533,7 @@ class Simulation:
                     x=np.array([x + width / 2, y, v, 0, 0]),
                     goal=np.array([self.ego.x[0] + 100000, y]),
                     scale=scale,
+                    image_prefix="red_",
                 )
             elif rnd < 0.55:
                 scale = 1
@@ -527,6 +553,7 @@ class Simulation:
                     x=np.array([x + width / 2, y, 0, -v, theta]),
                     goal=np.array([x + width / 2, -y]),
                     scale=scale,
+                    image_prefix="red_",
                 )
             elif rnd < 0.95:
                 scale = 1
@@ -587,7 +614,8 @@ class Simulation:
         info["ego"] = self.ego.get_state()
         actor_states = []
         for actor in self.actor_list:
-            actor_states.append(actor.get_state())
+            if actor.is_real():
+                actor_states.append(actor.get_state())
         info["actors"] = actor_states
         info["information_gain"] = self.information_gain
         return info
@@ -613,7 +641,7 @@ class Simulation:
             polygon_list,
             start_x=self.ego.x[0],
             start_y=self.ego.x[1],
-            start_angle=SCAN_START_ANGLE + self.ego.x[4],
+            start_angle=SCAN_START_ANGLE + self.ego.x[STATE.THETA],
             angle_increment=SCAN_ANGLE_INCREMENT,
             num_rays=SCAN_RAYS,
             max_range=SCAN_RANGE,
@@ -787,15 +815,18 @@ class Simulation:
         collisions = 0
         self.ego.tick(self.tick_time)
         for i, actor in enumerate(self.actor_list[::-1]):
-            actor.tick(self.tick_time)
-            if not actor.collided and actor.distance_to(self.ego.x[0:2]) <= COLLISION_DISTANCE:
-                collisions += 1
-                actor.set_collided()
+            if actor.is_real():
+                actor.tick(self.tick_time)
+                if not actor.collided and actor.distance_to(self.ego.x[0:2]) <= COLLISION_DISTANCE:
+                    collisions += 1
+                    actor.set_collided()
 
-            if actor.at_goal() or (actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > GRID_WIDTH / 2):
-                finished_actors.append(actor)
+                if actor.at_goal() or (
+                    actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > GRID_WIDTH / 2
+                ):
+                    finished_actors.append(actor)
 
-        if abs(self.ego.x[1]) > LANE_WIDTH:
+        if abs(self.ego.x[STATE.Y]) > LANE_WIDTH:
             collisions += 1  # off the road
 
         # clean up

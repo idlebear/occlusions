@@ -4,11 +4,22 @@ from config import (
     ACTOR_PATH_WIDTH,
     MAX_CAR_SPEED,
     MAX_PEDESTRIAN_SPEED,
+    CAR_IMAGE_LENGTH,
+    CAR_IMAGE_WIDTH,
 )
 from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
-from enum import Enum
+from enum import Enum, IntEnum
+
+
+class STATE(IntEnum):
+    X = 0
+    Y = 1
+    THETA = 2
+    VX = 3
+    VY = 4
+    DELTA = 5
 
 
 class Actor:
@@ -29,14 +40,14 @@ class Actor:
         # then state update is
         # x' = x + dx dt
         # y' = y + dy dt
+        # theta' = theta + omega dt
         # dx' = dx + a cos(theta) dt
         # dy' = dy + a sin(theta) dt
-        # theta' = theta + omega dt
 
         # unless specified, actor is initially at rest and no control is applied
         self.x = np.array(x)
         self.u = np.array([0.0, 0.0])
-        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+        self.speed = np.round(np.sqrt(self.x[STATE.VX] * self.x[STATE.VX] + self.x[STATE.VY] * self.x[STATE.VY]), 5)
 
         self.reached_goal = False
         self.collided = False
@@ -74,15 +85,15 @@ class Actor:
 
         A = np.array(
             [
-                [1, 0, dt, 0, 0],
-                [0, 1, 0, dt, 0],
+                [1, 0, 0, dt, 0],
+                [0, 1, 0, 0, dt],
                 [0, 0, 1, 0, 0],
                 [0, 0, 0, 1, 0],
                 [0, 0, 0, 0, 1],
             ]
         )
-        B0 = np.array([0, 0, np.cos(self.x[4]), np.sin(self.x[4]), 0]) * dt
-        B1 = np.array([0, 0, 0, 0, 1]) * dt
+        B0 = np.array([0, 0, 0, np.cos(self.x[STATE.THETA]), np.sin(self.x[STATE.THETA])]) * dt
+        B1 = np.array([0, 0, 1, 0, 0]) * dt
 
         self.x = A @ self.x + B0 * self.u[0] + B1 * self.u[1]
         # BUGBUG -- may need to add bounds to constrain the measured theta -- but-- that may
@@ -100,8 +111,8 @@ class Actor:
     def __update_bounding_box(self):
         self.rot_bw = np.array(
             [
-                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
-                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [np.cos(self.x[STATE.THETA]), -np.sin(self.x[STATE.THETA]), 0],
+                [np.sin(self.x[STATE.THETA]), np.cos(self.x[STATE.THETA]), 0],
                 [0, 0, 1],
             ]
         )
@@ -121,11 +132,11 @@ class Actor:
 
         self.__update_bounding_box()
 
-        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+        self.speed = np.round(np.sqrt(self.x[STATE.VX] * self.x[STATE.VX] + self.x[STATE.VY] * self.x[STATE.VY]), 5)
 
         if self.goal is not None:
             if not self.reached_goal:
-                dist = np.linalg.norm(self.goal - self.x[0:2])
+                dist = np.linalg.norm(self.goal - [self.x[STATE.X], self.x[STATE.Y]])
                 if abs(dist - self.speed) < 0:
                     self.reached_goal = True
 
@@ -151,8 +162,8 @@ class Actor:
     def set_collided(self, colour="black"):
         self.colour = colour
         self.speed = 0
-        self.x[2] = 0
-        self.x[3] = 0
+        self.x[STATE.VX] = 0
+        self.x[STATE.VY] = 0
         self.collided = True
 
     def project(self, u, dt):
@@ -184,6 +195,15 @@ class Actor:
         }
         return state
 
+    def get_outline(self):
+        return self.get_poly()
+
+    def get_image(self):
+        return None
+
+    def is_real(self):
+        return True
+
 
 class Car(Actor):
     def __init__(
@@ -194,6 +214,7 @@ class Car(Actor):
         colour="lightblue",
         outline_colour="dodgerblue",
         scale=1,
+        image_prefix="",
     ):
         super().__init__(
             id,
@@ -218,9 +239,16 @@ class Car(Actor):
             ]
         ).T
 
+        # art objects
+        self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
+        self.actor_image = pygame.transform.scale(self.actor_image, (CAR_IMAGE_LENGTH, CAR_IMAGE_WIDTH))
+
     @staticmethod
     def check_width(scale):
         return 0.05 * scale
+
+    def get_image(self):
+        return self.actor_image
 
 
 # BUGBUG -- hacky car copy controlled by velocity only
@@ -233,6 +261,7 @@ class VelocityCar(Actor):
         colour="orange",
         outline_colour="darkorange",
         scale=1,
+        image_prefix="",
         params=None,
     ):
         super().__init__(
@@ -245,10 +274,8 @@ class VelocityCar(Actor):
         )
 
         if params is None:
-            self.b = 1
             self.max_omega = 5
         else:
-            self.b = params["b"]
             self.max_omega = params["max_omega"]
 
         self.poly_def = np.array(
@@ -262,27 +289,31 @@ class VelocityCar(Actor):
             ]
         ).T
 
+        # art objects
+        self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
+        self.actor_image = pygame.transform.scale(self.actor_image, (CAR_IMAGE_LENGTH, CAR_IMAGE_WIDTH))
+
     def tick(self, dt=TICK_TIME):
         """a time step"""
         self.__move(dt)
 
         self.__update_bounding_box()
-        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+        self.speed = np.round(np.sqrt(self.x[STATE.VX] * self.x[STATE.VX] + self.x[STATE.VY] * self.x[STATE.VY]), 5)
 
         if self.goal is not None:
             if not self.reached_goal:
-                dist = np.linalg.norm(self.goal - self.x[0:2])
+                dist = np.linalg.norm(self.goal - [self.x[STATE.VX], self.x[STATE.VY]])
                 if abs(dist - self.speed) < 0:
                     self.reached_goal = True
 
     def __move(self, dt):
         self.speed = self.u[0]
 
-        self.x[2] = self.speed * np.cos(self.x[4])
-        self.x[3] = self.speed * np.sin(self.x[4])
-        self.x[0] = self.x[0] + self.x[2] * dt
-        self.x[1] = self.x[1] + self.x[3] * dt
-        self.x[4] = self.x[4] + self.u[1] * dt
+        self.x[STATE.VX] = self.speed * np.cos(self.x[STATE.THETA])
+        self.x[STATE.VY] = self.speed * np.sin(self.x[STATE.THETA])
+        self.x[STATE.X] = self.x[STATE.X] + self.x[STATE.VX] * dt
+        self.x[STATE.Y] = self.x[STATE.Y] + self.x[STATE.VY] * dt
+        self.x[STATE.THETA] = self.x[STATE.THETA] + self.u[1] * dt
 
     def set_control(self, u):
         self.u[0] = np.clip(u[0], self.min_v, self.max_v)
@@ -291,8 +322,8 @@ class VelocityCar(Actor):
     def __update_bounding_box(self):
         self.rot_bw = np.array(
             [
-                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
-                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [np.cos(self.x[STATE.THETA]), -np.sin(self.x[STATE.THETA]), 0],
+                [np.sin(self.x[STATE.THETA]), np.cos(self.x[STATE.THETA]), 0],
                 [0, 0, 1],
             ]
         )
@@ -306,6 +337,9 @@ class VelocityCar(Actor):
     def check_width(scale):
         return 0.05 * scale
 
+    def get_image(self):
+        return self.actor_image
+
 
 # Basic skid-steer model, as an ideallized differential drive
 class SkidSteer(Actor):
@@ -317,6 +351,7 @@ class SkidSteer(Actor):
         colour="orange",
         outline_colour="darkorange",
         scale=1,
+        image_prefix="",
         params=None,
     ):
         super().__init__(
@@ -346,16 +381,20 @@ class SkidSteer(Actor):
             ]
         ).T
 
+        # art objects
+        self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
+        self.actor_image = pygame.transform.scale(self.actor_image, (CAR_IMAGE_LENGTH, CAR_IMAGE_WIDTH))
+
     def tick(self, dt=TICK_TIME):
         """a time step"""
         self.__move(dt)
 
         self.__update_bounding_box()
-        self.speed = np.round(np.sqrt(self.x[2] * self.x[2] + self.x[3] * self.x[3]), 5)
+        self.speed = np.round(np.sqrt(self.x[STATE.VX] * self.x[STATE.VX] + self.x[STATE.VX] * self.x[STATE.VY]), 5)
 
         if self.goal is not None:
             if not self.reached_goal:
-                dist = np.linalg.norm(self.goal - self.x[0:2])
+                dist = np.linalg.norm(self.goal - [self.x[STATE.X], self.x[STATE.Y]])
                 if abs(dist - self.speed) < 0:
                     self.reached_goal = True
 
@@ -363,11 +402,11 @@ class SkidSteer(Actor):
         self.speed = (self.u[0] + self.u[1]) / 2
         w = (self.u[0] - self.u[1]) / self.b
 
-        self.x[2] = self.speed * np.cos(self.x[4])
-        self.x[3] = self.speed * np.sin(self.x[4])
-        self.x[0] = self.x[0] + self.x[2] * dt
-        self.x[1] = self.x[1] + self.x[3] * dt
-        self.x[4] = self.x[4] + w * dt
+        self.x[STATE.VX] = self.speed * np.cos(self.x[STATE.THETA])
+        self.x[STATE.VY] = self.speed * np.sin(self.x[STATE.THETA])
+        self.x[STATE.X] = self.x[STATE.X] + self.x[STATE.VX] * dt
+        self.x[STATE.Y] = self.x[STATE.Y] + self.x[STATE.VY] * dt
+        self.x[STATE.THETA] = self.x[STATE.THETA] + w * dt
 
     def set_control(self, u):
         self.u[0] = np.clip(u[0], -self.max_omega, self.max_omega)
@@ -376,8 +415,8 @@ class SkidSteer(Actor):
     def __update_bounding_box(self):
         self.rot_bw = np.array(
             [
-                [np.cos(self.x[4]), -np.sin(self.x[4]), 0],
-                [np.sin(self.x[4]), np.cos(self.x[4]), 0],
+                [np.cos(self.x[STATE.THETA]), -np.sin(self.x[STATE.THETA]), 0],
+                [np.sin(self.x[STATE.THETA]), np.cos(self.x[STATE.THETA]), 0],
                 [0, 0, 1],
             ]
         )
@@ -386,6 +425,23 @@ class SkidSteer(Actor):
         min_d = np.min(poly, axis=0)
         max_d = np.max(poly, axis=0)
         self.bounding_box = (*min_d, *max_d)
+
+    def _poly(self):
+        return (
+            np.array(
+                [
+                    [0.025, 0],
+                    [-0.025, 0.02],
+                    [-0.01, 0],
+                    [-0.025, -0.02],
+                    [0.025, 0],
+                ]
+            )
+            * self.scale
+        )
+
+    def get_image(self):
+        return None
 
     @staticmethod
     def check_width(scale):
@@ -506,3 +562,9 @@ class Blank(Actor):
     @staticmethod
     def check_width(scale):
         return 0.02 * scale
+
+    def get_outline(self):
+        return None
+
+    def is_real(self):
+        return False
