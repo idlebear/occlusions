@@ -23,9 +23,13 @@ from dogm_py import renderOccupancyGrid, renderDynamicOccupancyGrid
 
 # from dogm_py import renderMeasurement
 
+import ModelParameters.GenericCar as GenericCar
+import ModelParameters.Ackermann as Ackermann
+import ModelParameters.SkidSteer as SkidSteer
+
 
 # local functions/imports
-from Actor import Actor, Pedestrian, Car, Obstacle, Blank, SkidSteer, VelocityCar, STATE
+from Actor import Actor, Pedestrian, Car, Obstacle, Blank, SkidSteer, AckermanCar, STATE
 from config import *
 
 DEBUG_INFORMATION_GAIN = True
@@ -50,9 +54,9 @@ FIG_IG_MAPS = 2
 INFORMATION_GAIN_TRAJECTORIES = 3
 
 # Fake scanner parameters
-SCAN_RANGE = 2
+SCAN_RANGE = 50
 SCAN_RAYS = 800
-SCAN_RESOLUTION = 0.005
+SCAN_RESOLUTION = 0.05
 SCAN_FOV = 2 * np.pi
 SCAN_START_ANGLE = -SCAN_FOV / 2
 SCAN_ANGLE_INCREMENT = SCAN_FOV / SCAN_RAYS
@@ -86,7 +90,7 @@ def get_location(origin, location):
 
 
 class Window:
-    def __init__(self, screen, screen_width, screen_height, margin):
+    def __init__(self, screen, screen_width, screen_height, margin, scale=1.0):
         self.screen = screen
 
         self.sim_time_text = pygame.font.SysFont("dejavuserif", 15)
@@ -98,6 +102,8 @@ class Window:
         self._screen_width = screen_width
         self._screen_height = screen_height
         self._env_size = screen_width - margin
+        self._draw_scale = self._env_size // scale  # pixels/m (unit, whatever...)
+        self._scale = scale
         self._border_offset = 10
 
         self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
@@ -111,18 +117,21 @@ class Window:
     def clear(self):
         self.screen.fill(SCREEN_BACKGROUND_COLOUR)
 
+    def get_drawing_scale(self):
+        return self._draw_scale
+
     def draw_line(self, start, end, colour, width=2):
-        sx = self._xmargin + start[0] * self._env_size
-        sy = self._ymargin + start[1] * self._env_size
-        ex = self._xmargin + end[0] * self._env_size
-        ey = self._ymargin + end[1] * self._env_size
+        sx = self._xmargin + start[0] * self._env_size / self._scale
+        sy = self._ymargin + start[1] * self._env_size / self._scale
+        ex = self._xmargin + end[0] * self._env_size / self._scale
+        ey = self._ymargin + end[1] * self._env_size / self._scale
 
         pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
 
     def draw_circle(self, centre, colour, radius=2):
-        cx = self._xmargin + centre[0] * self._env_size
-        cy = self._ymargin + centre[1] * self._env_size
-        radius = int(radius * self._env_size)
+        cx = self._xmargin + centre[0] * self._env_size / self._scale
+        cy = self._ymargin + centre[1] * self._env_size / self._scale
+        radius = int(radius * self._env_size / self._scale)
 
         pygame.draw.circle(self.screen, color=colour, center=(cx, cy), radius=radius)
 
@@ -134,33 +143,46 @@ class Window:
             self.screen,
             colour,
             (
-                self._xmargin + (location[0] - width / 2.0) * self._env_size,
-                self._ymargin + (location[1] - height / 2.0) * self._env_size,
-                width * self._env_size,
-                height * self._env_size,
+                self._xmargin + (location[0] - width / 2.0) * self._env_size / self._scale,
+                self._ymargin + (location[1] - height / 2.0) * self._env_size / self._scale,
+                width * self._env_size / self._scale,
+                height * self._env_size / self._scale,
             ),
         )
 
-    def draw_polygon(self, outline_colour, fill_colour, points, use_transparency=False):
-        points = [[self._xmargin + x * self._env_size, self._ymargin + y * self._env_size] for x, y in points]
+    def draw_polygon(
+        self,
+        outline_colour,
+        fill_colour,
+        points,
+        width=ACTOR_PATH_WIDTH,
+        use_transparency=False,
+    ):
+        points = [
+            [
+                self._xmargin + x * self._env_size / self._scale,
+                self._ymargin + y * self._env_size / self._scale,
+            ]
+            for x, y in points
+        ]
 
         if use_transparency:
             self.tmp_screen.fill((0, 0, 0, 0))
             if fill_colour is not None:
                 pygame.draw.polygon(self.tmp_screen, fill_colour, points, 0)
-            pygame.draw.polygon(self.tmp_screen, outline_colour, points, ACTOR_PATH_WIDTH)
+            pygame.draw.polygon(self.tmp_screen, outline_colour, points, width=width)
             self.screen.blit(self.tmp_screen, (0, 0))
         else:
             if fill_colour is not None:
                 pygame.draw.polygon(self.screen, fill_colour, points, 0)
-            pygame.draw.polygon(self.screen, outline_colour, points, ACTOR_PATH_WIDTH)
+            pygame.draw.polygon(self.screen, outline_colour, points, width=width)
 
     # Quick image rotation
     #   https://stackoverflow.com/questions/4183208/how-do-i-rotate-an-image-around-its-center-using-pygame
     def draw_image(self, image, center, orientation):
         center = (
-            self._xmargin + center[0] * self._env_size,
-            self._ymargin + center[1] * self._env_size,
+            self._xmargin + center[0] * self._env_size / self._scale,
+            self._ymargin + center[1] * self._env_size / self._scale,
         )
         rotated_image = pygame.transform.rotate(image, np.rad2deg(orientation))
         new_rect = rotated_image.get_rect(center=image.get_rect(center=center).center)
@@ -261,20 +283,27 @@ class Simulation:
                 screen_width=screen_width,
                 screen_height=screen_height,
                 margin=margin,
+                scale=WINDOW_SIZE,
             )
+            self.image_scale = self.window.get_drawing_scale()
         else:
             self.window = None
+            self.image_scale = None
 
         # load the draw method
         self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
-        self.grid = VelocityGrid(
-            height=GRID_HEIGHT,
-            width=GRID_WIDTH,
-            resolution=GRID_RESOLUTION,
-            origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET),
-        )
-        self.observation_shape = self.grid.get_grid_size()
+        # self.grid = VelocityGrid(
+        #     height=GRID_HEIGHT,
+        #     width=GRID_WIDTH,
+        #     resolution=GRID_RESOLUTION,
+        #     origin=(GRID_ORIGIN_Y_OFFSET, GRID_ORIGIN_Y_OFFSET),
+        # )
+
+        self.observation_shape = [
+            int(GRID_HEIGHT / GRID_RESOLUTION),
+            int(GRID_WIDTH / GRID_RESOLUTION),
+        ]
 
         self.maps = None
         self.ig_images = None
@@ -327,14 +356,14 @@ class Simulation:
         # reset the random number generator
         self.generator.reset()
 
-        self.ego = VelocityCar(
+        self.ego = AckermanCar(
             id=0,
-            x=np.array([0.0, DESIRED_LANE_POSITION, 0, 0, 0]),
+            x=np.array([0.0, DESIRED_LANE_POSITION, 0, 0, 0, 0]),
             goal=None,
             colour="red",
             outline_colour="darkred",
-            scale=1.1,
-            # params={"b": 0.05, "max_omega": 5},
+            scale=1.0,
+            image_scale=self.image_scale,
         )
 
         self.actor_list = []
@@ -351,7 +380,7 @@ class Simulation:
 
         self.information_gain = None
 
-        self.grid.reset()
+        # self.grid.reset()
 
         return (
             self._get_next_observation(self._calculate_future_visibility(), self.tick_time),
@@ -385,16 +414,17 @@ class Simulation:
         return actor_pos + poly
 
     def _draw_road(self):
-        x = int(self.ego.x[0] - 0.5)
+        x = self.ego.x[0]
         y = 0
 
         loc = get_location(origin=self.ego.x[0:2], location=(x, y))
-        self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, 10)
+        self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, WINDOW_SIZE * 2)
 
-        for _ in range(15):
-            loc = get_location(origin=self.ego.x[0:2], location=(x, y - 0.0001))
-            self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.005, 0.1)
-            x += 0.2
+        x = (x // 4) * 4.0
+        for _ in range(int(WINDOW_SIZE * 2 // 4)):
+            loc = get_location(origin=self.ego.x[0:2], location=(x - WINDOW_SIZE / 2, y - 0.2))
+            self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.4, 2.5)
+            x += 4
 
     def _draw_actor(self, actor):
         if not actor.is_real():
@@ -487,110 +517,85 @@ class Simulation:
         return vis_poly
 
     def _generate_new_agents(self):
-        x = max(self.next_agent_x, self.ego.x[0] + (1.0))
+        x = max(self.next_agent_x, self.ego.x[0] + WINDOW_SIZE / 2)
 
         while len(self.actor_list) < self.num_actors:
             rnd = self.generator.uniform()
-            # if rnd < 0.4:
-            #     scale = 1 + 9 * self.generator.uniform()
-            #     width = Obstacle.check_width(scale) + 0.005
-
-            #     if rnd < 0.2:
-            #         y = -LANE_WIDTH * 1.5 - self.generator.uniform() * 0.1 - width / 2
-            #     else:
-            #         y = LANE_WIDTH * 1.5 + self.generator.uniform() * 0.1 + width / 2
-
-            #     actor = Obstacle(
-            #         id=self.ticks,
-            #         x=[x + width / 2, y, 0, 0, 0],
-            #         scale=scale,
-            #     )
-            # elif rnd < 0.6:
+            if rnd < 0.4:
+                scale = 1 + 9 * self.generator.uniform()
+                if rnd < 0.2:
+                    y = -LANE_WIDTH - np.ceil(scale / 2) - self.generator.uniform() * 5
+                else:
+                    y = LANE_WIDTH + np.ceil(scale / 2) + self.generator.uniform() * 5
+                actor = Obstacle(
+                    id=self.ticks,
+                    x=np.array([x + scale // 2, y, 0, 0, 0]),
+                    scale=scale,
+                )
+            # elif rnd < 0.4:
             #     # oncoming traffic
             #     scale = 1
-            #     width = Car.check_width(scale) * 5.0
 
             #     v = OPPONENT_CAR_SPEED
             #     y = LANE_WIDTH / 2
 
             #     actor = Car(
             #         id=self.ticks,
-            #         x=[x + width / 2, y, -v, 0, -np.pi],
-            #         goal=np.array([self.ego.x[0] - EGO_X_OFFSET, y]),
+            #         x=[x + GenericCar.LENGTH / 2, y, -v, -np.pi, 0],
+            #         goal=np.array([0, y]),
+            #         scale=scale,
+            #         image_prefix="red_",
+            #         image_scale=self.image_scale,
+            #     )
+            # elif rnd < 1:
+            #     # same side traffic
+            #     scale = 1
+
+            #     v = OPPONENT_CAR_SPEED * 0.5
+            #     y = -LANE_WIDTH / 2
+
+            #     actor = Car(
+            #         id=self.ticks,
+            #         x=np.array([x + GenericCar.LENGTH / 2, y, v, 0, 0]),
+            #         goal=np.array([self.ego.x[0] + 100000, y]),
+            #         scale=scale,
+            #         image_prefix="red_",
+            #         image_scale=self.image_scale,
+            #     )
+            # elif rnd < 0.95:
+            #     scale = 1
+
+            #     v = OPPONENT_PEDESTRIAN_SPEED
+            #     y = 5.0
+            #     theta = np.pi / 2
+            #     if rnd < 0.7875:
+            #         v = -v
+            #         y = -y
+            #         theta = -theta
+
+            #     actor = Pedestrian(
+            #         id=self.ticks,
+            #         x=np.array([x + width / 2, y, 0, -v, theta]),
+            #         goal=np.array([x + width / 2, -y]),
             #         scale=scale,
             #     )
-            # elif rnd < 0.9:
-            if rnd < 1:
-                # same side traffic
-                scale = 1
-                width = Car.check_width(scale) * 5.0
-
-                v = OPPONENT_CAR_SPEED * 0.5
-                y = -LANE_WIDTH / 2
-
-                actor = Car(
-                    id=self.ticks,
-                    x=np.array([x + width / 2, y, v, 0, 0]),
-                    goal=np.array([self.ego.x[0] + 100000, y]),
-                    scale=scale,
-                    image_prefix="red_",
-                )
-            elif rnd < 0.55:
-                scale = 1
-                width = Car.check_width(scale)
-
-                v = OPPONENT_CAR_SPEED
-
-                y = 2
-                theta = np.pi / 2
-                if rnd < 0.625:
-                    v = -v
-                    y = -y
-                    theta = -theta
-
-                actor = Car(
-                    id=self.ticks,
-                    x=np.array([x + width / 2, y, 0, -v, theta]),
-                    goal=np.array([x + width / 2, -y]),
-                    scale=scale,
-                    image_prefix="red_",
-                )
-            elif rnd < 0.95:
-                scale = 1
-                width = Pedestrian.check_width(scale)
-
-                v = OPPONENT_PEDESTRIAN_SPEED
-                y = 0.4
-                theta = np.pi / 2
-                if rnd < 0.7875:
-                    v = -v
-                    y = -y
-                    theta = -theta
-
-                actor = Pedestrian(
-                    id=self.ticks,
-                    x=np.array([x + width / 2, y, 0, -v, theta]),
-                    goal=np.array([x + width / 2, -y]),
-                    scale=scale,
-                )
             else:
                 # do nothing (space)
                 scale = 1 + 9 * self.generator.uniform()
-                width = Blank.check_width(scale)
-
-                y = 0.1 + self.generator.uniform() * 0.3
+                y = 3 + scale // 2 + self.generator.uniform() * 10
                 actor = Blank(
                     id=self.ticks,
-                    x=np.array([x + width / 2, y, 0, 0, 0]),
+                    x=np.array([x + scale / 2, y, 0, 0, 0]),
                     scale=scale,
                 )
 
+            width = actor.get_extent() * 2
             self.actor_list.append(actor)
             x += width + 0.005 * self.generator.uniform()
             self.next_agent_x = x
 
     def _get_next_observation(self, scan_data, dt):
-        grid_data = self.lmg.generateGrid(VectorFloat(scan_data), self.ego.x[4] * 180.0 / np.pi)
+        grid_data = self.lmg.generateGrid(VectorFloat(scan_data), self.ego.x[STATE.THETA] * 180.0 / np.pi)
         self.dogm.updateGrid(grid_data, self.ego.x[0], self.ego.x[1], dt)
         return renderOccupancyGrid(self.dogm)  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
 
@@ -615,7 +620,18 @@ class Simulation:
         actor_states = []
         for actor in self.actor_list:
             if actor.is_real():
-                actor_states.append(actor.get_state())
+                actor_state = actor.get_state()
+                poly = actor.get_poly()
+                min_angle = np.pi / 2
+                min_pt = None
+                for pt in poly:
+                    angle = np.arctan((pt[1] - self.ego.x[1]) / (pt[0] - self.ego.x[0]))
+                    if abs(angle) < abs(min_angle):
+                        min_angle = angle
+                        min_pt = pt
+                actor_state["min_pt"] = min_pt
+                actor_states.append(actor_state)
+
         info["actors"] = actor_states
         info["information_gain"] = self.information_gain
         return info
@@ -716,11 +732,10 @@ class Simulation:
         start = self.ego.x[0:2]
         states = self.ego.project(u, self.tick_time)
 
-        self._draw_circle(start, radius=0.01, colour="blue")
         for state in states:
             self._draw_line(start, state[0:2], colour="blue", width=1)
             start = state[0:2]
-            self._draw_circle(start, radius=0.01, colour="blue")
+            self._draw_circle(start, radius=0.23, colour="blue")
 
     def draw_information_gain(self, ig_results):
         if DEBUG_INFORMATION_GAIN:
@@ -817,14 +832,15 @@ class Simulation:
         for i, actor in enumerate(self.actor_list[::-1]):
             if actor.is_real():
                 actor.tick(self.tick_time)
-                if not actor.collided and actor.distance_to(self.ego.x[0:2]) <= COLLISION_DISTANCE:
-                    collisions += 1
-                    actor.set_collided()
 
-                if actor.at_goal() or (
-                    actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > GRID_WIDTH / 2
-                ):
-                    finished_actors.append(actor)
+                # if not actor.collided and self.ego.is_colliding(actor):
+                #     collisions += 1
+                #     actor.set_collided()
+
+            if actor.at_goal() or (
+                actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
+            ):
+                finished_actors.append(actor)
 
         if abs(self.ego.x[STATE.Y]) > LANE_WIDTH:
             collisions += 1  # off the road
@@ -843,7 +859,7 @@ class Simulation:
         # y_reward = ((self.ego.x[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
         y_reward = -exp(-((self.ego.x[1] - DESIRED_LANE_POSITION) ** 2))
         # v_reward = (self.actor_target_speed**2 - (self.actor_target_speed - self.ego.speed)**2)*REWARD_DEVIATION_V
-        v_reward = exp(-((self.actor_target_speed - self.ego.speed) ** 2))
+        v_reward = exp(-((self.actor_target_speed - self.ego.x[STATE.VELOCITY]) ** 2))
         p_reward = passed * REWARD_PASSING
         # c_reward = collisions * REWARD_COLLISION
         g_distance = np.linalg.norm([self.ego.x[0] - GOAL[0], self.ego.x[1] - GOAL[1]])
@@ -883,7 +899,10 @@ class Simulation:
 
             self._draw_scan()
 
-        self.draw_information_gain(self.information_gain)
+            if u is not None:
+                self.draw_control_output(u)
+
+        # self.draw_information_gain(self.information_gain)
 
         if debug:
             # if self.maps is None:
@@ -921,9 +940,6 @@ class Simulation:
                 ).astype(np.uint8)
             ).convert("RGB")
             self.maps.set_data(map_img)
-
-            if u is not None:
-                self.draw_control_output(u)
 
             self.map_fig.canvas.draw()
             self.map_fig.canvas.flush_events()
