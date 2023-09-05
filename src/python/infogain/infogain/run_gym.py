@@ -16,6 +16,8 @@ from OcclusionGym import OcclusionEnv
 
 from mpc_controller import MPC, Ackermann5
 from Actor import STATE
+from trajectory import generate_trajectory
+from visibility_costmap import build_visibility_costmap
 
 from typing import Callable
 
@@ -129,6 +131,32 @@ def main(args):
                 actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
             while len(actors) < args.actors:
                 actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
+
+            waypoints = [
+                state[0:2],
+            ]
+            # add a waypoint for every 5 m for V_DES * planning_horizon * dt * 2 -- double planning horizon
+            for _ in range(int(V_DES * env.sim.tick_time * PLANNING_HORIZON * 2.0 / WAYPOINT_INTERVAL)):
+                waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
+
+            # build the immediate planning trajectory
+            obs_trajectory = generate_trajectory(
+                waypoints, v=V_DES, t=(PLANNING_HORIZON * env.sim.tick_time), dt=env.sim.tick_time
+            )
+
+            # and a target trajectory to define the locations to observe
+            target_trajectory = generate_trajectory(
+                waypoints, v=V_DES, t=(PLANNING_HORIZON * env.sim.tick_time) * 2, dt=env.sim.tick_time
+            )
+
+            costmap = build_visibility_costmap(
+                obs,
+                map=info["map"],
+                obs_trajectory=obs_trajectory[0],
+                target_trajectory=target_trajectory[0],
+                v_des=V_DES,
+                dt=env.sim.tick_time,
+            )
 
             x = state[0]
             v = state[2]

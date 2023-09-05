@@ -363,6 +363,7 @@ class Simulation:
             colour="red",
             outline_colour="darkred",
             scale=1.0,
+            resolution=GRID_RESOLUTION,
             image_scale=self.image_scale,
         )
 
@@ -436,7 +437,7 @@ class Simulation:
             # drawing with y inverted reverse the rotation to correct the display
             self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
         else:
-            actor_poly = actor.get_outline()
+            actor_poly = actor.get_poly()
             if actor_poly is not None:
                 # shift the poly relative to the ego instead of the origin
                 actor_poly += get_location(origin=self.ego.x[0:2], location=(0, 0))
@@ -531,6 +532,7 @@ class Simulation:
                     id=self.ticks,
                     x=np.array([x + scale // 2, y, 0, 0, 0]),
                     scale=scale,
+                    resolution=GRID_RESOLUTION,
                 )
             # elif rnd < 0.4:
             #     # oncoming traffic
@@ -546,6 +548,7 @@ class Simulation:
             #         scale=scale,
             #         image_prefix="red_",
             #         image_scale=self.image_scale,
+            # resolution=GRID_RESOLUTION,
             #     )
             # elif rnd < 1:
             #     # same side traffic
@@ -559,6 +562,7 @@ class Simulation:
             #         x=np.array([x + GenericCar.LENGTH / 2, y, v, 0, 0]),
             #         goal=np.array([self.ego.x[0] + 100000, y]),
             #         scale=scale,
+            # resolution=GRID_RESOLUTION,
             #         image_prefix="red_",
             #         image_scale=self.image_scale,
             #     )
@@ -578,6 +582,7 @@ class Simulation:
             #         x=np.array([x + width / 2, y, 0, -v, theta]),
             #         goal=np.array([x + width / 2, -y]),
             #         scale=scale,
+            # resolution=GRID_RESOLUTION,
             #     )
             else:
                 # do nothing (space)
@@ -614,6 +619,44 @@ class Simulation:
         # observation = (observation * 255.0).astype(np.uint8)
         # return observation
 
+    #
+    # @brief: construct a 2x map centred on the ego car of the obstacles in the environment as a
+    #         ground truth
+    #
+    def _get_map(self):
+        map = np.zeros([GRID_SIZE * 2, GRID_SIZE * 2])
+        for actor in self.actor_list:
+            if actor.is_real():
+                if type(actor) == Obstacle:
+                    footprint = actor.get_footprint()
+                    dy, dx = footprint.shape
+
+                    mx = GRID_SIZE + int((actor.bounding_box[0] - self.ego.x[0]) / GRID_RESOLUTION)
+                    my = GRID_SIZE + int((actor.bounding_box[1] - self.ego.x[1]) / GRID_RESOLUTION)
+                    ix = 0
+                    iy = 0
+
+                    if mx > GRID_SIZE * 2 or my > GRID_SIZE * 2:
+                        continue
+
+                    if mx < 0:
+                        dx = dx + mx
+                        ix = -mx
+                        mx = 0
+                    if mx + dx >= GRID_SIZE * 2:
+                        dx = GRID_SIZE * 2 - mx
+
+                    if my < 0:
+                        dy = dy + my
+                        iy = -my
+                        my = 0
+                    if my + dy >= GRID_SIZE * 2:
+                        dy = GRID_SIZE * 2 - my
+
+                    map[my : my + dy, mx : mx + dx] = footprint[iy : iy + dy, ix : ix + dx]
+
+        return map
+
     def _get_info(self):
         info = {}
         info["ego"] = self.ego.get_state()
@@ -632,6 +675,7 @@ class Simulation:
                 actor_state["min_pt"] = min_pt
                 actor_states.append(actor_state)
 
+        info["map"] = self._get_map()
         info["actors"] = actor_states
         info["information_gain"] = self.information_gain
         return info
@@ -902,7 +946,7 @@ class Simulation:
             if u is not None:
                 self.draw_control_output(u)
 
-        # self.draw_information_gain(self.information_gain)
+        self.draw_information_gain(self.information_gain)
 
         if debug:
             # if self.maps is None:

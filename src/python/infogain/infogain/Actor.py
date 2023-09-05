@@ -12,6 +12,8 @@ import numpy as np
 import pygame
 from enum import Enum, IntEnum
 
+import polycheck
+
 import ModelParameters.GenericCar as GenericCar
 import ModelParameters.Ackermann as Ackermann
 import ModelParameters.SkidSteer as SkidSteer
@@ -35,7 +37,7 @@ class Actor:
         outline_colour="darkgrey",
         scale=1.0,
         ratio=1.0,
-        params=None,
+        resolution=1.0,
     ):
         self.id = id
 
@@ -64,16 +66,17 @@ class Actor:
         self.outline_colour = outline_colour
         self.scale = scale
         self.ratio = ratio
+        self.resolution = resolution
 
         self.goal = goal
 
         self.poly_def = np.array(
             [
                 [2.2, 0.8, 1],
-                [-2.2, 0.8, 1],
-                [-2.2, -0.8, 1],
-                [2.2, -0.8, 1],
                 [2.45, 0, 1],
+                [2.2, -0.8, 1],
+                [-2.2, -0.8, 1],
+                [-2.2, 0.8, 1],
                 [2.2, 0.8, 1],
             ]
         ).T
@@ -127,6 +130,23 @@ class Actor:
         max_d = np.max(poly, axis=0)
         self.bounding_box = (*min_d, *max_d)
         self.extent = max(np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2]))
+
+        self.update_footprint()
+
+    def update_footprint(self):
+        foot_x = int(np.ceil((self.bounding_box[2] - self.bounding_box[0]) / self.resolution))
+        foot_y = int(np.ceil((self.bounding_box[3] - self.bounding_box[1]) / self.resolution))
+
+        xs, ys = np.meshgrid(range(foot_x), range(foot_y), indexing="xy")
+        pts = [[x, y] for x, y in zip(xs.flatten(), ys.flatten())]
+        poly = list(np.round((self.get_poly() - self.bounding_box[0:2]) / self.resolution, 0))
+
+        res = np.zeros([len(pts), 1]).astype(np.uint32)
+        polycheck.contains(poly, pts, res)
+        self.footprint = res.reshape(xs.shape)
+
+    def get_footprint(self):
+        return self.footprint
 
     def get_extent(self):
         return self.extent
@@ -200,9 +220,6 @@ class Actor:
         }
         return state
 
-    def get_outline(self):
-        return self.get_poly()
-
     def get_extent(self):
         return self.extent
 
@@ -222,6 +239,7 @@ class Car(Actor):
         colour="lightblue",
         outline_colour="dodgerblue",
         scale=1,
+        resolution=1,
         image_prefix="",
         image_scale=1,  # pixels / m
     ):
@@ -232,6 +250,7 @@ class Car(Actor):
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
+            resolution=resolution,
         )
         self.max_v = GenericCar.MAX_V
         self.min_v = GenericCar.MIN_V
@@ -239,10 +258,10 @@ class Car(Actor):
         self.poly_def = np.array(
             [
                 [2.5, 1.0, 1],
-                [-2.5, 1.0, 1],
-                [-2.5, -1.0, 1],
-                [2.5, -1.0, 1],
                 [2.75, 0, 1],
+                [2.5, -1.0, 1],
+                [-2.5, -1.0, 1],
+                [-2.5, 1.0, 1],
                 [2.5, 1.0, 1],
             ]
         ).T
@@ -268,6 +287,7 @@ class AckermanCar(Actor):
         colour="orange",
         outline_colour="darkorange",
         scale=1,
+        resolution=1,
         image_prefix="",
         image_scale=1.0,
     ):
@@ -278,6 +298,7 @@ class AckermanCar(Actor):
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
+            resolution=resolution,
         )
 
         self.max_v = Ackermann.MAX_V
@@ -290,10 +311,10 @@ class AckermanCar(Actor):
         self.poly_def = np.array(
             [
                 [2.5, 1.0, 1],
-                [-2.5, 1.0, 1],
-                [-2.5, -1.0, 1],
-                [2.5, -1.0, 1],
                 [2.75, 0, 1],
+                [2.5, -1.0, 1],
+                [-2.5, -1.0, 1],
+                [-2.5, 1.0, 1],
                 [2.5, 1.0, 1],
             ]
         ).T
@@ -347,6 +368,7 @@ class Pedestrian(Actor):
         colour="blue",
         outline_colour="darkblue",
         scale=1,
+        resolution=1,
     ):
         super().__init__(
             id,
@@ -355,6 +377,7 @@ class Pedestrian(Actor):
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
+            resolution=resolution,
         )
         self.max_v = MAX_PEDESTRIAN_SPEED
         self.min_v = 0
@@ -364,9 +387,9 @@ class Pedestrian(Actor):
         self.poly_def = np.array(
             [
                 [0.40, 0, 1],
-                [0, 0.2, 1],
-                [-40, 0, 1],
                 [0, -0.2, 1],
+                [-40, 0, 1],
+                [0, 0.2, 1],
                 [0.40, 0, 1],
             ]
         ).T
@@ -384,6 +407,7 @@ class Obstacle(Actor):
         outline_colour="darkgrey",
         scale=1,
         ratio=1,
+        resolution=1,
     ):
         super().__init__(
             id,
@@ -392,6 +416,7 @@ class Obstacle(Actor):
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
+            resolution=resolution,
         )
 
         self.max_v = 0
@@ -402,9 +427,9 @@ class Obstacle(Actor):
         self.poly_def = np.array(
             [
                 [0.5, 0.5 * self.ratio, 1],
-                [-0.5, 0.5 * self.ratio, 1],
-                [-0.5, -0.5 * self.ratio, 1],
                 [0.5, -0.5 * self.ratio, 1],
+                [-0.5, -0.5 * self.ratio, 1],
+                [-0.5, 0.5 * self.ratio, 1],
                 [0.5, 0.5 * self.ratio, 1],
             ]
         ).T
@@ -421,6 +446,7 @@ class Blank(Actor):
         colour="white",
         outline_colour="darkgrey",
         scale=1,
+        resolution=1,
     ):
         super().__init__(
             id,
@@ -429,6 +455,7 @@ class Blank(Actor):
             colour=colour,
             outline_colour=outline_colour,
             scale=scale,
+            resolution=resolution,
         )
         self.max_v = 0
         self.min_v = 0
@@ -438,17 +465,14 @@ class Blank(Actor):
         self.poly_def = np.array(
             [
                 [0.5, 0.5 * self.ratio, 1],
-                [-0.5, 0.5 * self.ratio, 1],
-                [-0.5, -0.5 * self.ratio, 1],
                 [0.5, -0.5 * self.ratio, 1],
+                [-0.5, -0.5 * self.ratio, 1],
+                [-0.5, 0.5 * self.ratio, 1],
                 [0.5, 0.5 * self.ratio, 1],
             ]
         ).T
 
         super().update_bounding_box()
-
-    def get_outline(self):
-        return None
 
     def is_real(self):
         return False
