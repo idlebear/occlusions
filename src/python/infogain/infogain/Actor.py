@@ -4,9 +4,8 @@ from config import (
     ACTOR_PATH_WIDTH,
     MAX_CAR_SPEED,
     MAX_PEDESTRIAN_SPEED,
-    CAR_IMAGE_LENGTH,
-    CAR_IMAGE_WIDTH,
 )
+
 from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
@@ -129,17 +128,25 @@ class Actor:
         min_d = np.min(poly, axis=0)
         max_d = np.max(poly, axis=0)
         self.bounding_box = (*min_d, *max_d)
-        self.extent = max(np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2]))
+        self.extent = max(
+            np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2])
+        )
 
         self.update_footprint()
 
     def update_footprint(self):
-        foot_x = int(np.ceil((self.bounding_box[2] - self.bounding_box[0]) / self.resolution))
-        foot_y = int(np.ceil((self.bounding_box[3] - self.bounding_box[1]) / self.resolution))
+        foot_x = int(
+            np.ceil((self.bounding_box[2] - self.bounding_box[0]) / self.resolution)
+        )
+        foot_y = int(
+            np.ceil((self.bounding_box[3] - self.bounding_box[1]) / self.resolution)
+        )
 
         xs, ys = np.meshgrid(range(foot_x), range(foot_y), indexing="xy")
         pts = [[x, y] for x, y in zip(xs.flatten(), ys.flatten())]
-        poly = list(np.round((self.get_poly() - self.bounding_box[0:2]) / self.resolution, 0))
+        poly = list(
+            np.round((self.get_poly() - self.bounding_box[0:2]) / self.resolution, 0)
+        )
 
         res = np.zeros([len(pts), 1]).astype(np.uint32)
         polycheck.contains(poly, pts, res)
@@ -268,7 +275,8 @@ class Car(Actor):
 
         self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
         self.actor_image = pygame.transform.scale(
-            self.actor_image, (GenericCar.LENGTH * image_scale, GenericCar.WIDTH * image_scale)
+            self.actor_image,
+            (GenericCar.LENGTH * image_scale, GenericCar.WIDTH * image_scale),
         )
 
         super().update_bounding_box()
@@ -321,7 +329,8 @@ class AckermanCar(Actor):
 
         self.actor_image = pygame.image.load(f"assets/{image_prefix}car.svg")
         self.actor_image = pygame.transform.scale(
-            self.actor_image, (Ackermann.LENGTH * image_scale, Ackermann.WIDTH * image_scale)
+            self.actor_image,
+            (Ackermann.LENGTH * image_scale, Ackermann.WIDTH * image_scale),
         )
 
         super().update_bounding_box()
@@ -338,17 +347,24 @@ class AckermanCar(Actor):
                     self.reached_goal = True
 
     def __move(self, dt):
-        self.x[STATE.X] = self.x[STATE.X] + self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
-        self.x[STATE.Y] = self.x[STATE.Y] + self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
+        self.x[STATE.X] = (
+            self.x[STATE.X] + self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
+        )
+        self.x[STATE.Y] = (
+            self.x[STATE.Y] + self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
+        )
         self.x[STATE.THETA] = (
-            self.x[STATE.THETA] + self.x[STATE.VELOCITY] * np.tan(self.x[STATE.DELTA]) / Ackermann.L * dt
+            self.x[STATE.THETA]
+            + self.x[STATE.VELOCITY] * np.tan(self.x[STATE.DELTA]) / Ackermann.L * dt
         )
         # self.x[STATE.THETA] = self.x[STATE.THETA] + self.x[STATE.VELOCITY] * np.tan(self.u[1]) / Ackermann.L * dt
 
         self.x[STATE.VELOCITY] += self.u[0] * dt
         self.x[STATE.VELOCITY] = np.clip(self.x[STATE.VELOCITY], self.min_v, self.max_v)
         self.x[STATE.DELTA] += self.u[1] * dt
-        self.x[STATE.DELTA] = np.clip(self.x[STATE.DELTA], -self.max_delta, self.max_delta)
+        self.x[STATE.DELTA] = np.clip(
+            self.x[STATE.DELTA], -self.max_delta, self.max_delta
+        )
 
     def set_control(self, u):
         self.u[0] = np.clip(u[0], self.min_a, self.max_a)
@@ -408,6 +424,8 @@ class Obstacle(Actor):
         scale=1,
         ratio=1,
         resolution=1,
+        image=None,
+        image_scale=1,
     ):
         super().__init__(
             id,
@@ -418,6 +436,8 @@ class Obstacle(Actor):
             scale=scale,
             resolution=resolution,
         )
+
+        self.ratio = ratio
 
         self.max_v = 0
         self.min_v = 0
@@ -435,6 +455,21 @@ class Obstacle(Actor):
         ).T
 
         super().update_bounding_box()
+
+        if image is not None:
+            length = self.bounding_box[2] - self.bounding_box[0]
+            width = self.bounding_box[3] - self.bounding_box[1]
+
+            self.actor_image = pygame.image.load(f"assets/{image}.svg")
+            self.actor_image = pygame.transform.scale(
+                self.actor_image,
+                (length * image_scale, width * image_scale),
+            )
+        else:
+            self.actor_image = None
+
+    def get_image(self):
+        return self.actor_image
 
 
 class Blank(Actor):
