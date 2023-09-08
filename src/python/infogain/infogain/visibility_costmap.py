@@ -3,6 +3,7 @@
 #
 from scipy import ndimage
 import numpy as np
+from time import time
 
 from config import *
 from trajectory import generate_trajectory
@@ -18,13 +19,18 @@ def dump_grid(grid):
 
 
 def build_visibility_costmap(obs, map, obs_trajectory, target_trajectory, v_des, dt):
+    tic = time()
+
     distance_grid = np.ones([GRID_SIZE, GRID_SIZE])
 
     x0 = obs_trajectory.x[0]
     y0 = obs_trajectory.y[0]
 
     locs = [
-        [int(GRID_SIZE // 2 + (x - x0) / GRID_RESOLUTION), int(GRID_SIZE // 2 + (y - y0) / GRID_RESOLUTION)]
+        [
+            int(GRID_SIZE // 2 + (x - x0) / GRID_RESOLUTION),
+            int(GRID_SIZE // 2 + (y - y0) / GRID_RESOLUTION),
+        ]
         for (x, y) in zip(obs_trajectory.x, obs_trajectory.y)
     ]
     for loc in locs:

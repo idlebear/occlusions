@@ -64,7 +64,7 @@ def main(args):
             Q = (
                 np.array(
                     [
-                        [3.0, 0, 0, 0, 0],
+                        [5.0, 0, 0, 0, 0],
                         [0, 5.0, 0, 0, 0],
                         [0, 0, 1.0, 0, 0],
                         [0, 0, 0, 1.0, 0],
@@ -75,7 +75,7 @@ def main(args):
             )
             Qf = np.array(
                 [
-                    [1.0, 0, 0, 0, 0],
+                    [8.0, 0, 0, 0, 0],
                     [0, 1.0, 0, 0, 0],
                     [0, 0, 1.0, 0, 0],
                     [0, 0, 0, 1.0, 0],
@@ -108,7 +108,6 @@ def main(args):
 
     total_time = 0
     while True:
-        print("Starting Action calc... ")
         tic = time.time()
 
         if args.method == "random":
@@ -125,12 +124,22 @@ def main(args):
                 info["ego"]["x"][STATE.DELTA],
             ]
             actors = []
-            print(f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}")
+            # print(
+            #     f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}"
+            # )
             for ac in info["actors"]:
                 radius = ac["extent"]  # + info["ego"]["extent"]
-                dist = -np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
-                print(f"Dist:{dist}, Safe:{radius}, diff:{dist+radius} {'AUUUGGGG' if dist+radius > 0 else ''}")
-                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
+                dist = np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
+                # print(
+                #     f"Dist:{dist}, Safe:{radius}, diff:{-dist+radius} {'AUUUGGGG' if -dist+radius > 0 else ''}"
+                # )
+                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"], dist])
+
+            # only keep the closest, and drop the distance parameter
+            if len(actors) > args.actors:
+                actors = sorted(actors, key=lambda actor: actor[-1])
+            actors = [a[:-1] for a in actors[: args.actors]]
+
             while len(actors) < args.actors:
                 actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
 
@@ -147,23 +156,33 @@ def main(args):
                     a = 0
                 # if x > x_fin[0]:
                 #     x = x_fin[0]
-                next_entry = [x, -1.5, v, 0, 0]
+                next_entry = [x, -LANE_WIDTH / 2.0, v, 0, 0]
                 traj.append(next_entry)
                 controls.append([V_DES, 0])
 
+            planning_start = time.time()
             try:
                 u, x = mpc.next(
                     obs=obs,
                     state=state,
-                    goal=[state[0] + 10, -1.5, 0, 0, 0],  # moving carrot...
+                    goal=[
+                        state[0] + 10,
+                        -LANE_WIDTH / 2.0,
+                        0,
+                        0,
+                        0,
+                    ],  # moving carrot...
                     agents=actors,
                     trajectory=traj,
                     controls=controls,
                     warm_start=True,
                 )
-            except Exception as e:
+            except SystemError as e:
                 print(traceback.format_exc())
                 print(e)
+                exit()
+
+            print(f"Planning time: {time.time() - planning_start:0.5}")
 
             # out = u[:, 0:4].full()
             # print(f"U0: {out[0,0]:6.5} | {out[0,1]:6.5} | {out[0,2]:6.5} | {out[0,3]:6.5}")
