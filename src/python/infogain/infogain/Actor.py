@@ -199,7 +199,7 @@ class Actor:
         virt_self = type(self)(id=self.id, x=self.x, goal=self.goal)
         states = []
 
-        for control in u:
+        for control in u.T:
             virt_self.set_control(control)
             virt_self.tick(dt)
             states.append(list(virt_self.x))

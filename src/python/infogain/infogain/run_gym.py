@@ -14,7 +14,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 
 from OcclusionGym import OcclusionEnv
 
-from mpc_controller import MPC, Ackermann5
+from mpc_controller import MPC, Ackermann5, MPPI
 from Actor import STATE
 from trajectory import generate_trajectory
 from visibility_costmap import build_visibility_costmap
@@ -71,7 +71,7 @@ def main(args):
                         [0, 0, 0, 0, 0.01],
                     ]
                 )
-                / PLANNING_HORIZON
+                / args.horizon
             )
             Qf = np.array(
                 [
@@ -82,14 +82,14 @@ def main(args):
                     [0, 0, 0, 0, 0.0],
                 ]
             )
-            R = np.array([[1.0, 0], [0, 1.0 / np.pi]]) / PLANNING_HORIZON
+            R = np.array([[1.0, 0], [0, 1.0 / np.pi]]) / args.horizon
 
-            M = np.array([1]) / PLANNING_HORIZON  # Higgins
+            M = np.array([1]) / args.horizon  # Higgins
             # M = np.array([2 / np.pi])  # Anderson
             mpc = MPC(
                 mode="Higgins",  # 'Anderson', 'Higgins', 'None'
                 vehicle=Ackermann5(),
-                planning_horizon=PLANNING_HORIZON,
+                planning_horizon=args.horizon,
                 num_agents=args.actors,
                 Q=Q,
                 Qf=Qf,
@@ -97,6 +97,8 @@ def main(args):
                 M=M,
                 dt=env.sim.tick_time,
             )
+        elif args.method == "mppi":
+            mppi = MPPI(vehicle=Ackermann5(), limits=(3, np.pi / 3), c_lambda=1, seed=args.seed)
 
     # reset the environment and collect the first observation and current state
     obs, info = env.reset()
@@ -132,38 +134,12 @@ def main(args):
             while len(actors) < args.actors:
                 actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
 
-            waypoints = [
-                state[0:2],
-            ]
-            # add a waypoint for every 5 m for V_DES * planning_horizon * dt * 2 -- double planning horizon
-            for _ in range(int(V_DES * env.sim.tick_time * PLANNING_HORIZON * 2.0 / WAYPOINT_INTERVAL)):
-                waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
-
-            # build the immediate planning trajectory
-            obs_trajectory = generate_trajectory(
-                waypoints, v=V_DES, t=(PLANNING_HORIZON * env.sim.tick_time), dt=env.sim.tick_time
-            )
-
-            # and a target trajectory to define the locations to observe
-            target_trajectory = generate_trajectory(
-                waypoints, v=V_DES, t=(PLANNING_HORIZON * env.sim.tick_time) * 2, dt=env.sim.tick_time
-            )
-
-            costmap = build_visibility_costmap(
-                obs,
-                map=info["map"],
-                obs_trajectory=obs_trajectory[0],
-                target_trajectory=target_trajectory[0],
-                v_des=V_DES,
-                dt=env.sim.tick_time,
-            )
-
             x = state[0]
             v = state[2]
             a = A_DES
             traj = []
             controls = []
-            for _ in range(mpc.planning_horizon):
+            for _ in range(args.horizon):
                 x += v * env.sim.tick_time
                 v += a * env.sim.tick_time
                 if v >= V_DES:
@@ -201,6 +177,84 @@ def main(args):
             # # print(f"X4: {out[4,0]:6.5} | {out[4,1]:6.5} | {out[4,2]:6.5} | {out[4,3]:6.5} | {out[4,4]:6.5}")
 
             action = u[:, 0].full()
+            u = np.array(u.full()).T
+        elif args.method == "mppi":
+            state = [
+                info["ego"]["x"][STATE.X],
+                info["ego"]["x"][STATE.Y],
+                info["ego"]["x"][STATE.VELOCITY],
+                info["ego"]["x"][STATE.THETA],
+                info["ego"]["x"][STATE.DELTA],
+            ]
+
+            actors = []
+            print(f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}")
+            for ac in info["actors"]:
+                radius = ac["extent"]  # + info["ego"]["extent"]
+                dist = -np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
+                print(f"Dist:{dist}, Safe:{radius}, diff:{dist+radius} {'AUUUGGGG' if dist+radius > 0 else ''}")
+                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
+            while len(actors) < args.actors:
+                actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
+
+            ###
+            # Build controls for a nominal (straight) trajectory
+            controls = []
+            for _ in range(args.horizon):
+                controls.append([V_DES, 0])
+            controls = np.array(controls).T
+
+            ###
+            # Build the visibility costmap
+            waypoints = [
+                state[0:2],
+            ]
+
+            # add a waypoint for every 5 m for V_DES * args.horizon * dt * 2 -- double planning horizon
+            for _ in range(int(V_DES * env.sim.tick_time * args.horizon * 2.0 / WAYPOINT_INTERVAL)):
+                waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
+
+            # build the immediate planning trajectory
+            obs_trajectory = generate_trajectory(
+                waypoints, v=V_DES, t=(args.horizon * env.sim.tick_time), dt=env.sim.tick_time
+            )
+
+            # and a target trajectory to define the locations to observe
+            target_trajectory = generate_trajectory(
+                waypoints, v=V_DES, t=(args.horizon * env.sim.tick_time) * 2, dt=env.sim.tick_time
+            )
+
+            costmap = build_visibility_costmap(
+                obs,
+                map=info["map"],
+                obs_trajectory=obs_trajectory[0],
+                target_trajectory=target_trajectory[0],
+                v_des=V_DES,
+                dt=env.sim.tick_time,
+            )
+
+            # Use the X position of the AV to position the cost map longitudinally, but
+            # nominal trajectory position -- -LANE_WIDTH/2 to position vertically
+            origin = [
+                state[0] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+                -LANE_WIDTH / 2 - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+            ]
+
+            try:
+                u, u_var = mppi.find_control(
+                    costmap=costmap,
+                    origin=origin,
+                    resolution=GRID_RESOLUTION,
+                    u_nom=controls,
+                    initial_state=np.array(state),
+                    samples=args.samples,
+                    dt=env.sim.tick_time,
+                )
+            except Exception as e:
+                print(traceback.format_exc())
+                print(e)
+
+            action = u[:, 0]
         else:
             ## Pseudo Car
             # # fixed forward motion (for testing)
@@ -231,7 +285,7 @@ def main(args):
 
         obs, rewards, done, info = env.step(action)
         print(f"Step Completed: {time.time()-toc:0.5}")
-        env.render(u=u.full().T)
+        env.render(u=u)
         print(f"    ...and rendered.  Total time: { time.time() - tic:0.5}")
 
 
@@ -299,7 +353,19 @@ if __name__ == "__main__":
         "--method",
         default="none",
         type=str,
-        help="control method to be used: none, rl, mpc",
+        help="control method to be used: none, rl, mpc, mppi",
+    )
+    argparser.add_argument(
+        "--samples",
+        default=100,
+        type=int,
+        help="Number of samples to generate if sampling based method in use (e.g., MPPI)",
+    )
+    argparser.add_argument(
+        "--horizon",
+        default=10,
+        type=int,
+        help="Length of the planning horizon",
     )
     argparser.add_argument(
         "--multipass",
