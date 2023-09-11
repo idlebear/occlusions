@@ -98,7 +98,9 @@ class Window:
         self._scale = scale
         self._border_offset = 10
 
-        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+        self.tmp_screen = pygame.Surface(
+            (self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA
+        )
 
     # def _get_location_on_screen(self, origin, location):
     #     return [
@@ -118,7 +120,9 @@ class Window:
         ex = self._xmargin + end[0] * self._env_size / self._scale
         ey = self._ymargin + end[1] * self._env_size / self._scale
 
-        pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
+        pygame.draw.line(
+            self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width
+        )
 
     def draw_circle(self, centre, colour, radius=2):
         cx = self._xmargin + centre[0] * self._env_size / self._scale
@@ -135,8 +139,10 @@ class Window:
             self.screen,
             colour,
             (
-                self._xmargin + (location[0] - width / 2.0) * self._env_size / self._scale,
-                self._ymargin + (location[1] - height / 2.0) * self._env_size / self._scale,
+                self._xmargin
+                + (location[0] - width / 2.0) * self._env_size / self._scale,
+                self._ymargin
+                + (location[1] - height / 2.0) * self._env_size / self._scale,
                 width * self._env_size / self._scale,
                 height * self._env_size / self._scale,
             ),
@@ -241,7 +247,9 @@ class Window:
         )
 
         text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN))
+        self.screen.blit(
+            text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN)
+        )
 
 
 class Simulation:
@@ -283,7 +291,9 @@ class Simulation:
             self.image_scale = None
 
         # load the draw method
-        self.load_generator(generator_name=generator_name, generator_args=generator_args)
+        self.load_generator(
+            generator_name=generator_name, generator_args=generator_args
+        )
 
         # self.grid = VelocityGrid(
         #     height=GRID_HEIGHT,
@@ -326,7 +336,9 @@ class Simulation:
             resolution=SCAN_RESOLUTION,
             stddev_range=SCAN_STDDEV_RANGE,
         )
-        self.lmg = LaserMeasurementGrid(params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION)
+        self.lmg = LaserMeasurementGrid(
+            params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION
+        )
 
         # TODO: ROI is fixed for the time being -- should move this to the ego/agent and make it relative to the vehicle speed.  Note that we should also
         #       position the ROI relative to the AV, but for now, we'll centre it on the road.
@@ -376,7 +388,9 @@ class Simulation:
         # self.grid.reset()
 
         return (
-            self._get_next_observation(self._calculate_future_visibility(), self.tick_time),
+            self._get_next_observation(
+                self._calculate_future_visibility(), self.tick_time
+            ),
             self._get_info(),
         )
 
@@ -411,11 +425,15 @@ class Simulation:
         y = 0
 
         loc = get_location(origin=self.ego.x[0:2], location=(x, y))
-        self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, WINDOW_SIZE * 2)
+        self.window.draw_rect(
+            ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, WINDOW_SIZE * 2
+        )
 
         x = (x // 4) * 4.0
         for _ in range(int(WINDOW_SIZE * 2 // 4)):
-            loc = get_location(origin=self.ego.x[0:2], location=(x - WINDOW_SIZE / 2, y - 0.2))
+            loc = get_location(
+                origin=self.ego.x[0:2], location=(x - WINDOW_SIZE / 2, y - 0.2)
+            )
             self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.4, 2.5)
             x += 4
 
@@ -427,7 +445,9 @@ class Simulation:
         if actor_image is not None:
             actor_pos = get_location(origin=self.ego.x[0:2], location=actor.x[0:2])
             # drawing with y inverted reverse the rotation to correct the display
-            self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
+            self.window.draw_image(
+                image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA]
+            )
         else:
             actor_poly = actor.get_poly()
             if actor_poly is not None:
@@ -496,7 +516,10 @@ class Simulation:
             if type(actor) is Blank:
                 continue
 
-            if actor.x[0] > self.ego.x[0] + EGO_X_OFFSET and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5:
+            if (
+                actor.x[0] > self.ego.x[0] + EGO_X_OFFSET
+                and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5
+            ):
                 pts = actor.get_poly()
                 poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
                 shapes.append(vis.Polygon(poly_pts))
@@ -648,9 +671,13 @@ class Simulation:
             self.next_agent_x = x
 
     def _get_next_observation(self, scan_data, dt):
-        grid_data = self.lmg.generateGrid(VectorFloat(scan_data), self.ego.x[STATE.THETA] * 180.0 / np.pi)
+        grid_data = self.lmg.generateGrid(
+            VectorFloat(scan_data), self.ego.x[STATE.THETA] * 180.0 / np.pi
+        )
         self.dogm.updateGrid(grid_data, self.ego.x[0], self.ego.x[1], dt)
-        return renderOccupancyGrid(self.dogm)  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
+        return renderOccupancyGrid(
+            self.dogm
+        )  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
 
         # # rescale the velocity grid to be on the range [0,1]
         # velocity_map = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
@@ -679,8 +706,12 @@ class Simulation:
                     footprint = actor.get_footprint()
                     dy, dx = footprint.shape
 
-                    mx = GRID_SIZE + int((actor.bounding_box[0] - self.ego.x[0]) / GRID_RESOLUTION)
-                    my = GRID_SIZE + int((actor.bounding_box[1] - self.ego.x[1]) / GRID_RESOLUTION)
+                    mx = GRID_SIZE + int(
+                        (actor.bounding_box[0] - self.ego.x[0]) / GRID_RESOLUTION
+                    )
+                    my = GRID_SIZE + int(
+                        (actor.bounding_box[1] - self.ego.x[1]) / GRID_RESOLUTION
+                    )
                     ix = 0
                     iy = 0
 
@@ -701,7 +732,9 @@ class Simulation:
                     if my + dy >= GRID_SIZE * 2:
                         dy = GRID_SIZE * 2 - my
 
-                    map[my : my + dy, mx : mx + dx] = footprint[iy : iy + dy, ix : ix + dx]
+                    map[my : my + dy, mx : mx + dx] = footprint[
+                        iy : iy + dy, ix : ix + dx
+                    ]
 
         return map
 
@@ -794,7 +827,9 @@ class Simulation:
         for row in obs_pts:
             total_ig = 0
             for pt in row:
-                total_ig += self._calculate_information_gain_from(pt, occupancy_grid=occupancy_grid)
+                total_ig += self._calculate_information_gain_from(
+                    pt, occupancy_grid=occupancy_grid
+                )
             ig_results.append(total_ig)
 
         return ig_results
@@ -838,11 +873,19 @@ class Simulation:
             if self.ig_images is None:
                 num_maps = 2
                 num_rows = 1
-                self.ig_fig, self.ig_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15))
+                self.ig_fig, self.ig_ax = plt.subplots(
+                    num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15)
+                )
 
                 self.ig_images = []
-                self.ig_images.append(self.ig_ax[0].imshow(np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)))
-                self.ig_images.append(self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8)))
+                self.ig_images.append(
+                    self.ig_ax[0].imshow(
+                        np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)
+                    )
+                )
+                self.ig_images.append(
+                    self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8))
+                )
 
             grid = (renderOccupancyGrid(self.dogm) * 255.0).astype(np.uint8)
             for pt in self.roi:
@@ -915,8 +958,8 @@ class Simulation:
 
         # apply the requested action to the ego vehicle
         self.ego.set_control(action)
-        # self._generate_new_agents()
-        self._generate_parkade()
+        self._generate_new_agents()
+        # self._generate_parkade()
 
         # move everyone
         finished_actors = []
@@ -931,7 +974,8 @@ class Simulation:
                 #     actor.set_collided()
 
             if actor.at_goal() or (
-                actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
+                actor.x[0] < self.ego.x[0]
+                and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
             ):
                 finished_actors.append(actor)
 
@@ -1018,7 +1062,9 @@ class Simulation:
 
             if self.maps is None:
                 self.map_fig, self.map_ax = plt.subplots(num=FIG_MAPS)
-                self.maps = self.map_ax.imshow(np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
+                self.maps = self.map_ax.imshow(
+                    np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8)
+                )
                 plt.show(block=False)
 
             map_img = Image.fromarray(

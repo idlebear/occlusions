@@ -18,7 +18,9 @@ def dump_grid(grid):
     plt.show(block=False)
 
 
-def build_visibility_costmap(obs, map, origin, resolution, obs_trajectory, target_trajectory, v_des, dt):
+def build_visibility_costmap(
+    obs, map, origin, resolution, obs_trajectory, target_trajectory, v_des, dt
+):
     tic = time()
 
     distance_grid = np.ones([GRID_SIZE, GRID_SIZE])
@@ -36,7 +38,9 @@ def build_visibility_costmap(obs, map, origin, resolution, obs_trajectory, targe
     for loc in locs:
         if loc[0] < GRID_SIZE and loc[1] < GRID_SIZE:
             distance_grid[loc[1], loc[0]] = 0
-    distance_grid = ndimage.distance_transform_cdt(distance_grid, metric="chessboard").astype(np.float64)
+    distance_grid = ndimage.distance_transform_cdt(
+        distance_grid, metric="chessboard"
+    ).astype(np.float64)
 
     obs_pts = np.where(distance_grid < LANE_WIDTH / resolution)
     obs_pts = [[x + GRID_SIZE // 2, y + GRID_SIZE // 2] for y, x in zip(*obs_pts)]
@@ -50,18 +54,31 @@ def build_visibility_costmap(obs, map, origin, resolution, obs_trajectory, targe
         t = target_trajectory.t[index] - t0
         dy = max(1, int(t * OPPONENT_CAR_SPEED / resolution))
 
-        _x = int((target_trajectory.x[index] - target_trajectory.x[0]) / resolution + GRID_SIZE)
-        _y = int((target_trajectory.y[index] - target_trajectory.y[0]) / resolution + GRID_SIZE)
+        _x = int(
+            (target_trajectory.x[index] - target_trajectory.x[0]) / resolution
+            + GRID_SIZE
+        )
+        _y = int(
+            (target_trajectory.y[index] - target_trajectory.y[0]) / resolution
+            + GRID_SIZE
+        )
 
         _low_y = max(0, _y - dy)
         _high_y = min(GRID_SIZE * 2 - 1, _y + dy)
 
-        out_of_obs = _x < GRID_SIZE / 2 or _y < GRID_SIZE / 2 or _x > 3 * GRID_SIZE / 2 or _y > 3 * GRID_SIZE / 2
+        out_of_obs = (
+            _x < GRID_SIZE / 2
+            or _y < GRID_SIZE / 2
+            or _x > 3 * GRID_SIZE / 2
+            or _y > 3 * GRID_SIZE / 2
+        )
         target_pts.extend(
             [
                 (_x, y)
                 for y in np.arange(_low_y, _high_y, 1)
-                if out_of_obs or obs[int(y - GRID_SIZE / 2), int(_x - GRID_SIZE / 2)] > OCCUPANCY_THRESHOLD
+                if out_of_obs
+                or obs[int(y - GRID_SIZE / 2), int(_x - GRID_SIZE / 2)]
+                > OCCUPANCY_THRESHOLD
             ]
         )
 
@@ -100,12 +117,18 @@ def build_visibility_costmap(obs, map, origin, resolution, obs_trajectory, targe
 
     # start the visibility grid based on the supplied map, ensuring any occupied locations are toxic
     visibility_grid = (
-        map[int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2), int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2)] * 10000
+        map[
+            int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2),
+            int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2),
+        ]
+        * 10000
     )
 
     if len(target_pts):
         # add in the visibility values - making sure to account for the offset to the larger target map
         for pt, val in zip(obs_pts, summed_result):
-            visibility_grid[int(pt[1] - GRID_SIZE // 2), int(pt[0] - GRID_SIZE // 2)] += val
+            visibility_grid[
+                int(pt[1] - GRID_SIZE // 2), int(pt[0] - GRID_SIZE // 2)
+            ] += val
 
     return visibility_grid
