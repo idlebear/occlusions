@@ -31,12 +31,11 @@ class OcclusionEnv(gym.Env):
         except KeyError:
             seed = 42
 
-        try:
-            renderer = kwargs["renderer"]
-        except KeyError:
-            renderer = "None"
+        # try:
+        #     self.renderer = kwargs["renderer"]
+        # except KeyError:
+        #     self.renderer = "pygame"
 
-        if
         pygame.init()
         size = (SCREEN_WIDTH, SCREEN_HEIGHT)
         self.screen = None
@@ -63,9 +62,7 @@ class OcclusionEnv(gym.Env):
         self.action_space = spaces.Discrete(NUM_ACCEL_ACTIONS * NUM_TURN_ACTIONS)
 
         # similarly the observation space is the current observation rendered as an image with the top layer being the occupancy
-        self.observation_space = spaces.Box(
-            low=0, high=255, shape=self.sim.observation_shape, dtype=np.uint8
-        )
+        self.observation_space = spaces.Box(low=0, high=255, shape=self.sim.observation_shape, dtype=np.uint8)
 
     def step(self, action):
         """

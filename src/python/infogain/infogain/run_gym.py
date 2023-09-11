@@ -16,7 +16,7 @@ from OcclusionGym import OcclusionEnv
 
 from mpc_controller import MPC, Ackermann5, MPPI
 from Actor import STATE
-from trajectory import generate_trajectory
+from trajectory import generate_trajectory, extract_acceleration_and_steering_control
 from visibility_costmap import build_visibility_costmap
 
 from typing import Callable
@@ -26,8 +26,9 @@ from config import *
 
 def main(args):
     x_fin = [10, -1.5, 0]
-    V_DES = 5.0
-    A_DES = 5.0
+    V_DES = 9.0
+    A_DES = 3.0
+    vehicle = Ackermann5()
 
     if args.method == "rl":
         # Parallel environments
@@ -88,7 +89,7 @@ def main(args):
             # M = np.array([2 / np.pi])  # Anderson
             mpc = MPC(
                 mode="Higgins",  # 'Anderson', 'Higgins', 'None'
-                vehicle=Ackermann5(),
+                vehicle=vehicle,
                 planning_horizon=args.horizon,
                 num_agents=args.actors,
                 Q=Q,
@@ -98,7 +99,8 @@ def main(args):
                 dt=env.sim.tick_time,
             )
         elif args.method == "mppi":
-            mppi = MPPI(vehicle=Ackermann5(), limits=(3, np.pi / 3), c_lambda=1, seed=args.seed)
+            mppi = MPPI(vehicle=vehicle, limits=(3, np.pi / 2), c_lambda=100, seed=args.seed)
+            controls_nom = np.array([[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]])
 
     # reset the environment and collect the first observation and current state
     obs, info = env.reset()
@@ -158,7 +160,7 @@ def main(args):
                 #     x = x_fin[0]
                 next_entry = [x, -LANE_WIDTH / 2.0, v, 0, 0]
                 traj.append(next_entry)
-                controls.append([V_DES, 0])
+                controls.append([a, 0])
 
             planning_start = time.time()
             try:
@@ -217,13 +219,6 @@ def main(args):
                 actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
 
             ###
-            # Build controls for a nominal (straight) trajectory
-            controls = []
-            for _ in range(args.horizon):
-                controls.append([V_DES, 0])
-            controls = np.array(controls).T
-
-            ###
             # Build the visibility costmap
             waypoints = [
                 state[0:2],
@@ -235,40 +230,85 @@ def main(args):
 
             # build the immediate planning trajectory
             obs_trajectory = generate_trajectory(
-                waypoints, v=V_DES, t=(args.horizon * env.sim.tick_time), dt=env.sim.tick_time
-            )
+                waypoints,
+                s=0,
+                d=(state[1] - (-LANE_WIDTH / 2)),
+                v=V_DES,
+                t=(args.horizon * env.sim.tick_time),
+                dt=env.sim.tick_time,
+            )[0]
 
             # and a target trajectory to define the locations to observe
             target_trajectory = generate_trajectory(
-                waypoints, v=V_DES, t=(args.horizon * env.sim.tick_time) * 2, dt=env.sim.tick_time
-            )
+                waypoints,
+                s=0,
+                d=(state[1] - (LANE_WIDTH / 2)),
+                v=V_DES,
+                t=(args.horizon * env.sim.tick_time) * 2,
+                dt=env.sim.tick_time,
+            )[0]
+
+            origin = [
+                state[0] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+                state[1] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+            ]
 
             costmap = build_visibility_costmap(
                 obs,
                 map=info["map"],
-                obs_trajectory=obs_trajectory[0],
-                target_trajectory=target_trajectory[0],
+                origin=origin,
+                resolution=GRID_RESOLUTION,
+                obs_trajectory=obs_trajectory,
+                target_trajectory=target_trajectory,
                 v_des=V_DES,
                 dt=env.sim.tick_time,
             )
 
-            # Use the X position of the AV to position the cost map longitudinally, but
-            # nominal trajectory position -- -LANE_WIDTH/2 to position vertically
-            origin = [
-                state[0] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
-                -LANE_WIDTH / 2 - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+            ###
+            # Construct the nominal trajectory
+            states_nom = [
+                state,
             ]
+            x = state[0]
+            v = state[2]
+            a = A_DES
+            for _ in range(args.horizon):
+                x += v * env.sim.tick_time
+                v += a * env.sim.tick_time
+                if v >= V_DES:
+                    v = V_DES
+                    a = 0
+                states_nom.append([x, -LANE_WIDTH / 2, v, 0, 0])
+
+            states_nom = np.array(states_nom).T  # each state in a column
 
             try:
                 u, u_var = mppi.find_control(
                     costmap=costmap,
                     origin=origin,
                     resolution=GRID_RESOLUTION,
-                    u_nom=controls,
+                    x_nom=states_nom,
+                    u_nom=controls_nom,
                     initial_state=np.array(state),
                     samples=args.samples,
                     dt=env.sim.tick_time,
                 )
+
+                # warm start the controls for next time
+                controls_nom[:, :-1] = controls_nom[:, 1:]
+                controls_nom[:, -1] = [A_DES, 0]
+
+                from mpc_controller import visualize_variations
+
+                visualize_variations(
+                    vehicle,
+                    initial_state=state,
+                    u_nom=controls_nom,
+                    u_variations=u_var,
+                    u_weighted=u,
+                    dt=env.sim.tick_time,
+                )
+
             except Exception as e:
                 print(traceback.format_exc())
                 print(e)

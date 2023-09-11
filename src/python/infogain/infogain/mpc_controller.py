@@ -92,7 +92,7 @@ class Ackermann3:
         return csi.vertcat(ds0, ds1, ds2)
 
 
-class Ackermann5:
+class Ackermann4:
     CONTROL_LEN = 2  # a, delta
     STATE_LEN = 4  # x, y, v, theta
 
@@ -150,7 +150,8 @@ class Ackermann5:
         dtheta = state[2] * csi.tan(state[4]) / self.L
         ddelta = control[1]
 
-        return csi.vertcat(dx, dy, dv, dtheta, ddelta)
+        # return csi.vertcat(dx, dy, dv, dtheta, ddelta)
+        return np.array([dx, dy, dv, dtheta, ddelta])
 
 
 class MPC:
@@ -441,88 +442,216 @@ class MPC:
         return u_opt, x_opt
 
 
-if __name__ == "__main__":
-    # Problem parameters
-    x_fin = [40, 1, 0, 0, 0]
-    x_init = [0, 0, 0, 0, 0]
-    v_des = 1
+# @brief: MPPI (Class) -- sampling based implementation of Model Predictive Control
+#
+class MPPI:
+    USE_FINAL_WEIGHT = True
 
-    Q = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0.1]])
+    def __init__(self, vehicle, limits, c_lambda=1, seed=None) -> None:
+        self.vehicle = vehicle
+        self.limits = limits
+        self.c_lambda = c_lambda
+        self.seed = seed
 
-    Qf = np.array([[2, 0, 0], [0, 2, 0], [0, 0, 0.2]])
+        self.gen = np.random.default_rng(seed)
 
-    R = np.array([[1, 0], [0, 1]])
+    # @brief: find_control -- sample the vehicle motion model to find the value
+    #         of variations in the control signal.
+    #
+    def find_control(self, costmap, origin, resolution, x_nom, u_nom, initial_state, samples, dt):
+        u_N, u_M = u_nom.shape
+        u_dist = np.zeros([samples, u_N, u_M])  # one extra for weights
+        u_weight = np.zeros([samples, u_M])
 
-    x_cur = x_init
-
-    step = 1
-
-    T = 20
-    dt = 0.1
-
-    agents = [[10, 0.00, 2], [25, 2, 2]]
-    # agents = [[20, 4, 2]]
-
-    planning_horizon = 10
-    control_len = Vehicle.control_len
-    state_len = Vehicle.state_len
-
-    mpc = MPC(
-        state_len=state_len,
-        control_len=control_len,
-        planning_horizon=planning_horizon,
-        num_agents=len(agents),
-        step_fn=Vehicle.runge_kutta_step,
-        Q=Q,
-        Qf=Qf,
-        R=R,
-        dt=dt,
-    )
-
-    x_hist = None
-    traj_hist = None
-
-    print(x_cur)
-    x_ideal = list(x_init)
-
-    for t in np.arange(0, T, dt):
-        traj = []
-        dx = v_des * dt
-
-        # traj = [[float(x_cur[0]) + dx * i, x_fin[1], 0] for i in range(1, planning_horizon+1)]
-        # controls = [[v_des, 0] for _ in range(planning_horizon)]
-
-        # Solve the NLP
-        state = {"ego": x_cur}
-        # u_opt, x_opt = mpc.next(None, state, goal=x_fin, trajectory=traj, controls=controls, agents=agents, warm_start=True)
-        u_opt, x_opt = mpc.next(None, state, goal=x_fin, agents=agents, warm_start=False)
-
-        # just use the optimizer's belief for the mo
-        x_cur = x_opt[:, 1].toarray()
-
-        if len(agents):
-            print(
-                f"X: {float(x_cur[0]):5.3}, Y: {float(x_cur[1]):5.3}, Dist: {np.linalg.norm( x_cur[0:2] - np.array(agents[0][0:2]).reshape(-1,1))}"
+        for i in range(samples):
+            self.__rollout(
+                costmap, origin, resolution, x_nom, u_nom, initial_state, dt, u_dist[i, ...], u_weight[i, ...]
             )
-        else:
-            print(f"X: {float(x_cur[0]):5.3}, Y: {float(x_cur[1]):5.3}, Theta: {float(x_cur[2]):5.3}")
 
-        if x_hist is None:
-            x_hist = x_cur
-            # traj_hist = np.array(traj[0]).reshape(-1, 1)
+        u_weighted = np.zeros_like(u_nom)
+        if not MPPI.USE_FINAL_WEIGHT:
+            for step in range(u_M):
+                total_weight = np.sum(u_weight[:, step])
+                u_weighted[:, step] = (
+                    u_nom[:, step]
+                    + np.sum(u_dist[:, :, step] * u_weight[:, step].reshape([-1, 1]), axis=0) / total_weight
+                )
         else:
-            x_hist = np.hstack([x_hist, x_cur])
-            # traj_hist = np.hstack([traj_hist, np.array(traj[0]).reshape(-1, 1)])
+            total_weight = np.sum(u_weight[:, -1])
+            for step in range(u_M):
+                u_dist[:, :, step] *= u_weight[:, -1].reshape([-1, 1])
+                u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
 
+        return u_weighted, u_dist
+
+    #
+    # @brief: __rollout (internal function) -- given an initial state, costmap, etc., perform
+    #         a trajectory rollout to see where we end up
+    #
+    # @returns: reward, control disturbances
+    #
+    def __rollout(self, costmap, origin, resolution, x_nom, u_nom, initial_state, dt, u_dist, u_weight):
+        score = 0
+        control_len, steps = u_nom.shape
+
+        # TODO: placeholder error multiplier -- may need to be scaled separately from overall score (?)
+        Q = np.diag([0.1, 5, 0.1, 0, 0])
+
+        state = np.array(initial_state)
+        for step in range(steps):
+            u_i = np.array(u_nom[:, step])
+            for control_num in range(control_len):
+                noise = self.gen.random() * self.limits[control_num] * 2 - self.limits[control_num]
+                u_i[control_num] += noise
+                u_dist[control_num, step] = noise
+
+            dstep = step_fn(self.vehicle, state, control=u_i, dt=dt)
+            state = state + dstep * dt
+
+            map_x = int((state[0] - origin[0] + resolution / 2.0) / resolution)
+            map_y = int((state[1] - origin[1] + resolution / 2.0) / resolution)
+
+            # penalize error in trajectory
+            state_err = x_nom[:, step + 1] - state
+            step_score = state_err.T @ Q @ state_err
+
+            max_y, max_x = costmap.shape
+            if map_x < 0 or map_x > max_x - 1 or map_y < 0 or map_y > max_y - 1:
+                raise ValueError("Planning outside of available cost map!")
+            else:
+                step_score = max(0, step_score + costmap[map_y, map_x])
+
+            score += step_score
+
+            u_weight[step] = np.exp((-1.0 / self.c_lambda) * score)
+
+
+import matplotlib.pyplot as plt
+
+global fig, ax, plot_lines, weighed_line, plot_backgrounds
+fig, ax = plt.subplots(nrows=1, ncols=2)
+plot_lines = None
+weighted_line = None
+plot_backgrounds = []
+
+
+def run_trajectory(vehicle, initial_state, controls, dt):
+    N, M = controls.shape
+
+    traj = np.zeros((len(initial_state), M + 1))
+    traj[:, 0] = initial_state
+
+    state = np.array(initial_state)
+    for m in range(M):
+        u = controls[:, m]
+        step = step_fn(vehicle=vehicle, state=state, control=u, dt=dt)
+        state += step * dt
+        traj[:, m + 1] = state
+
+    return traj
+
+
+def visualize_variations(vehicle, initial_state, u_nom, u_variations, u_weighted, dt):
+    # visualizing!
+
+    global fig, ax, plot_lines, weighted_line, plot_backgrounds
+
+    n_samples, n_controls, n_steps = u_variations.shape
+    new_traj_pts = []
+    for i in range(n_samples):
+        u_var = np.array(u_nom)
+        u_var = u_var + u_variations[i, ...]
+
+        traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_var, dt=dt)
+        new_traj_pts.append(np.expand_dims(traj, axis=0))
+
+    new_traj_pts = np.vstack(new_traj_pts)
+
+    traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_weighted, dt=dt)
+
+    if plot_lines is None:
+        plot_lines = ax[0].plot(new_traj_pts[:, 0, :].T, new_traj_pts[:, 1, :].T)
+        plot_initialized = True
+        weighted_line = ax[1].plot(traj[0, :], traj[1, :])
+
+        ax[0].axis("equal")
+        ax[1].axis("equal")
+        plt.show(block=False)
+    else:
+        for line, data in zip(plot_lines, new_traj_pts):
+            line.set_data(data[0, :], data[1, :])
+
+        weighted_line[0].set_data(traj[0, :], traj[1, :])
+
+        ax[0].relim()
+        ax[0].autoscale_view()
+        ax[1].relim()
+        ax[1].autoscale_view()
+
+        plt.pause(0.01)
+
+
+if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots()
-    plt.plot(np.arange(0, T, dt), x_hist[0, :])
+    vehicle = Ackermann5()
+    roller = MPPI(vehicle, (2, np.pi / 2.0), 1, 42)
 
-    fig, ax = plt.subplots()
-    plt.plot(x_hist[0, :], x_hist[1, :])
-    # plt.plot(traj_hist[0, :], traj_hist[1, :])
-    ax.axis("equal")
-    plt.show()
+    samples = 10
+    steps = 20
+    dt = 0.2
+    L = 3.0
 
-    print("done")
+    u_nom = np.array([[1 for i in range(steps)], [0 for i in range(steps)]])
+
+    origin = [-1.0, -6]
+    resolution = 0.1
+
+    mapsize = 120
+    peak_x = 8.0
+    peak_y = 0
+
+    costmap = np.zeros([mapsize, mapsize])
+
+    for i in range(mapsize):
+        for j in range(mapsize):
+            x_offset = origin[0] + i * resolution
+            y_offset = origin[1] + j * resolution
+
+            value = (5 - abs(y_offset - peak_y)) / 10
+            if y_offset > 0.1:
+                value = 100
+
+            # if peak_x - x_offset < 0:
+            #     value = 100
+
+            costmap[j, i] = value
+
+    initial = np.array([0, 0, 0, 0, 0]).astype(np.float64)
+
+    u, u_variations = roller.find_control(costmap, origin, resolution, u_nom, initial, samples, dt)
+
+    state = np.array(initial)
+    last_distance = 10000.0
+
+    for i in range(steps):
+        control = np.array(u[:, i])
+        step = step_fn(vehicle, state, control, dt)
+        state = state + step * dt
+
+        dx = peak_x - state[0]
+        dy = peak_y - state[1]
+        dist = np.sqrt(dx * dx + dy * dy)
+
+        flag = ""
+        if last_distance < dist:
+            flag = " (**) "
+        last_distance = dist
+
+        print(
+            f"State: {state[0]:0.4},{state[1]:0.4},{state[2]:0.4} -- Control: {control[0]:0.4},{control[0]:0.4} -- Distance: {dist:0.4} {flag}"
+        )
+
+    visualize_variations(
+        Ackermann5(), initial_state=initial, u_nom=u_nom, u_variations=u_variations, u_weighted=u, dt=dt
+    )
