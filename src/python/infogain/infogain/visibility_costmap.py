@@ -82,6 +82,9 @@ def build_visibility_costmap(
             ]
         )
 
+    # start the visibility grid based on the supplied map, ensuring any occupied locations are toxic
+    visibility_grid = np.ones([GRID_SIZE, GRID_SIZE])
+
     if len(target_pts):
         # results are num observation points rows by num region of interest points columns
         result = np.zeros((len(obs_pts), len(target_pts)))
@@ -111,24 +114,15 @@ def build_visibility_costmap(
         if max_result > 0:
             # we want the trajectories that have more visibility to be rewarded, so reverse the
             # sense -- no information is 'bad'
-            summed_result = -np.square(summed_result / max_result) * 30
+            summed_result = 1 - np.square(summed_result / max_result)
+
+            # add in the visibility values - making sure to account for the offset to the larger target map
+            for pt, val in zip(obs_pts, summed_result):
+                visibility_grid[
+                    int(pt[1] - GRID_SIZE // 2), int(pt[0] - GRID_SIZE // 2)
+                ] = val
         else:
-            summed_result += 0.0001  # temp placeholder for  a proper distance reward
-
-    # start the visibility grid based on the supplied map, ensuring any occupied locations are toxic
-    visibility_grid = (
-        map[
-            int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2),
-            int(GRID_SIZE / 2) : int(3 * GRID_SIZE / 2),
-        ]
-        * 10000
-    )
-
-    if len(target_pts):
-        # add in the visibility values - making sure to account for the offset to the larger target map
-        for pt, val in zip(obs_pts, summed_result):
-            visibility_grid[
-                int(pt[1] - GRID_SIZE // 2), int(pt[0] - GRID_SIZE // 2)
-            ] += val
+            # nothing to do
+            pass
 
     return visibility_grid

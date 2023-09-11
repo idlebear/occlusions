@@ -958,8 +958,8 @@ class Simulation:
 
         # apply the requested action to the ego vehicle
         self.ego.set_control(action)
-        self._generate_new_agents()
-        # self._generate_parkade()
+        # self._generate_new_agents()
+        self._generate_parkade()
 
         # move everyone
         finished_actors = []
