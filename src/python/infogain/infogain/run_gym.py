@@ -14,10 +14,11 @@ from stable_baselines3.common.evaluation import evaluate_policy
 
 from OcclusionGym import OcclusionEnv
 
-from mpc_controller import MPC, Ackermann5, MPPI
+from mpc_controller import MPC, Ackermann5, MPPI, rollout_trajectory
 from Actor import STATE
-from trajectory import generate_trajectory, extract_acceleration_and_steering_control
-from visibility_costmap import build_visibility_costmap
+from trajectory import generate_trajectory, validate_controls
+from visibility_costmap import update_visibility_costmap
+from Grid.VisibilityGrid import VisibilityGrid
 
 from typing import Callable
 
@@ -26,7 +27,7 @@ from config import *
 
 def main(args):
     x_fin = [10, -1.5, 0]
-    V_DES = 9.0
+    V_DES = 7.0
     A_DES = 3.0
     vehicle = Ackermann5()
 
@@ -99,18 +100,23 @@ def main(args):
                 dt=env.sim.tick_time,
             )
         elif args.method == "mppi":
+            if args.visibility_cost == "Ours":
+                M = 200
+            elif args.visibility_cost == "Higgins":
+                M = 0.9
+            else:
+                M = 0
             mppi = MPPI(
                 mode=args.visibility_cost,
                 vehicle=vehicle,
                 limits=(3, np.pi / 2),
-                c_lambda=200,
-                Q=np.diag([0.1, 5, 0.1, 0, 0]),
-                M=0.5,
+                c_lambda=250,
+                Q=np.diag([2.0, 5.0, 5.0, 0, 0]),
+                M=M,
                 seed=args.seed,
             )
-            controls_nom = np.array(
-                [[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]]
-            )
+            controls_nom = np.array([[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]])
+            visibility_costmap = VisibilityGrid(dim=GRID_WIDTH, resolution=GRID_RESOLUTION)
 
     # reset the environment and collect the first observation and current state
     obs, info = env.reset()
@@ -124,9 +130,7 @@ def main(args):
 
         if args.method == "random":
             # fixed forward motion (for testing)
-            action = np.array(
-                [np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6]
-            )
+            action = np.array([np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6])
         elif args.method == "rl":
             action, _states = model.predict(obs)
         elif args.method == "mpc":
@@ -143,16 +147,11 @@ def main(args):
             # )
             for ac in info["actors"]:
                 radius = ac["extent"]  # + info["ego"]["extent"]
-                dist = np.sqrt(
-                    (ac["x"][STATE.X] - state[0]) ** 2
-                    + (ac["x"][STATE.Y] - state[1]) ** 2
-                )
+                dist = np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
                 # print(
                 #     f"Dist:{dist}, Safe:{radius}, diff:{-dist+radius} {'AUUUGGGG' if -dist+radius > 0 else ''}"
                 # )
-                actors.append(
-                    [ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"], dist]
-                )
+                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"], dist])
 
             # only keep the closest, and drop the distance parameter
             if len(actors) > args.actors:
@@ -203,17 +202,6 @@ def main(args):
 
             print(f"Planning time: {time.time() - planning_start:0.5}")
 
-            # out = u[:, 0:4].full()
-            # print(f"U0: {out[0,0]:6.5} | {out[0,1]:6.5} | {out[0,2]:6.5} | {out[0,3]:6.5}")
-            # print(f"U1: {out[1,0]:6.5} | {out[1,1]:6.5} | {out[1,2]:6.5} | {out[1,3]:6.5}")
-
-            # out = x[:, 0:5].full()
-            # print(f"X0: {out[0,0]:6.5} | {out[0,1]:6.5} | {out[0,2]:6.5} | {out[0,3]:6.5} | {out[0,4]:6.5}")
-            # print(f"X1: {out[1,0]:6.5} | {out[1,1]:6.5} | {out[1,2]:6.5} | {out[1,3]:6.5} | {out[1,4]:6.5}")
-            # # print(f"X2: {out[2,0]:6.5} | {out[2,1]:6.5} | {out[2,2]:6.5} | {out[2,3]:6.5} | {out[2,4]:6.5}")
-            # print(f"X3: {out[3,0]:6.5} | {out[3,1]:6.5} | {out[3,2]:6.5} | {out[3,3]:6.5} | {out[3,4]:6.5}")
-            # # print(f"X4: {out[4,0]:6.5} | {out[4,1]:6.5} | {out[4,2]:6.5} | {out[4,3]:6.5} | {out[4,4]:6.5}")
-
             action = u[:, 0].full()
             u = np.array(u.full())
         elif args.method == "mppi":
@@ -226,21 +214,10 @@ def main(args):
             ]
 
             actors = []
-            print(
-                f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}"
-            )
+            print(f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}")
             for ac in info["actors"]:
-                radius = ac["extent"]  # + info["ego"]["extent"]
-                # dist = -np.sqrt(
-                #     (ac["x"][STATE.X] - state[0]) ** 2
-                #     + (ac["x"][STATE.Y] - state[1]) ** 2
-                # )
-                # print(
-                #     f"Dist:{dist}, Safe:{radius}, diff:{dist+radius} {'AUUUGGGG' if dist+radius > 0 else ''}"
-                # )
-                actors.append(
-                    [ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]]
-                )
+                radius = 1.2  # ac["extent"]  # + info["ego"]["extent"]
+                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
 
             ###
             # Build the visibility costmap
@@ -249,12 +226,8 @@ def main(args):
             ]
 
             # add a waypoint for every 5 m for V_DES * args.horizon * dt * 2 -- double planning horizon
-            for _ in range(
-                int(V_DES * env.sim.tick_time * args.horizon * 2.0 / WAYPOINT_INTERVAL)
-            ):
-                waypoints.append(
-                    [waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2]
-                )
+            for _ in range(int(V_DES * env.sim.tick_time * args.horizon * 2.0 / WAYPOINT_INTERVAL)):
+                waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
 
             # build the immediate planning trajectory
             obs_trajectory = generate_trajectory(
@@ -281,8 +254,9 @@ def main(args):
                 state[1] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
             ]
 
-            costmap = build_visibility_costmap(
-                obs,
+            costmap = update_visibility_costmap(
+                costmap=visibility_costmap,
+                obs=obs,
                 map=info["map"],
                 origin=origin,
                 resolution=GRID_RESOLUTION,
@@ -312,7 +286,7 @@ def main(args):
 
             try:
                 u, u_var = mppi.find_control(
-                    costmap=costmap,
+                    costmap=visibility_costmap.normalized(),
                     origin=origin,
                     resolution=GRID_RESOLUTION,
                     x_nom=states_nom,
@@ -324,8 +298,8 @@ def main(args):
                 )
 
                 # warm start the controls for next time
-                controls_nom[:, :-1] = controls_nom[:, 1:]
-                controls_nom[:, -1] = [A_DES, 0]
+                controls_nom[:, :-1] = u[:, 1:]
+                # controls_nom[:, -1] = u[0, 0]
 
                 from mpc_controller import visualize_variations
 
@@ -342,7 +316,16 @@ def main(args):
                 print(traceback.format_exc())
                 print(e)
 
-            action = u[:, 0]
+            states = rollout_trajectory(vehicle=vehicle, state=state, controls=u.T, dt=env.sim.tick_time)
+            action = validate_controls(
+                vehicle=vehicle,
+                states=states,
+                controls=u.T,
+                obs=obs,
+                map=info["map"],
+                resolution=GRID_RESOLUTION,
+                dt=env.sim.tick_time,
+            )
         else:
             ## Pseudo Car
             # # fixed forward motion (for testing)
@@ -367,29 +350,30 @@ def main(args):
         count += 1
         toc = time.time()
 
-        total_time += toc - tic
-        print(
-            f"Last time: {toc-tic:0.5}, Average calculation time: {total_time/count:0.5}"
-        )
-        print(count, count * env.sim.tick_time)
+        planner_time = toc - tic
+        total_time += planner_time
+        print(f"Last time: {toc-tic:0.5}, Average calculation time: {total_time/count:0.5}")
 
+        step_tic = time.time()
         obs, rewards, done, info = env.step(action)
-        print(f"Step Completed: {time.time()-toc:0.5}")
+        toc = time.time()
+        step_time = toc - step_tic
+
+        render_tic = time.time()
         env.render(u=u)
-        print(f"    ...and rendered.  Total time: { time.time() - tic:0.5}")
+        toc = time.time()
+        render_time = toc - render_tic
+
+        print(
+            f"Planner:{planner_time:0.5}({total_time/count:0.5}), Step:{step_time:0.5}, Render:{render_time:0.5}, Total:{time.time() - tic}"
+        )
 
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description=__doc__)
-    argparser.add_argument(
-        "--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size"
-    )
-    argparser.add_argument(
-        "--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size"
-    )
-    argparser.add_argument(
-        "--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size"
-    )
+    argparser.add_argument("--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size")
+    argparser.add_argument("--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size")
+    argparser.add_argument("--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size")
     argparser.add_argument("-s", "--seed", default=None, type=int, help="Random Seed")
     argparser.add_argument(
         "-a",
@@ -438,17 +422,13 @@ if __name__ == "__main__":
         type=float,
         help="Length of Simulation Time Step",
     )
-    argparser.add_argument(
-        "--show-sim", action="store_true", help="Display the simulation window"
-    )
+    argparser.add_argument("--show-sim", action="store_true", help="Display the simulation window")
     argparser.add_argument(
         "--skip-training",
         action="store_true",
         help="skip the rl training and just run the inference engine",
     )
-    argparser.add_argument(
-        "--debug", action="store_true", help="Dummy mode -- just display the env"
-    )
+    argparser.add_argument("--debug", action="store_true", help="Dummy mode -- just display the env")
     argparser.add_argument(
         "--method",
         default="none",

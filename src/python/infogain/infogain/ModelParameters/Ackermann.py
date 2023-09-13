@@ -7,8 +7,8 @@ WIDTH = 1.9
 L = 2.875
 MAX_V = 10
 MIN_V = -10
-MAX_A = 10
-MIN_A = -10
+MAX_A = 5.0
+MIN_A = -4.3
 
 MAX_DELTA = 2.0 * pi / 3
 MIN_DELTA = -2.0 * pi / 3

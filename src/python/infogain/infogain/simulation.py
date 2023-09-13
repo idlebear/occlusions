@@ -14,18 +14,18 @@ from policies.flow.flow import flow
 from polycheck import Vertex, VertexList, PolygonList
 from polycheck import visibility_from_region, faux_scan
 
-from dogm_py import LaserMeasurementGridParams
-from dogm_py import LaserMeasurementGrid
-from dogm_py import DOGMParams
-from dogm_py import DOGM
-from dogm_py import VectorFloat
-from dogm_py import renderOccupancyGrid, renderDynamicOccupancyGrid
+# from dogm_py import LaserMeasurementGridParams
+# from dogm_py import LaserMeasurementGrid
+# from dogm_py import DOGMParams
+# from dogm_py import DOGM
+# from dogm_py import VectorFloat
+# from dogm_py import renderOccupancyGrid, renderDynamicOccupancyGrid
 
 # from dogm_py import renderMeasurement
 
-import ModelParameters.GenericCar as GenericCar
+from Grid import OccupancyGrid
+
 import ModelParameters.Ackermann as Ackermann
-import ModelParameters.SkidSteer as SkidSteer
 
 
 # local functions/imports
@@ -47,9 +47,6 @@ REWARD_DEVIATION_X = 10
 REWARD_PASSING = 1000
 REWARD_GOAL = 100
 
-# Figures
-FIG_MAPS = 1
-FIG_IG_MAPS = 2
 
 INFORMATION_GAIN_TRAJECTORIES = 3
 
@@ -98,9 +95,7 @@ class Window:
         self._scale = scale
         self._border_offset = 10
 
-        self.tmp_screen = pygame.Surface(
-            (self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA
-        )
+        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
 
     # def _get_location_on_screen(self, origin, location):
     #     return [
@@ -120,9 +115,7 @@ class Window:
         ex = self._xmargin + end[0] * self._env_size / self._scale
         ey = self._ymargin + end[1] * self._env_size / self._scale
 
-        pygame.draw.line(
-            self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width
-        )
+        pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
 
     def draw_circle(self, centre, colour, radius=2):
         cx = self._xmargin + centre[0] * self._env_size / self._scale
@@ -139,10 +132,8 @@ class Window:
             self.screen,
             colour,
             (
-                self._xmargin
-                + (location[0] - width / 2.0) * self._env_size / self._scale,
-                self._ymargin
-                + (location[1] - height / 2.0) * self._env_size / self._scale,
+                self._xmargin + (location[0] - width / 2.0) * self._env_size / self._scale,
+                self._ymargin + (location[1] - height / 2.0) * self._env_size / self._scale,
                 width * self._env_size / self._scale,
                 height * self._env_size / self._scale,
             ),
@@ -247,9 +238,7 @@ class Window:
         )
 
         text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(
-            text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN)
-        )
+        self.screen.blit(text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN))
 
 
 class Simulation:
@@ -291,9 +280,7 @@ class Simulation:
             self.image_scale = None
 
         # load the draw method
-        self.load_generator(
-            generator_name=generator_name, generator_args=generator_args
-        )
+        self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
         # self.grid = VelocityGrid(
         #     height=GRID_HEIGHT,
@@ -311,48 +298,54 @@ class Simulation:
         self.ig_images = None
         self.ig_val_images = None
 
-        # Construct the dynamic occupancy grid
-        # DOGM params
-        dogm_params = DOGMParams(
-            size=GRID_WIDTH,
+        # Construct the occupancy grid
+        self.obs = OccupancyGrid(
+            dim=GRID_WIDTH,
             resolution=GRID_RESOLUTION,
-            particle_count=MAP_DYANMIC_PARTICLES,
-            new_born_particle_count=MAP_NEW_BORN_PARTICLES,
-            persistance_prob=MAP_PARTICLE_PERSISTANCE,
-            stddev_process_noise_position=MAP_PROCESS_NOISE_SIGMA,
-            stddev_process_noise_velocity=MAP_PROCESS_NOISE_VELOCITY,
-            birth_prob=MAP_BIRTH_PROBABILITY,
-            stddev_velocity=MAP_STDDEV_VELOCITY,
-            init_max_velocity=MAP_BASE_VELOCITY,
+            origin=(0, 0),
         )
-        self.dogm = DOGM(params=dogm_params)
+        # # Construct the dynamic occupancy grid
+        # # DOGM params
+        # dogm_params = DOGMParams(
+        #     size=GRID_WIDTH,
+        #     resolution=GRID_RESOLUTION,
+        #     particle_count=MAP_DYANMIC_PARTICLES,
+        #     new_born_particle_count=MAP_NEW_BORN_PARTICLES,
+        #     persistance_prob=MAP_PARTICLE_PERSISTANCE,
+        #     stddev_process_noise_position=MAP_PROCESS_NOISE_SIGMA,
+        #     stddev_process_noise_velocity=MAP_PROCESS_NOISE_VELOCITY,
+        #     birth_prob=MAP_BIRTH_PROBABILITY,
+        #     stddev_velocity=MAP_STDDEV_VELOCITY,
+        #     init_max_velocity=MAP_BASE_VELOCITY,
+        # )
+        # self.dogm = DOGM(params=dogm_params)
 
-        # Create a LaserMeasurementGrid object that converts the range based laserscan update into a cartesian
-        # grid.  The cartesian grid is then used as an update to the occupancy grid.
-        lmg_params = LaserMeasurementGridParams(
-            fov=SCAN_FOV * 180.0 / np.pi,
-            angle_increment=SCAN_ANGLE_INCREMENT * 180.0 / np.pi,
-            max_range=SCAN_RANGE,
-            resolution=SCAN_RESOLUTION,
-            stddev_range=SCAN_STDDEV_RANGE,
-        )
-        self.lmg = LaserMeasurementGrid(
-            params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION
-        )
+        # # Create a LaserMeasurementGrid object that converts the range based laserscan update into a cartesian
+        # # grid.  The cartesian grid is then used as an update to the occupancy grid.
+        # lmg_params = LaserMeasurementGridParams(
+        #     fov=SCAN_FOV * 180.0 / np.pi,
+        #     angle_increment=SCAN_ANGLE_INCREMENT * 180.0 / np.pi,
+        #     max_range=SCAN_RANGE,
+        #     resolution=SCAN_RESOLUTION,
+        #     stddev_range=SCAN_STDDEV_RANGE,
+        # )
+        # self.lmg = LaserMeasurementGrid(
+        #     params=lmg_params, size=GRID_WIDTH, resolution=GRID_RESOLUTION
+        # )
 
-        # TODO: ROI is fixed for the time being -- should move this to the ego/agent and make it relative to the vehicle speed.  Note that we should also
-        #       position the ROI relative to the AV, but for now, we'll centre it on the road.
-        #
-        # ROI is determined by the current speed, expected agent speeds
-        y_ratio = OPPONENT_CAR_SPEED / ACTOR_SPEED
+        # # TODO: ROI is fixed for the time being -- should move this to the ego/agent and make it relative to the vehicle speed.  Note that we should also
+        # #       position the ROI relative to the AV, but for now, we'll centre it on the road.
+        # #
+        # # ROI is determined by the current speed, expected agent speeds
+        # y_ratio = OPPONENT_CAR_SPEED / ACTOR_SPEED
 
-        self.roi = []
-        for x in range(2, GRID_SIZE // 2, 2):
-            max_y = int(round(x * y_ratio))
-            for y in range(-max_y, max_y + 1, 2):
-                if abs(y) < GRID_SIZE // 2:
-                    self.roi.append([x + GRID_SIZE // 2, y + GRID_SIZE // 2])
-        self.roi = np.array(self.roi).astype(int)
+        # # self.roi = []
+        # # for x in range(2, GRID_SIZE // 2, 2):
+        # #     max_y = int(round(x * y_ratio))
+        # #     for y in range(-max_y, max_y + 1, 2):
+        # #         if abs(y) < GRID_SIZE // 2:
+        # #             self.roi.append([x + GRID_SIZE // 2, y + GRID_SIZE // 2])
+        # # self.roi = np.array(self.roi).astype(int)
 
         self.reset()
 
@@ -385,12 +378,11 @@ class Simulation:
 
         self.information_gain = None
 
-        # self.grid.reset()
+        self.obs.reset()
+        self.probability_map = None
 
         return (
-            self._get_next_observation(
-                self._calculate_future_visibility(), self.tick_time
-            ),
+            self._get_next_observation(self._calculate_future_visibility(), self.tick_time),
             self._get_info(),
         )
 
@@ -425,15 +417,11 @@ class Simulation:
         y = 0
 
         loc = get_location(origin=self.ego.x[0:2], location=(x, y))
-        self.window.draw_rect(
-            ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, WINDOW_SIZE * 2
-        )
+        self.window.draw_rect(ROAD_COLOUR, (loc[0], loc[1]), 2 * LANE_WIDTH, WINDOW_SIZE * 2)
 
         x = (x // 4) * 4.0
         for _ in range(int(WINDOW_SIZE * 2 // 4)):
-            loc = get_location(
-                origin=self.ego.x[0:2], location=(x - WINDOW_SIZE / 2, y - 0.2)
-            )
+            loc = get_location(origin=self.ego.x[0:2], location=(x - WINDOW_SIZE / 2, y - 0.2))
             self.window.draw_rect(ROAD_MARKING_COLOUR, (loc[0], loc[1]), 0.4, 2.5)
             x += 4
 
@@ -445,9 +433,7 @@ class Simulation:
         if actor_image is not None:
             actor_pos = get_location(origin=self.ego.x[0:2], location=actor.x[0:2])
             # drawing with y inverted reverse the rotation to correct the display
-            self.window.draw_image(
-                image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA]
-            )
+            self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
         else:
             actor_poly = actor.get_poly()
             if actor_poly is not None:
@@ -516,10 +502,7 @@ class Simulation:
             if type(actor) is Blank:
                 continue
 
-            if (
-                actor.x[0] > self.ego.x[0] + EGO_X_OFFSET
-                and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5
-            ):
+            if actor.x[0] > self.ego.x[0] + EGO_X_OFFSET and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5:
                 pts = actor.get_poly()
                 poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
                 shapes.append(vis.Polygon(poly_pts))
@@ -541,7 +524,7 @@ class Simulation:
             if rnd < 0.5:
                 # create a parked car
                 rnd = self.generator.uniform()
-                if rnd < 0.1:
+                if rnd < 0:
                     # some small percentage of cars are really badly parked
                     y = -LANE_WIDTH + 1
                 else:
@@ -671,18 +654,26 @@ class Simulation:
             self.next_agent_x = x
 
     def _get_next_observation(self, scan_data, dt):
-        grid_data = self.lmg.generateGrid(
-            VectorFloat(scan_data), self.ego.x[STATE.THETA] * 180.0 / np.pi
+        self.obs.move_origin(self.ego.x[0:2])
+        self.obs.update(
+            X=[*self.ego.x[0:2], self.ego.x[STATE.THETA]],
+            angle_min=SCAN_START_ANGLE,
+            angle_inc=SCAN_ANGLE_INCREMENT,
+            ranges=scan_data,
+            min_range=0,
+            max_range=SCAN_RANGE + 1,
         )
-        self.dogm.updateGrid(grid_data, self.ego.x[0], self.ego.x[1], dt)
-        return renderOccupancyGrid(
-            self.dogm
-        )  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
+        self.probability_map = self.obs.probabilityMap()
+        return self.probability_map
 
-        # # rescale the velocity grid to be on the range [0,1]
-        # velocity_map = (self.grid.get_velocity_map()+MAX_CAR_SPEED)/(2.0*MAX_CAR_SPEED)
+        # grid_data = self.lmg.generateGrid(
+        #     VectorFloat(scan_data), self.ego.x[STATE.THETA] * 180.0 / np.pi
+        # )
+        # self.dogm.updateGrid(grid_data, self.ego.x[0], self.ego.x[1], dt)
+        # return renderOccupancyGrid(
+        #     self.dogm
+        # )  # , GRID_OCCUPANCY_THRESHOLD, GRID_VELOCITY_THRESHOLD, GRID_VELOCITY_MAX)
 
-        # probability_map = self.grid.get_probability_map()
         # # # BUGBUG: Add some probable occupany to the area outside the roadway to allow the RL engine to learn about the
         # # #         undesireable area(s), where we don't want the car to travel.  Did not have a positive affect in training,
         # # #         but left here as a comment to inform the next attempt.
@@ -706,12 +697,8 @@ class Simulation:
                     footprint = actor.get_footprint()
                     dy, dx = footprint.shape
 
-                    mx = GRID_SIZE + int(
-                        (actor.bounding_box[0] - self.ego.x[0]) / GRID_RESOLUTION
-                    )
-                    my = GRID_SIZE + int(
-                        (actor.bounding_box[1] - self.ego.x[1]) / GRID_RESOLUTION
-                    )
+                    mx = GRID_SIZE + int((actor.bounding_box[0] - self.ego.x[0]) / GRID_RESOLUTION)
+                    my = GRID_SIZE + int((actor.bounding_box[1] - self.ego.x[1]) / GRID_RESOLUTION)
                     ix = 0
                     iy = 0
 
@@ -732,9 +719,7 @@ class Simulation:
                     if my + dy >= GRID_SIZE * 2:
                         dy = GRID_SIZE * 2 - my
 
-                    map[my : my + dy, mx : mx + dx] = footprint[
-                        iy : iy + dy, ix : ix + dx
-                    ]
+                    map[my : my + dy, mx : mx + dx] = footprint[iy : iy + dy, ix : ix + dx]
 
         return map
 
@@ -794,66 +779,66 @@ class Simulation:
         scan_data[scan_data == -1] = SCAN_RANGE + 1
         return scan_data.astype(np.float32)
 
-    def calculate_information_gain(self, occupancy_grid):
-        obs_pts = [
-            [
-                [self.ego.x[0] + 0.04, self.ego.x[1] - 0.04],
-                [self.ego.x[0] + 0.08, self.ego.x[1] - 0.04],
-                [self.ego.x[0] + 0.12, self.ego.x[1] - 0.04],
-            ],
-            [
-                [self.ego.x[0] + 0.04, self.ego.x[1]],
-                [self.ego.x[0] + 0.08, self.ego.x[1]],
-                [self.ego.x[0] + 0.12, self.ego.x[1]],
-            ],
-            [
-                [self.ego.x[0] + 0.04, self.ego.x[1] + 0.04],
-                [self.ego.x[0] + 0.08, self.ego.x[1] + 0.04],
-                [self.ego.x[0] + 0.12, self.ego.x[1] + 0.04],
-            ],
-        ]
+    # def calculate_information_gain(self, occupancy_grid):
+    #     obs_pts = [
+    #         [
+    #             [self.ego.x[0] + 0.04, self.ego.x[1] - 0.04],
+    #             [self.ego.x[0] + 0.08, self.ego.x[1] - 0.04],
+    #             [self.ego.x[0] + 0.12, self.ego.x[1] - 0.04],
+    #         ],
+    #         [
+    #             [self.ego.x[0] + 0.04, self.ego.x[1]],
+    #             [self.ego.x[0] + 0.08, self.ego.x[1]],
+    #             [self.ego.x[0] + 0.12, self.ego.x[1]],
+    #         ],
+    #         [
+    #             [self.ego.x[0] + 0.04, self.ego.x[1] + 0.04],
+    #             [self.ego.x[0] + 0.08, self.ego.x[1] + 0.04],
+    #             [self.ego.x[0] + 0.12, self.ego.x[1] + 0.04],
+    #         ],
+    #     ]
 
-        if DEBUG_INFORMATION_GAIN:
-            self.obs_pts = []
-            for row in obs_pts:
-                grid_pts = []
-                for pt in row:
-                    x = int((pt[0] - self.ego.x[0]) / GRID_RESOLUTION + GRID_SIZE // 2)
-                    y = int((pt[1] - self.ego.x[1]) / GRID_RESOLUTION + GRID_SIZE // 2)
-                    grid_pts.append([x, y])
-                self.obs_pts.append(grid_pts)
+    #     if DEBUG_INFORMATION_GAIN:
+    #         self.obs_pts = []
+    #         for row in obs_pts:
+    #             grid_pts = []
+    #             for pt in row:
+    #                 x = int((pt[0] - self.ego.x[0]) / GRID_RESOLUTION + GRID_SIZE // 2)
+    #                 y = int((pt[1] - self.ego.x[1]) / GRID_RESOLUTION + GRID_SIZE // 2)
+    #                 grid_pts.append([x, y])
+    #             self.obs_pts.append(grid_pts)
 
-        ig_results = []
-        for row in obs_pts:
-            total_ig = 0
-            for pt in row:
-                total_ig += self._calculate_information_gain_from(
-                    pt, occupancy_grid=occupancy_grid
-                )
-            ig_results.append(total_ig)
+    #     ig_results = []
+    #     for row in obs_pts:
+    #         total_ig = 0
+    #         for pt in row:
+    #             total_ig += self._calculate_information_gain_from(
+    #                 pt, occupancy_grid=occupancy_grid
+    #             )
+    #         ig_results.append(total_ig)
 
-        return ig_results
+    #     return ig_results
 
-    def _calculate_information_gain_from(self, location, occupancy_grid):
-        # only one position to sample from, map it to the grid, relative to the AV
-        obs_x = ((location[0] - self.ego.x[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
-        obs_y = ((location[1] - self.ego.x[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
-        obs_pts = np.array([obs_x, obs_y]).reshape(1, 2)
+    # def _calculate_information_gain_from(self, location, occupancy_grid):
+    #     # only one position to sample from, map it to the grid, relative to the AV
+    #     obs_x = ((location[0] - self.ego.x[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
+    #     obs_y = ((location[1] - self.ego.x[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
+    #     obs_pts = np.array([obs_x, obs_y]).reshape(1, 2)
 
-        values = occupancy_grid[self.roi[:, 1], self.roi[:, 0]]
+    #     values = occupancy_grid[self.roi[:, 1], self.roi[:, 0]]
 
-        # results are num observation points rows by num region of interest points columns
-        result = np.zeros((obs_pts.shape[0], self.roi.shape[0]))
+    #     # results are num observation points rows by num region of interest points columns
+    #     result = np.zeros((obs_pts.shape[0], self.roi.shape[0]))
 
-        visibility_from_region(occupancy_grid, obs_pts, self.roi, result)
+    #     visibility_from_region(occupancy_grid, obs_pts, self.roi, result)
 
-        # multiply the results by the probability of the cell being occupied based on current observation
-        result = result * values
-        log_result = -np.log(result + 0.00000001) * result
-        self.log_result = log_result
+    #     # multiply the results by the probability of the cell being occupied based on current observation
+    #     result = result * values
+    #     log_result = -np.log(result + 0.00000001) * result
+    #     self.log_result = log_result
 
-        # BUGBUG: Notice that we are only calculating for one point at a time.
-        return np.sum(log_result)
+    #     # BUGBUG: Notice that we are only calculating for one point at a time.
+    #     return np.sum(log_result)
 
     def draw_control_output(self, u):
         start = self.ego.x[0:2]
@@ -864,82 +849,100 @@ class Simulation:
             start = state[0:2]
             self._draw_circle(start, radius=0.23, colour="blue")
 
-    def draw_information_gain(self, ig_results):
+    def draw_obs(self):
         if DEBUG_INFORMATION_GAIN:
-            min_ig = np.min(ig_results)
-            max_ig = np.max(ig_results) - min_ig
-            normalized_ig = ((ig_results - min_ig) / max_ig * 255.0).astype(np.uint8)
+            obs = (self.obs.probabilityMap() * 255.0).astype(np.uint8)
 
             if self.ig_images is None:
-                num_maps = 2
+                num_maps = 1
                 num_rows = 1
-                self.ig_fig, self.ig_ax = plt.subplots(
-                    num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15)
-                )
+                self.ig_fig, self.ig_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15))
 
                 self.ig_images = []
-                self.ig_images.append(
-                    self.ig_ax[0].imshow(
-                        np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)
-                    )
-                )
-                self.ig_images.append(
-                    self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8))
-                )
+                self.ig_images.append(self.ig_ax.imshow(np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)))
 
-            grid = (renderOccupancyGrid(self.dogm) * 255.0).astype(np.uint8)
-            for pt in self.roi:
-                grid[pt[1], pt[0]] = 128
-            for row in self.obs_pts:
-                for pt in row:
-                    grid[pt[1], pt[0]] = 250
-
-            map_img = Image.fromarray(grid).convert("RGB")
+            map_img = Image.fromarray(obs).convert("RGB")
             self.ig_images[0].set_data(map_img)
-
-            ig_results = np.array(ig_results).reshape(3, 1)
-            min_ig_sum = np.min(ig_results)
-            max_ig_sum = np.max(ig_results) - min_ig_sum
-            ig_img = ((ig_results - min_ig_sum) / max_ig_sum * 255.0).astype(np.uint8)
-            ig_img = Image.fromarray(ig_img).convert("RGB")
-            self.ig_images[1].set_data(ig_img)
-
-            # BUGBUG: Temporary code to draw the info gain values at the pixel level if required
-            # num_maps = 3
-            # num_rows = 3
-            # if self.ig_val_images is None:
-            #     self.ig_val_fig, self.ig_val_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS+1, figsize=(15, 15))
-
-            #     self.ig_val_images = []
-            #     for i in range(num_rows):
-            #         ig_img = []
-            #         for j in range(num_maps):
-            #             ig_img.append(self.ig_val_ax[i, j].imshow(np.zeros([GRID_SIZE//2, GRID_SIZE//2, 3], dtype=np.uint8)))
-            #         self.ig_val_images.append(ig_img)
-
-            # min_ig = np.min(self.log_result)
-            # max_ig = np.max(self.log_result) - min_ig
-
-            # self.log_result = (self.log_result - min_ig) / max_ig
-            # for i in range(num_rows):
-            #     for j in range(num_maps):
-            #         map = np.zeros((GRID_SIZE//2, GRID_SIZE//2))
-            #         vals = self.log_result[i*num_maps + j]
-            #         for k, pt in enumerate(self.roi):
-            #             map[pt[1]//2, pt[0]//2] = vals[k]
-
-            #         map = Image.fromarray((map * 255.0).astype(np.uint8)).convert('RGB')
-            #         self.ig_val_images[i][j].set_data(map)
-
-            # self.ig_val_fig.canvas.draw()
-            # self.ig_val_fig.canvas.flush_events()
 
             self.ig_fig.canvas.draw()
             self.ig_fig.canvas.flush_events()
 
-        ##################################################################################
-        # Simulator step functions
-        ##################################################################################
+    # def draw_information_gain(self, ig_results):
+    #     if DEBUG_INFORMATION_GAIN:
+    #         min_ig = np.min(ig_results)
+    #         max_ig = np.max(ig_results) - min_ig
+    #         normalized_ig = ((ig_results - min_ig) / max_ig * 255.0).astype(np.uint8)
+
+    #         if self.ig_images is None:
+    #             num_maps = 2
+    #             num_rows = 1
+    #             self.ig_fig, self.ig_ax = plt.subplots(
+    #                 num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15)
+    #             )
+
+    #             self.ig_images = []
+    #             self.ig_images.append(
+    #                 self.ig_ax[0].imshow(
+    #                     np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)
+    #                 )
+    #             )
+    #             self.ig_images.append(
+    #                 self.ig_ax[1].imshow(np.zeros([3, 1, 3], dtype=np.uint8))
+    #             )
+
+    #         grid = (renderOccupancyGrid(self.dogm) * 255.0).astype(np.uint8)
+    #         for pt in self.roi:
+    #             grid[pt[1], pt[0]] = 128
+    #         for row in self.obs_pts:
+    #             for pt in row:
+    #                 grid[pt[1], pt[0]] = 250
+
+    #         map_img = Image.fromarray(grid).convert("RGB")
+    #         self.ig_images[0].set_data(map_img)
+
+    #         ig_results = np.array(ig_results).reshape(3, 1)
+    #         min_ig_sum = np.min(ig_results)
+    #         max_ig_sum = np.max(ig_results) - min_ig_sum
+    #         ig_img = ((ig_results - min_ig_sum) / max_ig_sum * 255.0).astype(np.uint8)
+    #         ig_img = Image.fromarray(ig_img).convert("RGB")
+    #         self.ig_images[1].set_data(ig_img)
+
+    #         # BUGBUG: Temporary code to draw the info gain values at the pixel level if required
+    #         # num_maps = 3
+    #         # num_rows = 3
+    #         # if self.ig_val_images is None:
+    #         #     self.ig_val_fig, self.ig_val_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS+1, figsize=(15, 15))
+
+    #         #     self.ig_val_images = []
+    #         #     for i in range(num_rows):
+    #         #         ig_img = []
+    #         #         for j in range(num_maps):
+    #         #             ig_img.append(self.ig_val_ax[i, j].imshow(np.zeros([GRID_SIZE//2, GRID_SIZE//2, 3], dtype=np.uint8)))
+    #         #         self.ig_val_images.append(ig_img)
+
+    #         # min_ig = np.min(self.log_result)
+    #         # max_ig = np.max(self.log_result) - min_ig
+
+    #         # self.log_result = (self.log_result - min_ig) / max_ig
+    #         # for i in range(num_rows):
+    #         #     for j in range(num_maps):
+    #         #         map = np.zeros((GRID_SIZE//2, GRID_SIZE//2))
+    #         #         vals = self.log_result[i*num_maps + j]
+    #         #         for k, pt in enumerate(self.roi):
+    #         #             map[pt[1]//2, pt[0]//2] = vals[k]
+
+    #         #         map = Image.fromarray((map * 255.0).astype(np.uint8)).convert('RGB')
+    #         #         self.ig_val_images[i][j].set_data(map)
+
+    #         # self.ig_val_fig.canvas.draw()
+    #         # self.ig_val_fig.canvas.flush_events()
+
+    #         self.ig_fig.canvas.draw()
+    #         self.ig_fig.canvas.flush_events()
+
+    ##################################################################################
+    # Simulator step functions
+    ##################################################################################
 
     def _tick_actor(self, actor, tick_time):
         """step of simulation for each actor
@@ -974,8 +977,7 @@ class Simulation:
                 #     actor.set_collided()
 
             if actor.at_goal() or (
-                actor.x[0] < self.ego.x[0]
-                and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
+                actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
             ):
                 finished_actors.append(actor)
 
@@ -988,9 +990,10 @@ class Simulation:
             self.actor_list.remove(actor)
 
         # update the observation
+        self.obs.decay(0.95)
         self.scan_data = self._calculate_future_visibility()
         observation = self._get_next_observation(self.scan_data, self.tick_time)
-        self.information_gain = self.calculate_information_gain(observation)
+        # self.information_gain = self.calculate_information_gain(observation)
 
         # calculate the reward
         # y_reward = ((self.ego.x[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
@@ -1032,14 +1035,14 @@ class Simulation:
 
             self._draw_ego()
             self._draw_visibility()
-            self._draw_status()
+            # self._draw_status()
 
             self._draw_scan()
 
             if u is not None:
                 self.draw_control_output(u)
 
-        self.draw_information_gain(self.information_gain)
+        # self.draw_information_gain(self.information_gain)
 
         if debug:
             # if self.maps is None:
@@ -1062,22 +1065,10 @@ class Simulation:
 
             if self.maps is None:
                 self.map_fig, self.map_ax = plt.subplots(num=FIG_MAPS)
-                self.maps = self.map_ax.imshow(
-                    np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8)
-                )
+                self.maps = self.map_ax.imshow(np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
                 plt.show(block=False)
 
-            map_img = Image.fromarray(
-                (
-                    renderDynamicOccupancyGrid(
-                        self.dogm,
-                        GRID_OCCUPANCY_THRESHOLD,
-                        GRID_VELOCITY_THRESHOLD,
-                        GRID_VELOCITY_MAX,
-                    )
-                    * 255.0
-                ).astype(np.uint8)
-            ).convert("RGB")
+            map_img = Image.fromarray(self.probability_map * 255.0).astype(np.uint8).convert("RGB")
             self.maps.set_data(map_img)
 
             self.map_fig.canvas.draw()

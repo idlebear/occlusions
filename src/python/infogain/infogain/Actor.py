@@ -128,25 +128,17 @@ class Actor:
         min_d = np.min(poly, axis=0)
         max_d = np.max(poly, axis=0)
         self.bounding_box = (*min_d, *max_d)
-        self.extent = max(
-            np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2])
-        )
+        self.extent = max(np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2]))
 
         self.update_footprint()
 
     def update_footprint(self):
-        foot_x = int(
-            np.ceil((self.bounding_box[2] - self.bounding_box[0]) / self.resolution)
-        )
-        foot_y = int(
-            np.ceil((self.bounding_box[3] - self.bounding_box[1]) / self.resolution)
-        )
+        foot_x = int(np.ceil((self.bounding_box[2] - self.bounding_box[0]) / self.resolution))
+        foot_y = int(np.ceil((self.bounding_box[3] - self.bounding_box[1]) / self.resolution))
 
         xs, ys = np.meshgrid(range(foot_x), range(foot_y), indexing="xy")
         pts = [[x, y] for x, y in zip(xs.flatten(), ys.flatten())]
-        poly = list(
-            np.round((self.get_poly() - self.bounding_box[0:2]) / self.resolution, 0)
-        )
+        poly = list((self.get_poly() - self.bounding_box[0:2]) / self.resolution)
 
         res = np.zeros([len(pts), 1]).astype(np.uint32)
         polycheck.contains(poly, pts, res)
@@ -347,24 +339,17 @@ class AckermanCar(Actor):
                     self.reached_goal = True
 
     def __move(self, dt):
-        self.x[STATE.X] = (
-            self.x[STATE.X] + self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
-        )
-        self.x[STATE.Y] = (
-            self.x[STATE.Y] + self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
-        )
+        self.x[STATE.X] = self.x[STATE.X] + self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
+        self.x[STATE.Y] = self.x[STATE.Y] + self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
         self.x[STATE.THETA] = (
-            self.x[STATE.THETA]
-            + self.x[STATE.VELOCITY] * np.tan(self.x[STATE.DELTA]) / Ackermann.L * dt
+            self.x[STATE.THETA] + self.x[STATE.VELOCITY] * np.tan(self.x[STATE.DELTA]) / Ackermann.L * dt
         )
         # self.x[STATE.THETA] = self.x[STATE.THETA] + self.x[STATE.VELOCITY] * np.tan(self.u[1]) / Ackermann.L * dt
 
         self.x[STATE.VELOCITY] += self.u[0] * dt
         self.x[STATE.VELOCITY] = np.clip(self.x[STATE.VELOCITY], self.min_v, self.max_v)
         self.x[STATE.DELTA] += self.u[1] * dt
-        self.x[STATE.DELTA] = np.clip(
-            self.x[STATE.DELTA], -self.max_delta, self.max_delta
-        )
+        self.x[STATE.DELTA] = np.clip(self.x[STATE.DELTA], -self.max_delta, self.max_delta)
 
     def set_control(self, u):
         self.u[0] = np.clip(u[0], self.min_a, self.max_a)
