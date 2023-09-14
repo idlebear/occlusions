@@ -5,6 +5,8 @@ import numpy as np
 import argparse
 import traceback
 import time
+from os import path
+from tqdm import tqdm
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
@@ -27,8 +29,6 @@ from config import *
 
 def main(args):
     x_fin = [10, -1.5, 0]
-    V_DES = 7.0
-    A_DES = 3.0
     vehicle = Ackermann5()
 
     if args.method == "rl":
@@ -101,190 +101,252 @@ def main(args):
             )
         elif args.method == "mppi":
             if args.visibility_cost == "Ours":
-                M = 200
+                M = M_OURS
             elif args.visibility_cost == "Higgins":
-                M = 0.9
+                M = M_HIGGINS
             else:
                 M = 0
             mppi = MPPI(
                 mode=args.visibility_cost,
                 vehicle=vehicle,
-                limits=(3, np.pi / 2),
-                c_lambda=250,
-                Q=np.diag([2.0, 5.0, 5.0, 0, 0]),
+                limits=(ACCEL_VARIATION, OMEGA_VARIATION),
+                c_lambda=LAMBDA,
+                Q=np.diag([X_WEIGHT, Y_WEIGHT, V_WEIGHT, THETA_WEIGHT, DELTA_WEIGHT]),
                 M=M,
                 seed=args.seed,
             )
-            controls_nom = np.array([[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]])
-            visibility_costmap = VisibilityGrid(dim=GRID_WIDTH, resolution=GRID_RESOLUTION)
 
-    # reset the environment and collect the first observation and current state
-    obs, info = env.reset()
+    # start data logging
+    if args.prefix != "":
+        prefix = f"{args.prefix}-"
+    else:
+        prefix = ""
+    results_str = (
+        prefix
+        + args.method
+        + "-"
+        + str(args.visibility_cost)
+        + "-"
+        + str(args.simulation_steps)
+        + "-"
+        + str(args.horizon)
+        + "-"
+        + str(args.samples)
+        + "-"
+        + str(args.seed)
+        + ".csv"
+    )
+    results_file_name = path.join(RESULTS_DIR, results_str)
+    f = open(results_file_name, "w")
+    f.write(
+        "policy,seed,run,samples,horizon,t,x,y,v,theta,accel_requested,accel_allowed,u2,delta,costmap_time,planning_time\n"
+    )
+    f.flush
 
-    count = 0
-    rev = 1
+    for run in tqdm(range(args.runs)):
+        # reset the environment and collect the first observation and current state
+        obs, info = env.reset()
+        count = 0
 
-    total_time = 0
-    while True:
-        tic = time.time()
+        controls_nom = np.array(
+            [[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]]
+        )
+        visibility_costmap = VisibilityGrid(dim=GRID_WIDTH, resolution=GRID_RESOLUTION)
 
-        if args.method == "random":
-            # fixed forward motion (for testing)
-            action = np.array([np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6])
-        elif args.method == "rl":
-            action, _states = model.predict(obs)
-        elif args.method == "mpc":
-            state = [
-                info["ego"]["x"][STATE.X],
-                info["ego"]["x"][STATE.Y],
-                info["ego"]["x"][STATE.VELOCITY],
-                info["ego"]["x"][STATE.THETA],
-                info["ego"]["x"][STATE.DELTA],
-            ]
-            actors = []
-            # print(
-            #     f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}"
-            # )
-            for ac in info["actors"]:
-                radius = ac["extent"]  # + info["ego"]["extent"]
-                dist = np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
-                # print(
-                #     f"Dist:{dist}, Safe:{radius}, diff:{-dist+radius} {'AUUUGGGG' if -dist+radius > 0 else ''}"
-                # )
-                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"], dist])
+        total_time = 0
+        for step in tqdm(range(args.simulation_steps)):
+            tic = time.time()
 
-            # only keep the closest, and drop the distance parameter
-            if len(actors) > args.actors:
-                actors = sorted(actors, key=lambda actor: actor[-1])
-            actors = [a[:-1] for a in actors[: args.actors]]
-
-            while len(actors) < args.actors:
-                actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
-
-            x = state[0]
-            v = state[2]
-            a = A_DES
-            traj = []
-            controls = []
-            for _ in range(args.horizon):
-                x += v * env.sim.tick_time
-                v += a * env.sim.tick_time
-                if v >= V_DES:
-                    v = V_DES
-                    a = 0
-                # if x > x_fin[0]:
-                #     x = x_fin[0]
-                next_entry = [x, -LANE_WIDTH / 2.0, v, 0, 0]
-                traj.append(next_entry)
-                controls.append([a, 0])
-
-            planning_start = time.time()
-            try:
-                u, x = mpc.next(
-                    obs=obs,
-                    state=state,
-                    goal=[
-                        state[0] + 10,
-                        -LANE_WIDTH / 2.0,
-                        0,
-                        0,
-                        0,
-                    ],  # moving carrot...
-                    agents=actors,
-                    trajectory=traj,
-                    controls=controls,
-                    warm_start=True,
+            if args.method == "random":
+                # fixed forward motion (for testing)
+                action = np.array(
+                    [np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6]
                 )
-            except SystemError as e:
-                print(traceback.format_exc())
-                print(e)
-                exit()
+            elif args.method == "rl":
+                action, _states = model.predict(obs)
+            elif args.method == "mpc":
+                state = [
+                    info["ego"]["x"][STATE.X],
+                    info["ego"]["x"][STATE.Y],
+                    info["ego"]["x"][STATE.VELOCITY],
+                    info["ego"]["x"][STATE.THETA],
+                    info["ego"]["x"][STATE.DELTA],
+                ]
+                actors = []
+                # print(
+                #     f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}"
+                # )
+                for ac in info["actors"]:
+                    radius = ac["extent"]  # + info["ego"]["extent"]
+                    dist = np.sqrt(
+                        (ac["x"][STATE.X] - state[0]) ** 2
+                        + (ac["x"][STATE.Y] - state[1]) ** 2
+                    )
+                    # print(
+                    #     f"Dist:{dist}, Safe:{radius}, diff:{-dist+radius} {'AUUUGGGG' if -dist+radius > 0 else ''}"
+                    # )
+                    actors.append(
+                        [
+                            ac["x"][STATE.X],
+                            ac["x"][STATE.Y],
+                            radius,
+                            *ac["min_pt"],
+                            dist,
+                        ]
+                    )
 
-            print(f"Planning time: {time.time() - planning_start:0.5}")
+                # only keep the closest, and drop the distance parameter
+                if len(actors) > args.actors:
+                    actors = sorted(actors, key=lambda actor: actor[-1])
+                actors = [a[:-1] for a in actors[: args.actors]]
 
-            action = u[:, 0].full()
-            u = np.array(u.full())
-        elif args.method == "mppi":
-            state = [
-                info["ego"]["x"][STATE.X],
-                info["ego"]["x"][STATE.Y],
-                info["ego"]["x"][STATE.VELOCITY],
-                info["ego"]["x"][STATE.THETA],
-                info["ego"]["x"][STATE.DELTA],
-            ]
+                while len(actors) < args.actors:
+                    actors.append(
+                        [1000, 1000, 0, 0, 0]
+                    )  # placeholders are far, far away
 
-            actors = []
-            print(f"State = X:{state[0]:0.5}, Y:{state[1]:0.5}, V:{state[2]:0.5}, Th:{state[3]:0.5}, {state[4]:0.5}")
-            for ac in info["actors"]:
-                radius = 1.2  # ac["extent"]  # + info["ego"]["extent"]
-                actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
+                x = state[0]
+                v = state[2]
+                a = A_DES
+                traj = []
+                controls = []
+                for _ in range(args.horizon):
+                    x += v * env.sim.tick_time
+                    v += a * env.sim.tick_time
+                    if v >= V_DES:
+                        v = V_DES
+                        a = 0
+                    # if x > x_fin[0]:
+                    #     x = x_fin[0]
+                    next_entry = [x, -LANE_WIDTH / 2.0, v, 0, 0]
+                    traj.append(next_entry)
+                    controls.append([a, 0])
 
-            ###
-            # Build the visibility costmap
-            waypoints = [
-                state[0:2],
-            ]
+                planning_start = time.time()
+                try:
+                    u, x = mpc.next(
+                        obs=obs,
+                        state=state,
+                        goal=[
+                            state[0] + 10,
+                            -LANE_WIDTH / 2.0,
+                            0,
+                            0,
+                            0,
+                        ],  # moving carrot...
+                        agents=actors,
+                        trajectory=traj,
+                        controls=controls,
+                        warm_start=True,
+                    )
+                except SystemError as e:
+                    print(traceback.format_exc())
+                    print(e)
+                    exit()
 
-            # add a waypoint for every 5 m for V_DES * args.horizon * dt * 2 -- double planning horizon
-            for _ in range(int(V_DES * env.sim.tick_time * args.horizon * 2.0 / WAYPOINT_INTERVAL)):
-                waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
+                print(f"Planning time: {time.time() - planning_start:0.5}")
 
-            # build the immediate planning trajectory
-            obs_trajectory = generate_trajectory(
-                waypoints,
-                s=0,
-                d=(state[1] - (-LANE_WIDTH / 2)),
-                v=V_DES,
-                t=(args.horizon * env.sim.tick_time),
-                dt=env.sim.tick_time,
-            )[0]
+                action = u[:, 0].full()
+                u = np.array(u.full())
+            elif args.method == "mppi":
+                state = [
+                    info["ego"]["x"][STATE.X],
+                    info["ego"]["x"][STATE.Y],
+                    info["ego"]["x"][STATE.VELOCITY],
+                    info["ego"]["x"][STATE.THETA],
+                    info["ego"]["x"][STATE.DELTA],
+                ]
 
-            # and a target trajectory to define the locations to observe
-            target_trajectory = generate_trajectory(
-                waypoints,
-                s=0,
-                d=(state[1] - (LANE_WIDTH / 2)),
-                v=V_DES,
-                t=(args.horizon * env.sim.tick_time) * 2,
-                dt=env.sim.tick_time,
-            )[0]
+                actors = []
 
-            origin = [
-                state[0] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
-                state[1] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
-            ]
+                for ac in info["actors"]:
+                    radius = 1.5  # ac["extent"]  # + info["ego"]["extent"]
+                    actors.append(
+                        [ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]]
+                    )
 
-            costmap = update_visibility_costmap(
-                costmap=visibility_costmap,
-                obs=obs,
-                map=info["map"],
-                origin=origin,
-                resolution=GRID_RESOLUTION,
-                obs_trajectory=obs_trajectory,
-                target_trajectory=target_trajectory,
-                v_des=V_DES,
-                dt=env.sim.tick_time,
-            )
+                ###
+                # Build the visibility costmap
+                waypoints = [
+                    state[0:2],
+                ]
 
-            ###
-            # Construct the nominal trajectory
-            states_nom = [
-                state,
-            ]
-            x = state[0]
-            v = state[2]
-            a = A_DES
-            for _ in range(args.horizon):
-                x += v * env.sim.tick_time
-                v += a * env.sim.tick_time
-                if v >= V_DES:
-                    v = V_DES
-                    a = 0
-                states_nom.append([x, -LANE_WIDTH / 2, v, 0, 0])
+                # add a waypoint for every 5 m for V_DES * args.horizon * dt * 2 -- double planning horizon
+                for _ in range(
+                    int(
+                        V_DES
+                        * env.sim.tick_time
+                        * args.horizon
+                        * 2.0
+                        / WAYPOINT_INTERVAL
+                    )
+                ):
+                    waypoints.append(
+                        [waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2]
+                    )
 
-            states_nom = np.array(states_nom).T  # each state in a column
+                # build the immediate planning trajectory
+                obs_trajectory = generate_trajectory(
+                    waypoints,
+                    s=0,
+                    d=(state[1] - (-LANE_WIDTH / 2)),
+                    v=V_DES,
+                    t=(args.horizon * env.sim.tick_time),
+                    dt=env.sim.tick_time,
+                )[0]
 
-            try:
+                # and a target trajectory to define the locations to observe
+                target_trajectory = generate_trajectory(
+                    waypoints,
+                    s=0,
+                    d=(state[1] - (LANE_WIDTH / 2)),
+                    v=V_DES,
+                    t=(args.horizon * env.sim.tick_time) * 2,
+                    dt=env.sim.tick_time,
+                )[0]
+
+                origin = [
+                    state[0]
+                    - (GRID_SIZE / 2) * GRID_RESOLUTION
+                    + GRID_RESOLUTION / 2.0,
+                    state[1]
+                    - (GRID_SIZE / 2) * GRID_RESOLUTION
+                    + GRID_RESOLUTION / 2.0,
+                ]
+
+                costmap_tic = time.time()
+                costmap = update_visibility_costmap(
+                    costmap=visibility_costmap,
+                    obs=obs,
+                    map=info["map"],
+                    origin=origin,
+                    resolution=GRID_RESOLUTION,
+                    obs_trajectory=obs_trajectory,
+                    target_trajectory=target_trajectory,
+                    v_des=V_DES,
+                    dt=env.sim.tick_time,
+                )
+                costmap_toc = time.time()
+
+                ###
+                # Construct the nominal trajectory
+                states_nom = [
+                    state,
+                ]
+                x = state[0]
+                v = state[2]
+                a = A_DES
+                for _ in range(args.horizon):
+                    x += v * env.sim.tick_time
+                    v += a * env.sim.tick_time
+                    if v >= V_DES:
+                        v = V_DES
+                        a = 0
+                    states_nom.append([x, -LANE_WIDTH / 2, v, 0, 0])
+
+                states_nom = np.array(states_nom).T  # each state in a column
+
+                control_tic = time.time()
                 u, u_var = mppi.find_control(
                     costmap=visibility_costmap.normalized(),
                     origin=origin,
@@ -296,84 +358,107 @@ def main(args):
                     actors=actors,
                     dt=env.sim.tick_time,
                 )
+                control_toc = time.time()
+
+                if args.show_sim:
+                    visibility_costmap.visualize()
 
                 # warm start the controls for next time
                 controls_nom[:, :-1] = u[:, 1:]
                 # controls_nom[:, -1] = u[0, 0]
 
-                from mpc_controller import visualize_variations
+                if args.show_sim:
+                    from mpc_controller import visualize_variations
 
-                visualize_variations(
-                    vehicle,
-                    initial_state=state,
-                    u_nom=controls_nom,
-                    u_variations=u_var,
-                    u_weighted=u,
-                    dt=env.sim.tick_time,
-                )
+                    visualize_variations(
+                        vehicle,
+                        initial_state=state,
+                        u_nom=controls_nom,
+                        u_variations=u_var,
+                        u_weighted=u,
+                        dt=env.sim.tick_time,
+                    )
 
-            except Exception as e:
-                print(traceback.format_exc())
-                print(e)
+                if args.visibility_cost == "Nominal":
+                    action = u[:, 0]
+                else:
+                    states = rollout_trajectory(
+                        vehicle=vehicle, state=state, controls=u.T, dt=env.sim.tick_time
+                    )
+                    action = validate_controls(
+                        vehicle=vehicle,
+                        states=states,
+                        controls=u.T,
+                        obs=obs,
+                        map=info["map"],
+                        resolution=GRID_RESOLUTION,
+                        dt=env.sim.tick_time,
+                    )
+            else:
+                action = [8, 0]
 
-            states = rollout_trajectory(vehicle=vehicle, state=state, controls=u.T, dt=env.sim.tick_time)
-            action = validate_controls(
-                vehicle=vehicle,
-                states=states,
-                controls=u.T,
-                obs=obs,
-                map=info["map"],
-                resolution=GRID_RESOLUTION,
-                dt=env.sim.tick_time,
+            count += 1
+            toc = time.time()
+
+            step_tic = time.time()
+            obs, rewards, done, info = env.step(action)
+            step_toc = time.time()
+            step_time = step_toc - step_tic
+
+            if args.show_sim:
+                env.render(u=u)
+
+            # "policy,seed,run,samples,horizon,t,x,y,v,theta,delta,accel_requested,accel_allowed,steering,costmap_time,planning_time\n"
+            f.write(
+                str(args.visibility_cost)
+                + ","
+                + str(args.seed)
+                + ","
+                + str(run)
+                + ","
+                + str(args.samples)
+                + ","
+                + str(args.horizon)
+                + ","
+                + str(step * env.sim.tick_time)
+                + ","
+                + str(state[0])
+                + ","
+                + str(state[1])
+                + ","
+                + str(state[2])
+                + ","
+                + str(state[3])
+                + ","
+                + str(state[4])
+                + ","
+                + str(u[0, 0])
+                + ","
+                + str(action[0])
+                + ","
+                + str(u[1, 0])
+                + ","
+                + f"{costmap_toc-costmap_tic:0.5}"
+                + ","
+                + f"{control_toc-control_tic:0.5}"
+                + "\n"
             )
-        else:
-            ## Pseudo Car
-            # # fixed forward motion (for testing)
-            # ego_state = info["ego"]
-            # # best_dir = np.argmax(np.array(info['information_gain']))
-            # # if best_dir == 0:
-            # #     w = -np.pi/4
-            # # elif best_dir == 1:
-            # #     w = -ego_state['orientation']
-            # # elif best_dir == 2:
-            # #     w = np.pi/4
-            # # else:
-            # #     w = 0
-            # w = 0  # fixed rotation (none)
-            # if ego_state["speed"] < 5:
-            #     action = (1, w)
-            # else:
-            #     action = (0, w)
-            # action = (1, w)
-            action = [8, 0]
-
-        count += 1
-        toc = time.time()
-
-        planner_time = toc - tic
-        total_time += planner_time
-        print(f"Last time: {toc-tic:0.5}, Average calculation time: {total_time/count:0.5}")
-
-        step_tic = time.time()
-        obs, rewards, done, info = env.step(action)
-        toc = time.time()
-        step_time = toc - step_tic
-
-        render_tic = time.time()
-        env.render(u=u)
-        toc = time.time()
-        render_time = toc - render_tic
-
-        print(
-            f"Planner:{planner_time:0.5}({total_time/count:0.5}), Step:{step_time:0.5}, Render:{render_time:0.5}, Total:{time.time() - tic}"
-        )
+            # print(
+            #     f"Planner:{planner_time:0.5}(Costmap:{costmap_toc-costmap_tic:0.5}, MPPI:{control_toc-control_tic:0.5} ), Step:{step_time:0.5}, Render:{render_time:0.5}, Total:{time.time() - tic}"
+            # )
 
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description=__doc__)
-    argparser.add_argument("--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size")
-    argparser.add_argument("--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size")
-    argparser.add_argument("--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size")
+    argparser.add_argument(
+        "--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size"
+    )
+    argparser.add_argument(
+        "--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size"
+    )
+    argparser.add_argument(
+        "--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size"
+    )
     argparser.add_argument("-s", "--seed", default=None, type=int, help="Random Seed")
     argparser.add_argument(
         "-a",
@@ -422,13 +507,17 @@ if __name__ == "__main__":
         type=float,
         help="Length of Simulation Time Step",
     )
-    argparser.add_argument("--show-sim", action="store_true", help="Display the simulation window")
+    argparser.add_argument(
+        "--show-sim", action="store_true", help="Display the simulation window"
+    )
     argparser.add_argument(
         "--skip-training",
         action="store_true",
         help="skip the rl training and just run the inference engine",
     )
-    argparser.add_argument("--debug", action="store_true", help="Dummy mode -- just display the env")
+    argparser.add_argument(
+        "--debug", action="store_true", help="Dummy mode -- just display the env"
+    )
     argparser.add_argument(
         "--method",
         default="none",
@@ -446,6 +535,18 @@ if __name__ == "__main__":
         default=10,
         type=int,
         help="Length of the planning horizon",
+    )
+    argparser.add_argument(
+        "--runs",
+        default=10,
+        type=int,
+        help="Number of times to repeat the experiment",
+    )
+    argparser.add_argument(
+        "--simulation-steps",
+        default=100,
+        type=int,
+        help="Number of steps to run the simulation",
     )
     argparser.add_argument(
         "--multipass",

@@ -16,7 +16,7 @@ NUM_EPOCHS = 10
 
 LAMBDA = 0.8
 SERVICE_TIME = 0
-TICK_TIME = 0.05
+TICK_TIME = 0.1
 BETA = 0.712  # constant for TSP length
 WAYPOINT_INTERVAL = 2
 
@@ -39,13 +39,11 @@ GENERATOR_ARGS = {
     "mix": 0.5,
 }
 
-SHOW_SIM = False
-
 ACTOR_SPEED = 6.0
 OPPONENT_CAR_SPEED = 6.0
 MAX_CAR_SPEED = 9.0
 OPPONENT_PEDESTRIAN_SPEED = 2.0
-MAX_PEDESTRIAN_SPEED = 2.3
+MAX_PEDESTRIAN_SPEED = 2.0
 EMERGENCY_BRAKE = -5.0  # m/s/s
 
 SCREEN_WIDTH = 1000
@@ -89,9 +87,29 @@ SCAN_ANGLE_INCREMENT = SCAN_FOV / SCAN_RAYS
 SCAN_STDDEV_RANGE = GRID_RESOLUTION / 4
 
 # Constructing a Car lined street (the parkade)
-CAR_OFFSET = 0.9
+CAR_OFFSET = 1.0
 CAR_SPACING = 7.5
 CAR_WIGGLE = 1.0
 CAR_RATIO = 1.9 / 4.8
 CAR_SCALE = 4.8
 CAR_ROTATION = 0  # PI / 12
+
+# MPC/MPPI parameters
+FORGET_FACTOR = 1  # allow the costmap to forget about entries over time
+DISCOUNT_FACTOR = 1  # discount cost over the horizon
+X_WEIGHT = 10
+Y_WEIGHT = 5
+LAMBDA = 750
+V_WEIGHT = 50
+THETA_WEIGHT = 0
+DELTA_WEIGHT = 0
+M_HIGGINS = 0.9
+M_OURS = 150
+ACCEL_VARIATION = 3
+OMEGA_VARIATION = PI / 2
+V_DES = 6.0
+A_DES = 3.5
+
+
+# Data capture
+RESULTS_DIR = "./results"

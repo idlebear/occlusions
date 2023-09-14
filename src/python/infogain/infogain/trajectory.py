@@ -76,7 +76,9 @@ def extract_acceleration_and_steering_control(vehicle, state, a_des, trajectory)
             a = 0
 
         dyaw = trajectory.yaw[step] - trajectory.yaw[step - 1]
-        delta = np.arctan(dyaw * vehicle.L / trajectory.s_d[step - 1]) / (trajectory.t[step] - trajectory.t[step - 1])
+        delta = np.arctan(dyaw * vehicle.L / trajectory.s_d[step - 1]) / (
+            trajectory.t[step] - trajectory.t[step - 1]
+        )
 
         controls.append([a, delta])
 
@@ -122,11 +124,13 @@ def validate_controls(vehicle, states, controls, obs, map, resolution, dt) -> np
     # grid cells.  If the size is too small, then we make it one, and only inflate every
     # n steps.
     max_pedestrian_move = MAX_PEDESTRIAN_SPEED * dt / resolution
-    steps_between_blur = max(1, np.floor(1.0 / max_pedestrian_move))
+    steps_between_blur = max(1, np.round(1.0 / max_pedestrian_move))
     max_pedestrian_move = int(np.ceil(max_pedestrian_move))
 
     # blur = create_2d_gaussian(width=2 * max_pedestrian_move + 1, centre_x=0, centre_y=0, sigma=2.0, scale=0.5)
-    blur = np.ones([2 * max_pedestrian_move + 1, 2 * max_pedestrian_move + 1]) / (2 * max_pedestrian_move + 1)
+    blur = np.ones([2 * max_pedestrian_move + 1, 2 * max_pedestrian_move + 1]) / (
+        2 * max_pedestrian_move + 1
+    )
     # / (
     #     (2 * max_pedestrian_move + 1) * (2 * max_pedestrian_move + 1)
     # )
@@ -135,7 +139,9 @@ def validate_controls(vehicle, states, controls, obs, map, resolution, dt) -> np
     future_maps = []
     for i in range(N_controls):
         if i % steps_between_blur == 0:
-            blurred_grid = np.clip(convolve2d(in1=pedestrian_grid, in2=blur, mode="same"), 0, 1)
+            blurred_grid = np.clip(
+                convolve2d(in1=pedestrian_grid, in2=blur, mode="same"), 0, 1
+            )
             next_ped_grid = blurred_grid + map
             pedestrian_grid = np.where(map != 0, 0, blurred_grid)
         future_maps.append(next_ped_grid)
@@ -145,8 +151,8 @@ def validate_controls(vehicle, states, controls, obs, map, resolution, dt) -> np
     future_states = states[1:]
     current_state = 0
     for state in future_states:
-        x = int((state[0] - initial_state[0]) / resolution + GRID_SIZE // 2 + resolution / 2.0)
-        y = int((state[1] - initial_state[1]) / resolution + GRID_SIZE // 2 + resolution / 2.0)
+        x = int((state[0] - initial_state[0]) / resolution + GRID_SIZE // 2)
+        y = int((state[1] - initial_state[1]) / resolution + GRID_SIZE // 2)
         if future_maps[current_state][y, x] > OCCUPANCY_THRESHOLD:
             # potential collision
             break
