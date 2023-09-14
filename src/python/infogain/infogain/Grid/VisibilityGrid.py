@@ -118,7 +118,7 @@ class VisibilityGrid:
         max_result = np.max(costmap)
         if max_result > 0:
             costmap /= max_result
-        return costmap
+        return 1 - costmap
 
     def decay(self, rate):
         self.mutex.acquire()

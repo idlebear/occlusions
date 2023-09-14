@@ -661,13 +661,11 @@ class MPPI:
         max_y, max_x = costmap.shape
         if map_x < 0 or map_x > max_x - 1 or map_y < 0 or map_y > max_y - 1:
             raise ValueError("Planning outside of available cost map!")
-        else:
-            score = max(
-                -step_score, -self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
-            )
-            # score = self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
 
-        return score
+        # score = max(
+        #     -step_score, -self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
+        # )
+        return self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
 
 
 import matplotlib.pyplot as plt
