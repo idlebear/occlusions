@@ -21,7 +21,7 @@ height = width / 1.5
 
 SHOW_BASELINES = True
 HEADER_STR = "mppi"
-HEADER_SUBSTR = ""
+HEADER_SUBSTR = "twoside90"
 PREFIX_STR = "Trials"
 
 # def export_table2(df, hues):
@@ -105,6 +105,42 @@ class Tags(IntEnum):
     SEED = 5
 
 
+def make_plot(
+    x, y, policy, data, order, colours, x_label=None, y_label=None, legend_location="best", plot_name="default.plt"
+):
+    fig, ax = plt.subplots()
+    fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
+
+    sb.lineplot(
+        x=x,
+        y=y,
+        hue=policy,
+        data=data,
+        hue_order=order,
+        palette=colours,
+        # linewidth=2.5,
+    )
+
+    ax.tick_params(axis="both", which="major", labelsize=16)
+    handles, labels = ax.get_legend_handles_labels()
+    # ax.set_yscale('log')
+
+    ax.legend(
+        handles=handles,
+        labels=labels,
+        loc=legend_location,
+        title="Method",
+        title_fontsize=18,
+        fontsize=16,
+    )
+    if x_label is not None:
+        ax.set_xlabel(x_label)
+    if y_label is not None:
+        ax.set_ylabel(y_label)
+    fig.set_size_inches(width, height)
+    fig.savefig(plot_name)
+
+
 def plot_comparison(files, mode="baselines"):
     sb.set_theme(style="whitegrid")
     sb.set()
@@ -176,9 +212,7 @@ def plot_comparison(files, mode="baselines"):
     for seed in seeds:
         for run in runs:
             for policy in policies:
-                loc = (
-                    (df["run"] == run) & (df["seed"] == seed) & (df["policy"] == policy)
-                )
+                loc = (df["run"] == run) & (df["seed"] == seed) & (df["policy"] == policy)
 
                 df_slice = pd.DataFrame(df.loc[loc])
                 if len(df_slice) != 200:
@@ -194,91 +228,85 @@ def plot_comparison(files, mode="baselines"):
     #    .dropna()
 
     sb.set_style(style="whitegrid")
-    fig, ax = plt.subplots()
-    fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
 
     df_slice = df_means[(df_means["t"] <= 25)]
-
-    sb.lineplot(
-        x="t",
-        y="dx",
-        hue="policy",
+    make_plot(
+        "t",
+        "x",
+        policy="policy",
         data=df_slice,
-        hue_order=hue_order,
-        palette=colours,
-        # linewidth=2.5,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="X (m)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_x_plot.pdf",
     )
 
-    ax.tick_params(axis="both", which="major", labelsize=16)
-    handles, labels = ax.get_legend_handles_labels()
-    # ax.set_yscale('log')
-
-    ax.legend(
-        handles=handles,
-        labels=labels,
-        loc="lower right",
-        title="Method",
-        title_fontsize=18,
-        fontsize=16,
-    )
-    fig.set_size_inches(width, height)
-    fig.savefig(f"{PREFIX_STR}_dx_plot.pdf")
-
-    fig, ax = plt.subplots()
-    fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
-
-    sb.lineplot(
-        x="t",
-        y="dy",
-        hue="policy",
+    make_plot(
+        "t",
+        "dx",
+        policy="policy",
         data=df_slice,
-        hue_order=hue_order,
-        palette=colours,
-        linewidth=2.5,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="X Error (m)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_dx_plot.pdf",
     )
 
-    ax.tick_params(axis="both", which="major", labelsize=16)
-    handles, labels = ax.get_legend_handles_labels()
-    # ax.set_yscale('log')
-
-    ax.legend(
-        handles=handles,
-        labels=labels,
-        loc="upper left",
-        title="Method",
-        title_fontsize=18,
-        fontsize=16,
-    )
-    fig.set_size_inches(width, height)
-    fig.savefig(f"{PREFIX_STR}_dy_plot.pdf")
-
-    fig, ax = plt.subplots()
-    fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
-
-    sb.lineplot(
-        x="t",
-        y="dv",
-        hue="policy",
+    make_plot(
+        "t",
+        "y",
+        policy="policy",
         data=df_slice,
-        hue_order=hue_order,
-        palette=colours,
-        linewidth=2.5,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="Y (m)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_y_plot.pdf",
     )
 
-    ax.tick_params(axis="both", which="major", labelsize=16)
-    handles, labels = ax.get_legend_handles_labels()
-    # ax.set_yscale('log')
-
-    ax.legend(
-        handles=handles,
-        labels=labels,
-        loc="lower right",
-        title="Method",
-        title_fontsize=18,
-        fontsize=16,
+    make_plot(
+        "t",
+        "dy",
+        policy="policy",
+        data=df_slice,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="Y Error (m)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_dy_plot.pdf",
     )
-    fig.set_size_inches(width, height)
-    fig.savefig(f"{PREFIX_STR}_dv_plot.pdf")
+
+    make_plot(
+        "t",
+        "v",
+        policy="policy",
+        data=df_slice,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="V (m/s)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_v_plot.pdf",
+    )
+
+    make_plot(
+        "t",
+        "dv",
+        policy="policy",
+        data=df_slice,
+        order=hue_order,
+        colours=colours,
+        x_label="Time (s)",
+        y_label="V Error (m/s)",
+        legend_location="lower left",
+        plot_name=f"{PREFIX_STR}_dv_plot.pdf",
+    )
 
     # # export_table(df, hues=hue_order)
     # # export_table2(df, hues=hue_order)

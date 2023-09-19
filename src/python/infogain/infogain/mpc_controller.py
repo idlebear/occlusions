@@ -219,9 +219,7 @@ class MPC:
 
         # # define trajectory states and controls
         self.X_ideal = csi.SX.sym("traj-states", self.state_len, self.planning_horizon)
-        self.U_ideal = csi.SX.sym(
-            "traj-controls", self.control_len, self.planning_horizon
-        )
+        self.U_ideal = csi.SX.sym("traj-controls", self.control_len, self.planning_horizon)
 
         # define a forward step
         self.state_inc = self.step_fn(vehicle, self.state, self.control, dt)
@@ -395,9 +393,7 @@ class MPC:
             d_agent = csi.sqrt(d_agent_2)
 
             # TODO: Reformulate for overflow!
-            J_vis += self.M * csi.log(
-                1 + csi.exp(self.agents[2, ag] / d_agent * (r_fov_2 - d_agent_2))
-            )
+            J_vis += self.M * csi.log(1 + csi.exp(self.agents[2, ag] / d_agent * (r_fov_2 - d_agent_2)))
 
         return J_vis
 
@@ -405,18 +401,13 @@ class MPC:
         J_vis = 0
 
         for ag in range(self.num_agents):
-            angle = csi.arctan(
-                (self.agents[4, ag] - self.X[1, index])
-                / (self.agents[3, ag] - self.X[0, index])
-            )
+            angle = csi.arctan((self.agents[4, ag] - self.X[1, index]) / (self.agents[3, ag] - self.X[0, index]))
             j_vis += -self.M * angle
 
         return J_vis
 
     # def next(self, obs, state, goal, trajectory, controls, agents, warm_start=False):
-    def next(
-        self, obs, state, goal, agents, trajectory, controls=None, warm_start=False
-    ):
+    def next(self, obs, state, goal, agents, trajectory, controls=None, warm_start=False):
         # p = csi.vertcat(state['ego'], goal, *controls, *trajectory)
 
         if len(agents):
@@ -428,44 +419,30 @@ class MPC:
                     np.ones((self.num_agents * (self.planning_horizon),)) * (-np.inf),
                 ]
             )
-            ubg = np.hstack(
-                [self.ubg, np.zeros((self.num_agents * (self.planning_horizon),))]
-            )
+            ubg = np.hstack([self.ubg, np.zeros((self.num_agents * (self.planning_horizon),))])
         else:
             p = csi.vertcat(state, *trajectory, goal, *controls)
             # p = csi.vertcat(state, goal)
             lbg = self.lbg
             ubg = self.ubg
 
-        sol = self.solver(
-            x0=self.u_i, lbx=self.lbu, ubx=self.ubu, lbg=lbg, ubg=ubg, p=p
-        )
+        sol = self.solver(x0=self.u_i, lbx=self.lbu, ubx=self.ubu, lbg=lbg, ubg=ubg, p=p)
         res = self.solver.stats()
         if not res["success"]:
             raise SystemError("ERROR: Solver failed!")
 
         print(f"Cost: {sol['f']}")
         opt = sol["x"]
-        u_opt = opt[: self.planning_horizon * self.control_len].reshape(
-            (self.control_len, self.planning_horizon)
-        )
-        x_opt = opt[self.planning_horizon * self.control_len :].reshape(
-            (self.state_len, self.planning_horizon + 1)
-        )
+        u_opt = opt[: self.planning_horizon * self.control_len].reshape((self.control_len, self.planning_horizon))
+        x_opt = opt[self.planning_horizon * self.control_len :].reshape((self.state_len, self.planning_horizon + 1))
 
         if warm_start:
             # keep the future states for the next lop
             self.u_i[0 : (self.planning_horizon - 1) * self.control_len] = opt[
                 self.control_len : self.planning_horizon * self.control_len
             ]
-            self.u_i[
-                (self.planning_horizon - 1)
-                * self.control_len : self.planning_horizon
-                * self.control_len
-            ] = opt[
-                (self.planning_horizon - 1)
-                * self.control_len : self.planning_horizon
-                * self.control_len
+            self.u_i[(self.planning_horizon - 1) * self.control_len : self.planning_horizon * self.control_len] = opt[
+                (self.planning_horizon - 1) * self.control_len : self.planning_horizon * self.control_len
             ]
 
             self.u_i[self.planning_horizon * self.control_len : -self.state_len] = opt[
@@ -479,16 +456,12 @@ class MPC:
 # @brief: MPPI (Class) -- sampling based implementation of Model Predictive Control
 #
 class MPPI:
-    USE_FINAL_WEIGHT = True
-
     class visibility_method(Enum):
         OURS = 0
         HIGGINS = 1
         NONE = 2
 
-    def __init__(
-        self, mode, vehicle, limits, c_lambda=1, Q=None, M=1, seed=None
-    ) -> None:
+    def __init__(self, mode, vehicle, limits, c_lambda=1, Q=None, M=1, seed=None) -> None:
         if mode == "Ours":
             self.mode = MPPI.visibility_method.OURS
         elif mode == "Higgins":
@@ -543,23 +516,12 @@ class MPPI:
             )
 
         u_weighted = np.zeros_like(u_nom)
-        if not MPPI.USE_FINAL_WEIGHT:
-            for step in range(u_M):
-                total_weight = np.sum(u_weight[:, step])
-                u_weighted[:, step] = (
-                    u_nom[:, step]
-                    + np.sum(
-                        u_dist[:, :, step] * u_weight[:, step].reshape([-1, 1]), axis=0
-                    )
-                    / total_weight
-                )
-        else:
-            total_weight = np.sum(u_weight[:, -1])
-            for step in range(u_M):
-                u_dist[:, :, step] *= u_weight[:, -1].reshape([-1, 1])
-                u_weighted[:, step] = (
-                    u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
-                )
+        weights = np.exp(-1.0 / (self.c_lambda) * np.sum(u_weight, axis=1)).reshape((-1, 1))
+        total_weight = np.sum(weights)
+
+        for step in range(u_M):
+            u_dist[:, :, step] = weights * u_dist[:, :, step]
+            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
 
         return u_weighted, u_dist
 
@@ -582,17 +544,13 @@ class MPPI:
         u_dist,
         u_weight,
     ):
-        score = 0
         control_len, steps = u_nom.shape
 
         state = np.array(initial_state)
         for step in range(steps):
             u_i = np.array(u_nom[:, step])
             for control_num in range(control_len):
-                noise = (
-                    self.gen.random() * self.limits[control_num] * 2
-                    - self.limits[control_num]
-                )
+                noise = self.gen.random() * self.limits[control_num] * 2 - self.limits[control_num]
                 u_i[control_num] += noise
                 u_dist[control_num, step] = noise
 
@@ -612,14 +570,12 @@ class MPPI:
                     origin=origin,
                     resolution=resolution,
                     state=state,
-                    step_score=step_score,
                     step=step,
                 )
             elif self.mode == MPPI.visibility_method.HIGGINS:
                 step_score += self.__higgins_visibility_cost(state, actors=actors)
 
-            score += step_score
-            u_weight[step] = np.exp((-1.0 / self.c_lambda) * score)
+            u_weight[step] = step_score
 
     def __higgins_visibility_cost(self, state, actors):
         J_vis = 0
@@ -633,9 +589,7 @@ class MPPI:
             d_agent = csi.sqrt(d_agent_2)
 
             # TODO: Reformulate for overflow!
-            J_vis += self.M * np.log(
-                1 + np.exp(act[2] / d_agent * (r_fov_2 - d_agent_2))
-            )
+            J_vis += self.M * np.log(1 + np.exp(act[2] / d_agent * (r_fov_2 - d_agent_2)))
 
         return J_vis
 
@@ -652,9 +606,7 @@ class MPPI:
 
         return 0
 
-    def __our_visibility_cost(
-        self, costmap, origin, resolution, state, step_score, step
-    ):
+    def __our_visibility_cost(self, costmap, origin, resolution, state, step):
         map_x = int((state[0] - origin[0]) / resolution)
         map_y = int((state[1] - origin[1]) / resolution)
 
@@ -662,10 +614,7 @@ class MPPI:
         if map_x < 0 or map_x > max_x - 1 or map_y < 0 or map_y > max_y - 1:
             raise ValueError("Planning outside of available cost map!")
 
-        # score = max(
-        #     -step_score, -self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
-        # )
-        return self.M * costmap[map_y, map_x] * (DISCOUNT_FACTOR**step)
+        return self.M * (1 - costmap[map_y, map_x] * (DISCOUNT_FACTOR**step))
 
 
 import matplotlib.pyplot as plt
@@ -706,16 +655,12 @@ def visualize_variations(vehicle, initial_state, u_nom, u_variations, u_weighted
         u_var = np.array(u_nom)
         u_var = u_var + u_variations[i, ...]
 
-        traj = run_trajectory(
-            vehicle=vehicle, initial_state=initial_state, controls=u_var, dt=dt
-        )
+        traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_var, dt=dt)
         new_traj_pts.append(np.expand_dims(traj, axis=0))
 
     new_traj_pts = np.vstack(new_traj_pts)
 
-    traj = run_trajectory(
-        vehicle=vehicle, initial_state=initial_state, controls=u_weighted, dt=dt
-    )
+    traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_weighted, dt=dt)
 
     if plot_lines is None:
         plot_lines = ax[0].plot(new_traj_pts[:, 0, :].T, new_traj_pts[:, 1, :].T)
@@ -777,9 +722,7 @@ if __name__ == "__main__":
 
     initial = np.array([0, 0, 0, 0, 0]).astype(np.float64)
 
-    u, u_variations = roller.find_control(
-        costmap, origin, resolution, u_nom, initial, samples, dt
-    )
+    u, u_variations = roller.find_control(costmap, origin, resolution, u_nom, initial, samples, dt)
 
     state = np.array(initial)
     last_distance = 10000.0
