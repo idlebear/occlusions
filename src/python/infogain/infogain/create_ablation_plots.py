@@ -11,6 +11,8 @@ from distinctipy import distinctipy
 from os import listdir
 from os.path import isfile, join
 
+from latex import write_table
+
 mpl.use("pdf")
 # import scienceplots
 # plt.style.use(['science', 'ieee'])
@@ -20,81 +22,10 @@ width = 8  # 3.487
 height = width / 1.5
 
 SHOW_BASELINES = True
-HEADER_STR = "weight_test"
-# HEADER_SUBSTR = "Higgins"
-HEADER_SUBSTR = "Ours"
-PREFIX_STR = "Ours_Weight_Trials"
-
-# def export_table2(df, hues):
-
-#     print('%%%%%')
-#     print('% Table Data for Uniform Distribution in metric space')
-#     print('%')
-#     print('\\begin{table*}')
-#     print('\\caption{Mean, Median and Average Task Wait Times (m)}')
-#     print('\\label{table:task-time-data}')
-#     print('\\begin{center}')
-#     print('\\begin{tabular}{@{} l  c c c  c c c  c c c  c c c  c c c @{}}')
-#     print('\\toprule')
-#     print(' & \\multicolumn{3}{c}{$\\rho=0.5$} & \\multicolumn{3}{c}{$\\rho=0.6$} & \\multicolumn{3}{c}{$\\rho=0.7$} & \\multicolumn{3}{c}{$\\rho=0.8$} & \\multicolumn{3}{c}{$\\rho=0.9$} \\\\')
-#     print('Method & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean & $\\sigma$ & 95\% \\\\')
-#     print('\\midrule')
-
-#     for index, hue in enumerate(hues):
-#         s = hue
-#         for rho in [0.5, 0.6, 0.7, 0.8, 0.9]:
-#             df_slice = df[(df['Solver'] == hue) & (df['rho'] == rho)]
-#             if USE_MONTREAL_DATA:
-#                 s += ' & ' + \
-#                     f"{(df_slice['wait_minutes'].mean()):5.1f} & {(df_slice['wait_minutes'].std()):5.1f} & {(df_slice['wait_minutes'].quantile(q=0.95)):5.1f}"
-#             else:
-#                 s += ' & ' + f"{(df_slice['Wait Time'].mean()):5.1f} & {(df_slice['Wait Time'].std()):5.1f} & {(df_slice['Wait Time'].quantile(q=0.95)):5.1f}"
-#         s += "\\\\"
-#         print(s)
-#         if index == 1:
-#             # hacky bit to insert a line after the second row
-#             print('\\midrule')
-
-#     print('\\bottomrule')
-#     print('\\end{tabular}')
-#     print('\\end{center}')
-#     print('\\end{table*}')
-#     print('%')
-#     print('%%%%%')
-
-
-# def export_table(df, hues):
-
-#     print('%%%%%')
-#     print('% Table Data for Uniform Distribution in metric space')
-#     print('%')
-#     print('\\begin{table}')
-#     print('\\caption{Mean, Median and Average Task Wait Times (s)}')
-#     print('\\label{table:task-time-data}')
-#     print('\\begin{center}')
-#     print('\\begin{tabular}{@{} l l c c c c @{}}')
-#     print('\\toprule')
-#     print('$\\rho$ & Method & Mean & Median & $\\sigma$ & 95\% \\\\')
-
-#     for rho in [0.5, 0.6, 0.7, 0.8, 0.9]:
-#         print('\\midrule')
-#         rho_str = str(rho)
-#         for hue in hues:
-#             df_slice = df[(df['Solver'] == hue) & (df['rho'] == rho)]
-#             if USE_MONTREAL_DATA:
-#                 print(
-#                     f"{rho_str} & {hue} & {(df_slice['wait_minutes'].mean()):5.1f} & {(df_slice['wait_minutes'].median()):5.1f} & {(df_slice['wait_minutes'].std()):5.1f} & {(df_slice['wait_minutes'].quantile(q=0.95)):5.1f} \\\\")
-#             else:
-#                 print(
-#                     f"{rho_str} & {hue} & {(df_slice['Wait Time'].mean()):5.1f} & {(df_slice['Wait Time'].median()):5.1f} & {(df_slice['Wait Time'].std()):5.1f} & {(df_slice['Wait Time'].quantile(q=0.95)):5.1f} \\\\")
-#             rho_str = ''
-
-#     print('\\bottomrule')
-#     print('\\end{tabular}')
-#     print('\\end{center}')
-#     print('\\end{table}')
-#     print('%')
-#     print('%%%%%')
+HEADER_STR = "weight-test"
+HEADER_SUBSTR = "Higgins"
+# HEADER_SUBSTR = "Ours"
+PREFIX_STR = HEADER_SUBSTR + "_Weight_Trials"
 
 
 class Tags(IntEnum):
@@ -195,11 +126,7 @@ def plot_comparison(files, mode="baselines"):
     df = pd.concat(df_list, ignore_index=True, sort=False)
 
     WEIGHT_LIMIT = 1.5
-    weights = [
-        "w:" + str(w)
-        for w in sorted(list(set(df["visibility-weight"])))
-        if w < WEIGHT_LIMIT
-    ]
+    weights = ["w:" + str(w) for w in sorted(list(set(df["visibility-weight"]))) if w < WEIGHT_LIMIT]
 
     colours = [
         "darkorange",
@@ -235,11 +162,17 @@ def plot_comparison(files, mode="baselines"):
 
     sb.set_style(style="whitegrid")
 
-    for w in weights:
-        df_slice = df[df["weight-name"] == w]
-        print(
-            f"{w}: x_max: {df_slice.x.max():6.3f}, y_min: {df_slice.y.min():5.3f}, y_max: {df_slice.y.max():5.3f}, mean v{df_slice.v.mean():5.3f}"
-        )
+    write_table(
+        df,
+        policies=weights,
+        policy_column="weight-name",
+        columns=["x", "y", "v"],
+        ranges=["last", "all", "all"],
+        range_column="t",
+        title="Weight Trials",
+        caption="Results of varying the visibility weight while holding all other optimization factors constant",
+        label="tbl:data",
+    )
 
     df_slice = df[(df["t"] <= 25) & (df["visibility-weight"] < WEIGHT_LIMIT)]
     make_plot(

@@ -11,6 +11,8 @@ from distinctipy import distinctipy
 from os import listdir
 from os.path import isfile, join
 
+from latex import write_table
+
 mpl.use("pdf")
 # import scienceplots
 # plt.style.use(['science', 'ieee'])
@@ -27,77 +29,6 @@ PREFIX_STR = "Optimized-Trials"
 # TABLE formatting
 TITLE = "Optimized One-Sided Occlusions"
 CAPTION = "Cars parked on one side only"
-
-# def export_table2(df, hues):
-
-#     print('%%%%%')
-#     print('% Table Data for Uniform Distribution in metric space')
-#     print('%')
-#     print('\\begin{table*}')
-#     print('\\caption{Mean, Median and Average Task Wait Times (m)}')
-#     print('\\label{table:task-time-data}')
-#     print('\\begin{center}')
-#     print('\\begin{tabular}{@{} l  c c c  c c c  c c c  c c c  c c c @{}}')
-#     print('\\toprule')
-#     print(' & \\multicolumn{3}{c}{$\\rho=0.5$} & \\multicolumn{3}{c}{$\\rho=0.6$} & \\multicolumn{3}{c}{$\\rho=0.7$} & \\multicolumn{3}{c}{$\\rho=0.8$} & \\multicolumn{3}{c}{$\\rho=0.9$} \\\\')
-#     print('Method & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean  & $\\sigma$ & 95\% & Mean & $\\sigma$ & 95\% \\\\')
-#     print('\\midrule')
-
-#     for index, hue in enumerate(hues):
-#         s = hue
-#         for rho in [0.5, 0.6, 0.7, 0.8, 0.9]:
-#             df_slice = df[(df['Solver'] == hue) & (df['rho'] == rho)]
-#             if USE_MONTREAL_DATA:
-#                 s += ' & ' + \
-#                     f"{(df_slice['wait_minutes'].mean()):5.1f} & {(df_slice['wait_minutes'].std()):5.1f} & {(df_slice['wait_minutes'].quantile(q=0.95)):5.1f}"
-#             else:
-#                 s += ' & ' + f"{(df_slice['Wait Time'].mean()):5.1f} & {(df_slice['Wait Time'].std()):5.1f} & {(df_slice['Wait Time'].quantile(q=0.95)):5.1f}"
-#         s += "\\\\"
-#         print(s)
-#         if index == 1:
-#             # hacky bit to insert a line after the second row
-#             print('\\midrule')
-
-#     print('\\bottomrule')
-#     print('\\end{tabular}')
-#     print('\\end{center}')
-#     print('\\end{table*}')
-#     print('%')
-#     print('%%%%%')
-
-
-# def export_table(df, hues):
-
-#     print('%%%%%')
-#     print('% Table Data for Uniform Distribution in metric space')
-#     print('%')
-#     print('\\begin{table}')
-#     print('\\caption{Mean, Median and Average Task Wait Times (s)}')
-#     print('\\label{table:task-time-data}')
-#     print('\\begin{center}')
-#     print('\\begin{tabular}{@{} l l c c c c @{}}')
-#     print('\\toprule')
-#     print('$\\rho$ & Method & Mean & Median & $\\sigma$ & 95\% \\\\')
-
-#     for rho in [0.5, 0.6, 0.7, 0.8, 0.9]:
-#         print('\\midrule')
-#         rho_str = str(rho)
-#         for hue in hues:
-#             df_slice = df[(df['Solver'] == hue) & (df['rho'] == rho)]
-#             if USE_MONTREAL_DATA:
-#                 print(
-#                     f"{rho_str} & {hue} & {(df_slice['wait_minutes'].mean()):5.1f} & {(df_slice['wait_minutes'].median()):5.1f} & {(df_slice['wait_minutes'].std()):5.1f} & {(df_slice['wait_minutes'].quantile(q=0.95)):5.1f} \\\\")
-#             else:
-#                 print(
-#                     f"{rho_str} & {hue} & {(df_slice['Wait Time'].mean()):5.1f} & {(df_slice['Wait Time'].median()):5.1f} & {(df_slice['Wait Time'].std()):5.1f} & {(df_slice['Wait Time'].quantile(q=0.95)):5.1f} \\\\")
-#             rho_str = ''
-
-#     print('\\bottomrule')
-#     print('\\end{tabular}')
-#     print('\\end{center}')
-#     print('\\end{table}')
-#     print('%')
-#     print('%%%%%')
 
 
 class Tags(IntEnum):
@@ -177,9 +108,7 @@ def plot_comparison(files, mode="baselines"):
             nulls = [True if type(a) != float else False for a in df["x"]]
             nulls = df[nulls]
             if len(nulls):
-                print(
-                    f"WARNING: Corrupt data in {f} starting on/near line {np.argmax(nulls)}"
-                )
+                print(f"WARNING: Corrupt data in {f} starting on/near line {np.argmax(nulls)}")
                 continue
 
             try:
@@ -215,9 +144,7 @@ def plot_comparison(files, mode="baselines"):
     for seed in seeds:
         for run in runs:
             for policy in policies:
-                loc = (
-                    (df["run"] == run) & (df["seed"] == seed) & (df["policy"] == policy)
-                )
+                loc = (df["run"] == run) & (df["seed"] == seed) & (df["policy"] == policy)
 
                 df_slice = pd.DataFrame(df.loc[loc])
                 if len(df_slice) != 200:
@@ -232,62 +159,10 @@ def plot_comparison(files, mode="baselines"):
 
     #    .dropna()
 
-    def write_table(
-        df, policies, columns, ranges, range_column, title="", caption="", label=""
-    ):
-        num_columns = len(columns)
-        column_format = "\\begin{tabular}{@{} l"
-        title_str1 = "  "
-        title_str2 = "Method  "
-        for i in range(num_columns):
-            column_format += " c c c c "
-            title_str1 += f"& \\multicolumn{{4}}{{c}}{{ {columns[i]} }}"
-            title_str2 += f" & $\\mu$ & $\\sigma$ & min & max "
-        title_str1 += "\\\\"
-        title_str2 += "\\\\"
-
-        print("%%%%%")
-        print(f"% Table Data ({title})")
-        print("%")
-        print("\\begin{table*}")
-        print(f"\\caption{{ {caption} }}")
-        print(f"\\label{{ {label} }}")
-        print("\\begin{center}")
-        column_format += " @{}}"
-        print(column_format)
-        print("\\toprule")
-
-        print(title_str1)
-        print(title_str2)
-        print("\\midrule")
-
-        for index, policy in enumerate(policies):
-            s = policy
-            for col, ran in zip(columns, ranges):
-                if ran == "all":
-                    df_slice = df[(df["policy"] == policy)]
-                else:
-                    max_row = df[range_column].max()
-                    df_slice = df[
-                        (df["policy"] == policy) & (df[range_column] == max_row)
-                    ]
-
-                s += (
-                    " & "
-                    + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f} "
-                )
-            s += "\\\\"
-            print(s)
-        print("\\bottomrule")
-        print("\\end{tabular}")
-        print("\\end{center}")
-        print("\\end{table*}")
-        print("%")
-        print("%%%%%")
-
     write_table(
         df,
         policies=policies,
+        policy_column="policies",
         columns=["x", "y", "v"],
         ranges=["last", "all", "all"],
         range_column="t",
