@@ -39,6 +39,10 @@ GENERATOR_ARGS = {
     "mix": 0.5,
 }
 
+# experiment parameters
+V_DES = 8
+A_DES = 3.5
+
 ACTOR_SPEED = 6.0
 OPPONENT_CAR_SPEED = 6.0
 MAX_CAR_SPEED = 9.0
@@ -105,8 +109,7 @@ THETA_WEIGHT = 0
 DELTA_WEIGHT = 0
 ACCEL_VARIATION = 3
 OMEGA_VARIATION = PI / 2
-V_DES = 8
-A_DES = 3.5
+EXP_OVERFLOW_LIMIT = 709.0
 
 
 # Data capture

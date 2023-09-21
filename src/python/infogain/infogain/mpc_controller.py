@@ -6,7 +6,7 @@ import ModelParameters.Ackermann as Ackermann
 import ModelParameters.GenericCar as GenericCar
 
 
-from config import LANE_WIDTH, DISCOUNT_FACTOR
+from config import LANE_WIDTH, DISCOUNT_FACTOR, EXP_OVERFLOW_LIMIT
 
 
 # Basic step function -- apply the control to advance one step
@@ -562,10 +562,10 @@ class MPPI:
             step_score = state_err.T @ self.Q @ state_err
 
             # check for obstacles
-            step_score += self.__obstacle_cost(state=state, actors=actors)
+            step_score += self.obstacle_cost(state=state, actors=actors)
 
             if self.mode == MPPI.visibility_method.OURS:
-                step_score += self.__our_visibility_cost(
+                step_score += self.our_visibility_cost(
                     costmap=costmap,
                     origin=origin,
                     resolution=resolution,
@@ -573,11 +573,11 @@ class MPPI:
                     step=step,
                 )
             elif self.mode == MPPI.visibility_method.HIGGINS:
-                step_score += self.__higgins_visibility_cost(state, actors=actors)
+                step_score += self.higgins_visibility_cost(state, actors=actors)
 
             u_weight[step] = step_score
 
-    def __higgins_visibility_cost(self, state, actors):
+    def higgins_visibility_cost(self, state, actors):
         J_vis = 0
         r_fov = 15
         r_fov_2 = r_fov**2
@@ -586,14 +586,20 @@ class MPPI:
             dx = state[0] - act[0]
             dy = state[1] - act[1]
             d_agent_2 = dx * dx + dy * dy
-            d_agent = csi.sqrt(d_agent_2)
+            d_agent = np.sqrt(d_agent_2)
 
-            # TODO: Reformulate for overflow!
-            J_vis += self.M * np.log(1 + np.exp(act[2] / d_agent * (r_fov_2 - d_agent_2)))
+            # if the exp is going to overflow, just use the max value
+            inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
+            if inner > EXP_OVERFLOW_LIMIT:
+                score = self.M * EXP_OVERFLOW_LIMIT
+            else:
+                score = self.M * np.log(1 + np.exp(inner))
+
+            J_vis += score
 
         return J_vis
 
-    def __obstacle_cost(self, state, actors):
+    def obstacle_cost(self, state, actors):
         for act in actors:
             dx = state[0] - act[0]
             dy = state[1] - act[1]
@@ -606,7 +612,7 @@ class MPPI:
 
         return 0
 
-    def __our_visibility_cost(self, costmap, origin, resolution, state, step):
+    def our_visibility_cost(self, costmap, origin, resolution, state, step):
         map_x = int((state[0] - origin[0]) / resolution)
         map_y = int((state[1] - origin[1]) / resolution)
 
