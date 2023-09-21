@@ -34,9 +34,7 @@ class VisibilityGrid:
         self.origin = origin
 
     def copy(self):
-        dup = VisibilityGrid(
-            self.dim, self.resolution, (self.origin[0], self.origin[1]), self.invertY
-        )
+        dup = VisibilityGrid(self.dim, self.resolution, (self.origin[0], self.origin[1]), self.invertY)
         dup.grid = np.array(self.grid)
         return dup
 
@@ -81,9 +79,7 @@ class VisibilityGrid:
 
         tmp_grid = np.zeros_like(self.grid)
         if old_x_max - old_x_min > 0 and old_y_max - old_y_min > 0:
-            tmp_grid[new_y_min:new_y_max, new_x_min:new_x_max] = self.grid[
-                old_y_min:old_y_max, old_x_min:old_x_max
-            ]
+            tmp_grid[new_y_min:new_y_max, new_x_min:new_x_max] = self.grid[old_y_min:old_y_max, old_x_min:old_x_max]
         self.grid = tmp_grid
 
     def update(self, points, values):
@@ -103,23 +99,6 @@ class VisibilityGrid:
         finally:
             self.mutex.release()
 
-    def normalized(self):
-        self.mutex.acquire()
-        try:
-            return self.normalized_()
-        finally:
-            self.mutex.release()
-
-    def normalized_(self):
-        costmap = np.array(self.grid)
-        min_result = np.min(costmap)
-        if min_result > 0:
-            costmap -= min_result
-        max_result = np.max(costmap)
-        if max_result > 0:
-            costmap /= max_result
-        return 1 - costmap
-
     def decay(self, rate):
         self.mutex.acquire()
         try:
@@ -130,15 +109,12 @@ class VisibilityGrid:
     def visualize(self):
         self.mutex.acquire()
         try:
-            normalized = self.normalized_()
             if self.grid_fig is None:
                 self.grid_fig, self.grid_ax = plt.subplots(num=FIG_VISIBILITY)
-                self.grid_img = self.grid_ax.imshow(
-                    np.zeros((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8)
-                )
+                self.grid_img = self.grid_ax.imshow(np.zeros((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
                 plt.show(block=False)
 
-            img = Image.fromarray((normalized * 255.0).astype(np.uint8)).convert("RGB")
+            img = Image.fromarray((self.grid * 255.0).astype(np.uint8)).convert("RGB")
             self.grid_img.set_data(img)
 
             self.grid_fig.canvas.draw()
