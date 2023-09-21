@@ -20,13 +20,10 @@ width = 8  # 3.487
 height = width / 1.5
 
 SHOW_BASELINES = True
-HEADER_STR = "mppi"
-HEADER_SUBSTR = "optimized"
-PREFIX_STR = "Optimized-Trials"
-
-# TABLE formatting
-TITLE = "Optimized One-Sided Occlusions"
-CAPTION = "Cars parked on one side only"
+HEADER_STR = "weight_test"
+# HEADER_SUBSTR = "Higgins"
+HEADER_SUBSTR = "Ours"
+PREFIX_STR = "Ours_Weight_Trials"
 
 # def export_table2(df, hues):
 
@@ -118,6 +115,7 @@ def make_plot(
     colours,
     x_label=None,
     y_label=None,
+    y_limit=None,
     legend_location="best",
     plot_name="default.plt",
 ):
@@ -138,6 +136,9 @@ def make_plot(
     handles, labels = ax.get_legend_handles_labels()
     # ax.set_yscale('log')
 
+    if y_limit is not None:
+        ax.set_ylim(y_limit)
+
     ax.legend(
         handles=handles,
         labels=labels,
@@ -146,6 +147,7 @@ def make_plot(
         title_fontsize=18,
         fontsize=16,
     )
+
     if x_label is not None:
         ax.set_xlabel(x_label)
     if y_label is not None:
@@ -167,20 +169,16 @@ def plot_comparison(files, mode="baselines"):
     df_list = []
     for f in files:
         if HEADER_STR in f and HEADER_SUBSTR in f:
-            df = pd.read_csv(f)
+            try:
+                df = pd.read_csv(f)
+            except pd.errors.EmptyDataError:
+                continue
+
             df.fillna("None", inplace=True)
 
             tags = f.split("-")  # get meta data
             method = tags[Tags.METHOD]
             cost_fn = tags[Tags.COST_FN]
-
-            nulls = [True if type(a) != float else False for a in df["x"]]
-            nulls = df[nulls]
-            if len(nulls):
-                print(
-                    f"WARNING: Corrupt data in {f} starting on/near line {np.argmax(nulls)}"
-                )
-                continue
 
             try:
                 df["t"] = df["t"].round(2)
@@ -190,256 +188,101 @@ def plot_comparison(files, mode="baselines"):
                     df_run = df.loc[df["run"] == run].reset_index()
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
 
+            df["weight-name"] = ["w:" + str(w) for w in df["visibility-weight"]]
+
             df_list.append(df)
 
     df = pd.concat(df_list, ignore_index=True, sort=False)
 
-    # df_trim = []
-    # for hue in hue_order:
-    #     df_hue = df.loc[df['Solver'] == hue]
-    #     df_hue = df_hue.iloc[-100000:-1000, :]
-    #     df_trim.append(df_hue)
-    # df = pd.concat(df_trim, ignore_index=True, sort=False)
+    WEIGHT_LIMIT = 1.5
+    weights = [
+        "w:" + str(w)
+        for w in sorted(list(set(df["visibility-weight"])))
+        if w < WEIGHT_LIMIT
+    ]
 
-    # for each run, create a diff (x) from nominal
-    nom_df = df.loc[df["policy"] == "Nominal"]
-    mean_nom_df_x = nom_df.groupby("t").x.mean()
-    mean_nom_df_y = nom_df.groupby("t").y.mean()
-    mean_nom_df_v = nom_df.groupby("t").v.mean()
-
-    runs = set(df["run"])
-    seeds = set(df["seed"])
-    policies = ["None", "Higgins", "Ours", "Nominal"]
-
-    df_means = []
-    for seed in seeds:
-        for run in runs:
-            for policy in policies:
-                loc = (
-                    (df["run"] == run) & (df["seed"] == seed) & (df["policy"] == policy)
-                )
-
-                df_slice = pd.DataFrame(df.loc[loc])
-                if len(df_slice) != 200:
-                    continue
-
-                df_slice["dx"] = df_slice["x"].to_numpy() - mean_nom_df_x.to_numpy()
-                df_slice["dy"] = df_slice["y"].to_numpy() - mean_nom_df_y.to_numpy()
-                df_slice["dv"] = df_slice["v"].to_numpy() - mean_nom_df_v.to_numpy()
-
-                df_means.append(df_slice)
-    df_means = pd.concat(df_means, ignore_index=True, sort=False)
-
-    #    .dropna()
-
-    def write_table(
-        df, policies, columns, ranges, range_column, title="", caption="", label=""
-    ):
-        num_columns = len(columns)
-        column_format = "\\begin{tabular}{@{} l"
-        title_str1 = "  "
-        title_str2 = "Method  "
-        for i in range(num_columns):
-            column_format += " c c c c "
-            title_str1 += f"& \\multicolumn{{4}}{{c}}{{ {columns[i]} }}"
-            title_str2 += f" & $\\mu$ & $\\sigma$ & min & max "
-        title_str1 += "\\\\"
-        title_str2 += "\\\\"
-
-        print("%%%%%")
-        print(f"% Table Data ({title})")
-        print("%")
-        print("\\begin{table*}")
-        print(f"\\caption{{ {caption} }}")
-        print(f"\\label{{ {label} }}")
-        print("\\begin{center}")
-        column_format += " @{}}"
-        print(column_format)
-        print("\\toprule")
-
-        print(title_str1)
-        print(title_str2)
-        print("\\midrule")
-
-        for index, policy in enumerate(policies):
-            s = policy
-            for col, ran in zip(columns, ranges):
-                if ran == "all":
-                    df_slice = df[(df["policy"] == policy)]
-                else:
-                    max_row = df[range_column].max()
-                    df_slice = df[
-                        (df["policy"] == policy) & (df[range_column] == max_row)
-                    ]
-
-                s += (
-                    " & "
-                    + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f} "
-                )
-            s += "\\\\"
-            print(s)
-        print("\\bottomrule")
-        print("\\end{tabular}")
-        print("\\end{center}")
-        print("\\end{table*}")
-        print("%")
-        print("%%%%%")
-
-    write_table(
-        df,
-        policies=policies,
-        columns=["x", "y", "v"],
-        ranges=["last", "all", "all"],
-        range_column="t",
-        title=TITLE,
-        caption=CAPTION,
-        label="tbl:data",
-    )
-
-    sb.set_style(style="whitegrid")
     colours = [
         "darkorange",
         "wheat",
         "lightsteelblue",
         "royalblue",
-        # "lavender",
-        # "slateblue",
-        # "dodgerblue",
-        # # 'bisque',
-        # "linen",
+        "lavender",
+        "slateblue",
+        "dodgerblue",
+        "bisque",
+        "linen",
+        "yellow",
+        # "coral",
+        # "orangered",
+        "red",
+        # "indianred",
+        # "lightcoral",
+        # "gold",
+        # "teal",
+        # "darkcyan",
+        "cyan",
+        # "khaki",
+        # "darkkhaki",
+        # "lightgray",
+        # "lime",
     ]
-    hue_order = policies
 
-    df_slice = df_means[(df_means["t"] <= 25)]
+    # hue_order = [
+    #     "Ours",
+    #     "Higgins",
+    #     "None",
+    # ]
+
+    sb.set_style(style="whitegrid")
+
+    for w in weights:
+        df_slice = df[df["weight-name"] == w]
+        print(
+            f"{w}: x_max: {df_slice.x.max():6.3f}, y_min: {df_slice.y.min():5.3f}, y_max: {df_slice.y.max():5.3f}, mean v{df_slice.v.mean():5.3f}"
+        )
+
+    df_slice = df[(df["t"] <= 25) & (df["visibility-weight"] < WEIGHT_LIMIT)]
     make_plot(
         "t",
         "x",
-        policy="policy",
+        policy="weight-name",
         data=df_slice,
-        order=hue_order,
+        order=weights,
         colours=colours,
         x_label="Time (s)",
         y_label="X (m)",
+        y_limit=None,
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_x_plot.pdf",
     )
 
     make_plot(
         "t",
-        "dx",
-        policy="policy",
-        data=df_slice,
-        order=hue_order,
-        colours=colours,
-        x_label="Time (s)",
-        y_label="X Error (m)",
-        legend_location="lower left",
-        plot_name=f"{PREFIX_STR}_dx_plot.pdf",
-    )
-
-    make_plot(
-        "t",
         "y",
-        policy="policy",
+        policy="weight-name",
         data=df_slice,
-        order=hue_order,
-        colours=colours,
+        order=weights,
+        colours=None,
         x_label="Time (s)",
         y_label="Y (m)",
+        y_limit=[-3, 3],
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_y_plot.pdf",
     )
 
     make_plot(
         "t",
-        "dy",
-        policy="policy",
-        data=df_slice,
-        order=hue_order,
-        colours=colours,
-        x_label="Time (s)",
-        y_label="Y Error (m)",
-        legend_location="lower left",
-        plot_name=f"{PREFIX_STR}_dy_plot.pdf",
-    )
-
-    make_plot(
-        "t",
         "v",
-        policy="policy",
+        policy="weight-name",
         data=df_slice,
-        order=hue_order,
-        colours=colours,
+        order=weights,
+        colours=None,
         x_label="Time (s)",
         y_label="V (m/s)",
+        y_limit=[4, 8],
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_v_plot.pdf",
     )
-
-    make_plot(
-        "t",
-        "dv",
-        policy="policy",
-        data=df_slice,
-        order=hue_order,
-        colours=colours,
-        x_label="Time (s)",
-        y_label="V Error (m/s)",
-        legend_location="lower left",
-        plot_name=f"{PREFIX_STR}_dv_plot.pdf",
-    )
-
-    # # export_table(df, hues=hue_order)
-    # # export_table2(df, hues=hue_order)
-
-    colours = [
-        "darkorange",
-        "wheat",
-        "lightsteelblue",
-        "royalblue",
-        # "lavender",
-        # "slateblue",
-        # "dodgerblue",
-        # # 'bisque',
-        # "linen",
-    ]
-
-    hue_order = [
-        "Ours",
-        "Nominal",
-        "Higgins",
-        "None",
-    ]
-
-    # fig, ax = plt.subplots()
-    # fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
-
-    # sb.lineplot(
-    #     x="x",
-    #     y="y",
-    #     hue="policy",
-    #     data=df_slice,
-    #     palette=colours,
-    #     # linewidth=2.5,
-    # )
-
-    # ax.tick_params(axis="both", which="major", labelsize=16)
-    # handles, labels = ax.get_legend_handles_labels()
-    # # ax.set_yscale('log')
-
-    # ax.legend(
-    #     handles=handles,
-    #     labels=labels,
-    #     loc="bottom left",
-    #     title="Method",
-    #     title_fontsize=18,
-    #     fontsize=16,
-    # )
-    # fig.set_size_inches(width, height)
-    # fig.savefig(f"{PREFIX_STR}_xy_plot.pdf")
-
-    # # # export_table(df, hues=hue_order)
-    # # export_table2(df, hues=hue_order)
 
 
 if __name__ == "__main__":

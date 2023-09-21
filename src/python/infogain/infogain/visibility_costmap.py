@@ -46,7 +46,7 @@ def update_visibility_costmap(
         distance_grid, metric="chessboard"
     ).astype(np.float64)
 
-    obs_pts = np.where(distance_grid < LANE_WIDTH / resolution)
+    obs_pts = np.where(distance_grid < (LANE_WIDTH + 1) / resolution)
 
     # place the obs points in the larger map
     obs_pts = [
