@@ -62,6 +62,8 @@ def main(args):
     else:
         env = OcclusionEnv(num_actors=args.actors, seed=args.seed)
 
+        M = args.visibility_weight
+
         if args.method == "mpc":
             Q = (
                 np.array(
@@ -86,7 +88,6 @@ def main(args):
             )
             R = np.array([[1.0, 0], [0, 1.0 / np.pi]]) / args.horizon
 
-            M = np.array([1]) / args.horizon  # Higgins
             # M = np.array([2 / np.pi])  # Anderson
             mpc = MPC(
                 mode=args.visibility_cost,
@@ -100,12 +101,6 @@ def main(args):
                 dt=env.sim.tick_time,
             )
         elif args.method == "mppi":
-            if args.visibility_cost == "Ours":
-                M = M_OURS
-            elif args.visibility_cost == "Higgins":
-                M = M_HIGGINS
-            else:
-                M = 0
             mppi = MPPI(
                 mode=args.visibility_cost,
                 vehicle=vehicle,
@@ -127,6 +122,8 @@ def main(args):
         + "-"
         + str(args.visibility_cost)
         + "-"
+        + str(args.visibility_weight)
+        + "-"
         + str(args.simulation_steps)
         + "-"
         + str(args.horizon)
@@ -139,7 +136,7 @@ def main(args):
     results_file_name = path.join(RESULTS_DIR, results_str)
     f = open(results_file_name, "w")
     f.write(
-        "policy,seed,run,samples,horizon,t,x,y,v,theta,accel_requested,accel_allowed,u2,delta,costmap_time,planning_time\n"
+        "policy,seed,run,samples,horizon,visibility-weight,t,x,y,v,theta,accel_requested,accel_allowed,u2,delta,costmap_time,planning_time\n"
     )
     f.flush
 
@@ -148,7 +145,9 @@ def main(args):
         obs, info = env.reset()
         count = 0
 
-        controls_nom = np.array([[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]])
+        controls_nom = np.array(
+            [[A_DES for _ in range(args.horizon)], [0 for _ in range(args.horizon)]]
+        )
         visibility_costmap = VisibilityGrid(dim=GRID_WIDTH, resolution=GRID_RESOLUTION)
 
         total_time = 0
@@ -157,7 +156,9 @@ def main(args):
 
             if args.method == "random":
                 # fixed forward motion (for testing)
-                action = np.array([np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6])
+                action = np.array(
+                    [np.random.random() * 4 - 2, np.random.randint(-1, 2) * np.pi / 6]
+                )
             elif args.method == "rl":
                 action, _states = model.predict(obs)
             elif args.method == "mpc":
@@ -174,7 +175,10 @@ def main(args):
                 # )
                 for ac in info["actors"]:
                     radius = ac["extent"]  # + info["ego"]["extent"]
-                    dist = np.sqrt((ac["x"][STATE.X] - state[0]) ** 2 + (ac["x"][STATE.Y] - state[1]) ** 2)
+                    dist = np.sqrt(
+                        (ac["x"][STATE.X] - state[0]) ** 2
+                        + (ac["x"][STATE.Y] - state[1]) ** 2
+                    )
                     # print(
                     #     f"Dist:{dist}, Safe:{radius}, diff:{-dist+radius} {'AUUUGGGG' if -dist+radius > 0 else ''}"
                     # )
@@ -194,7 +198,9 @@ def main(args):
                 actors = [a[:-1] for a in actors[: args.actors]]
 
                 while len(actors) < args.actors:
-                    actors.append([1000, 1000, 0, 0, 0])  # placeholders are far, far away
+                    actors.append(
+                        [1000, 1000, 0, 0, 0]
+                    )  # placeholders are far, far away
 
                 x = state[0]
                 v = state[2]
@@ -249,10 +255,12 @@ def main(args):
                 ]
 
                 actors = []
-
-                for ac in info["actors"]:
-                    radius = 1.5  # ac["extent"]  # + info["ego"]["extent"]
-                    actors.append([ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]])
+                if args.visibility_cost != "Nominal":
+                    for ac in info["actors"]:
+                        radius = 1.5  # ac["extent"]  # + info["ego"]["extent"]
+                        actors.append(
+                            [ac["x"][STATE.X], ac["x"][STATE.Y], radius, *ac["min_pt"]]
+                        )
 
                 ###
                 # Build the visibility costmap
@@ -261,8 +269,19 @@ def main(args):
                 ]
 
                 # add a waypoint for every 5 m for V_DES * args.horizon * dt * 2 -- double planning horizon
-                for _ in range(int(V_DES * env.sim.tick_time * args.horizon * 2.0 / WAYPOINT_INTERVAL) + 1):
-                    waypoints.append([waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2])
+                for _ in range(
+                    int(
+                        V_DES
+                        * env.sim.tick_time
+                        * args.horizon
+                        * 2.0
+                        / WAYPOINT_INTERVAL
+                    )
+                    + 1
+                ):
+                    waypoints.append(
+                        [waypoints[-1][0] + WAYPOINT_INTERVAL, -LANE_WIDTH / 2]
+                    )
 
                 # build the immediate planning trajectory
                 obs_trajectory = generate_trajectory(
@@ -285,8 +304,12 @@ def main(args):
                 )[0]
 
                 origin = [
-                    state[0] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
-                    state[1] - (GRID_SIZE / 2) * GRID_RESOLUTION + GRID_RESOLUTION / 2.0,
+                    state[0]
+                    - (GRID_SIZE / 2) * GRID_RESOLUTION
+                    + GRID_RESOLUTION / 2.0,
+                    state[1]
+                    - (GRID_SIZE / 2) * GRID_RESOLUTION
+                    + GRID_RESOLUTION / 2.0,
                 ]
 
                 costmap_tic = time.time()
@@ -357,7 +380,9 @@ def main(args):
                 if args.visibility_cost == "Nominal":
                     action = u[:, 0]
                 else:
-                    states = rollout_trajectory(vehicle=vehicle, state=state, controls=u.T, dt=env.sim.tick_time)
+                    states = rollout_trajectory(
+                        vehicle=vehicle, state=state, controls=u.T, dt=env.sim.tick_time
+                    )
                     action = validate_controls(
                         vehicle=vehicle,
                         states=states,
@@ -381,7 +406,7 @@ def main(args):
             if args.show_sim:
                 env.render(u=u)
 
-            # "policy,seed,run,samples,horizon,t,x,y,v,theta,delta,accel_requested,accel_allowed,steering,costmap_time,planning_time\n"
+            # "policy,seed,run,samples,horizon,visibility-cost,t,x,y,v,theta,delta,accel_requested,accel_allowed,steering,costmap_time,planning_time\n"
             f.write(
                 str(args.visibility_cost)
                 + ","
@@ -392,6 +417,8 @@ def main(args):
                 + str(args.samples)
                 + ","
                 + str(args.horizon)
+                + ","
+                + str(args.visibility_weight)
                 + ","
                 + str(step * env.sim.tick_time)
                 + ","
@@ -423,9 +450,15 @@ def main(args):
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description=__doc__)
-    argparser.add_argument("--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size")
-    argparser.add_argument("--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size")
-    argparser.add_argument("--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size")
+    argparser.add_argument(
+        "--height", default=SCREEN_HEIGHT, type=int, help="Screen vertical size"
+    )
+    argparser.add_argument(
+        "--width", default=SCREEN_WIDTH, type=int, help="Screen horizontal size"
+    )
+    argparser.add_argument(
+        "--margin", default=SCREEN_MARGIN, type=int, help="Screen horizontal size"
+    )
     argparser.add_argument("-s", "--seed", default=None, type=int, help="Random Seed")
     argparser.add_argument(
         "-a",
@@ -474,13 +507,17 @@ if __name__ == "__main__":
         type=float,
         help="Length of Simulation Time Step",
     )
-    argparser.add_argument("--show-sim", action="store_true", help="Display the simulation window")
+    argparser.add_argument(
+        "--show-sim", action="store_true", help="Display the simulation window"
+    )
     argparser.add_argument(
         "--skip-training",
         action="store_true",
         help="skip the rl training and just run the inference engine",
     )
-    argparser.add_argument("--debug", action="store_true", help="Dummy mode -- just display the env")
+    argparser.add_argument(
+        "--debug", action="store_true", help="Dummy mode -- just display the env"
+    )
     argparser.add_argument(
         "--method",
         default="none",
@@ -521,6 +558,13 @@ if __name__ == "__main__":
         default="none",
         type=str,
         help="method to determine visibility cost: none, Higgins, Ours",
+    )
+
+    argparser.add_argument(
+        "--visibility-weight",
+        default=1,
+        type=float,
+        help="Weight to apply to the visibility cost function -- a.k.a. M in the research paper",
     )
 
     args = argparser.parse_args()

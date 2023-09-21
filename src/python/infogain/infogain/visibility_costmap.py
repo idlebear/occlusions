@@ -42,7 +42,7 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
             distance_grid[loc[1], loc[0]] = 0
     distance_grid = ndimage.distance_transform_cdt(distance_grid, metric="chessboard").astype(np.float64)
 
-    obs_pts = np.where(distance_grid < (LANE_WIDTH + 2) / resolution)
+    obs_pts = np.where(distance_grid < (LANE_WIDTH + 1) / resolution)
 
     # place the obs points in the larger map
     obs_pts = [[x + GRID_SIZE // 2, y + GRID_SIZE // 2] for y, x in zip(*obs_pts) if y > -LANE_WIDTH + GRID_SIZE // 2]
