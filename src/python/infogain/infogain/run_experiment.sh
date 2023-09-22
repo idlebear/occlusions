@@ -22,14 +22,14 @@ then
 fi
 
 
-for w in ${anderson_weights[*]}; do
-    echo ...weight: $w
-    for s in ${weight_seeds[*]}; do
-        echo ...seed $s
-        python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $w --seed $s --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
-    done
-    wait
-done
+# for w in ${anderson_weights[*]}; do
+#     echo ...weight: $w
+#     for s in ${weight_seeds[*]}; do
+#         echo ...seed $s
+#         python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $w --seed $s --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+#     done
+#     wait
+# done
 
 # for w in ${higgins_weights[*]}; do
 #     echo ...weight: $w
@@ -48,6 +48,22 @@ done
 #     done
 #     wait
 # done
+
+echo "1"
+anderson_weight=0.65
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 6893 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 42 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 520 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 97 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 29348 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+wait
+echo "2"
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 935567 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 7 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 4913 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 84832 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+python run_gym.py $prefix_str --actors $actors --method mppi --samples $samples --horizon $horizon --visibility-cost Anderson --visibility-weight $anderson_weight --seed 5566 --simulation-steps $simulation_steps --runs $runs  > /dev/null 2>&1 &
+wait
 
 # echo "1"
 # higgins_weight=0.04
