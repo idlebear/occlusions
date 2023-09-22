@@ -4,15 +4,26 @@ import numpy as np
 import pandas as pd
 
 
-def write_table(df, policies, policy_column, columns, ranges, range_column, title="", caption="", label=""):
+def write_table(
+    df, policies, policy_column, columns, ranges, range_column, title="", caption="", label="", verbose=False
+):
     num_columns = len(columns)
+    if verbose:
+        format_str = " c c c c "
+        sub_columns = 4
+        column_labels = " & $\\mu$ & $\\sigma$ & min & max "
+    else:
+        format_str = " c c "
+        sub_columns = 2
+        column_labels = " & $\\mu$ & $\\sigma$ "
+
     column_format = "\\begin{tabular}{@{} l"
     title_str1 = "  "
     title_str2 = "Method  "
     for i in range(num_columns):
-        column_format += " c c c c "
-        title_str1 += f"& \\multicolumn{{4}}{{c}}{{ {columns[i]} }}"
-        title_str2 += f" & $\\mu$ & $\\sigma$ & min & max "
+        column_format += format_str
+        title_str1 += f"& \\multicolumn{{{sub_columns}}}{{c}}{{ {columns[i]} }}"
+        title_str2 += column_labels
     title_str1 += "\\\\"
     title_str2 += "\\\\"
 
@@ -40,10 +51,14 @@ def write_table(df, policies, policy_column, columns, ranges, range_column, titl
                 max_row = df[range_column].max()
                 df_slice = df[(df[policy_column] == policy) & (df[range_column] == max_row)]
 
-            s += (
-                " & "
-                + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f} "
-            )
+            if verbose:
+                s += (
+                    " & "
+                    + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f} "
+                )
+            else:
+                s += " & " + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} "
+
         s += "\\\\"
         print(s)
     print("\\bottomrule")
