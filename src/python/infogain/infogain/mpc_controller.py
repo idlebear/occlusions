@@ -463,13 +463,16 @@ class MPPI:
     class visibility_method(Enum):
         OURS = 0
         HIGGINS = 1
-        NONE = 2
+        ANDERSON = 2
+        NONE = 3
 
     def __init__(self, mode, vehicle, limits, c_lambda=1, Q=None, M=1, seed=None) -> None:
         if mode == "Ours":
             self.mode = MPPI.visibility_method.OURS
         elif mode == "Higgins":
             self.mode = MPPI.visibility_method.HIGGINS
+        elif mode == "Anderson":
+            self.mode = MPPI.visibility_method.ANDERSON
         else:
             self.mode = MPPI.visibility_method.NONE
 
@@ -578,8 +581,25 @@ class MPPI:
                 )
             elif self.mode == MPPI.visibility_method.HIGGINS:
                 step_score += self.higgins_visibility_cost(state, actors=actors)
+            elif self.mode == MPPI.visibility_method.ANDERSON:
+                step_score += self.anderson_visibility_cost(state, actors=actors)
 
             u_weight[step] = step_score
+
+    def anderson_visibility_cost(self, state, actors):
+        J_vis = 0
+
+        for act in actors:
+            # BUGBUG: hacky test to see if the obstacle is still ahead of the AV -- works in this
+            #         linear environment but will need to be modified and expanded to a general
+            #         case for more involved envs.
+            if act[3] > state[0]:
+                angle = np.arctan((act[4] - state[0]) / (act[3] - state[0]))
+                # in anticipation of obstacles on both sides, use abs() instead of reversing the sign
+                # J_vis += -self.M * angle
+                J_vis += abs(self.M * angle)
+
+        return J_vis
 
     def higgins_visibility_cost(self, state, actors):
         J_vis = 0
