@@ -6,7 +6,7 @@ import ModelParameters.Ackermann as Ackermann
 import ModelParameters.GenericCar as GenericCar
 
 
-from config import LANE_WIDTH, DISCOUNT_FACTOR, EXP_OVERFLOW_LIMIT
+from config import LANE_WIDTH, DISCOUNT_FACTOR, EXP_OVERFLOW_LIMIT, SCAN_RANGE
 
 
 # Basic step function -- apply the control to advance one step
@@ -383,7 +383,7 @@ class MPC:
 
     def higgins_visibility_cost(self, index):
         J_vis = 0
-        r_fov = 15
+        r_fov = SCAN_RANGE
         r_fov_2 = r_fov**2
 
         for ag in range(self.num_agents):
@@ -392,8 +392,12 @@ class MPC:
             d_agent_2 = dx * dx + dy * dy
             d_agent = csi.sqrt(d_agent_2)
 
-            # TODO: Reformulate for overflow!
-            J_vis += self.M * csi.log(1 + csi.exp(self.agents[2, ag] / d_agent * (r_fov_2 - d_agent_2)))
+            inner = self.agents[2, ag] / d_agent * (r_fov_2 - d_agent_2)
+            if inner > EXP_OVERFLOW_LIMIT:
+                score = self.M * inner
+            else:
+                score = self.M * csi.log(1 + csi.exp(inner))
+            J_vis += score
 
         return J_vis
 
@@ -579,7 +583,7 @@ class MPPI:
 
     def higgins_visibility_cost(self, state, actors):
         J_vis = 0
-        r_fov = 15
+        r_fov = SCAN_RANGE
         r_fov_2 = r_fov**2
 
         for act in actors:
@@ -591,7 +595,7 @@ class MPPI:
             # if the exp is going to overflow, just use the max value
             inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
             if inner > EXP_OVERFLOW_LIMIT:
-                score = self.M * EXP_OVERFLOW_LIMIT
+                score = self.M * inner
             else:
                 score = self.M * np.log(1 + np.exp(inner))
 
