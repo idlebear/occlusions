@@ -19,10 +19,10 @@ def write_table(
 
     column_format = "\\begin{tabular}{@{} l"
     title_str1 = "  "
-    title_str2 = "Method  "
+    title_str2 = "Method"
     for i in range(num_columns):
         column_format += format_str
-        title_str1 += f"& \\multicolumn{{{sub_columns}}}{{c}}{{ {columns[i]} }}"
+        title_str1 += f" & \\multicolumn{{{sub_columns}}}{{c}}{{ {columns[i]} }}"
         title_str2 += column_labels
     title_str1 += "\\\\"
     title_str2 += "\\\\"
@@ -54,10 +54,10 @@ def write_table(
             if verbose:
                 s += (
                     " & "
-                    + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f} "
+                    + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f}"
                 )
             else:
-                s += " & " + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} "
+                s += " & " + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f}"
 
         s += "\\\\"
         print(s)

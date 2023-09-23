@@ -23,12 +23,12 @@ height = width / 1.5
 
 SHOW_BASELINES = True
 HEADER_STR = "mppi"
-HEADER_SUBSTR = "optimized"
-PREFIX_STR = "Optimized-Trials"
+HEADER_SUBSTR = "optimized-twoside"
+PREFIX_STR = "Optimized-Twoside-Trials"
 
 # TABLE formatting
-TITLE = "Optimized One-Sided Occlusions"
-CAPTION = "Cars parked on one side only"
+TITLE = "Two-Sided Occlusions"
+CAPTION = "Cars parked on both sides"
 
 
 class Tags(IntEnum):
@@ -138,7 +138,13 @@ def plot_comparison(files, mode="baselines"):
 
     runs = set(df["run"])
     seeds = set(df["seed"])
-    policies = ["None", "Higgins", "Ours", "Nominal"]
+    policies = [
+        "Ours",
+        "Higgins",
+        "Anderson",
+        "None",
+        "Nominal",
+    ]
 
     df_means = []
     for seed in seeds:
@@ -162,7 +168,7 @@ def plot_comparison(files, mode="baselines"):
     write_table(
         df,
         policies=policies,
-        policy_column="policies",
+        policy_column="policy",
         columns=["x", "y", "v"],
         ranges=["last", "all", "all"],
         range_column="t",
@@ -174,11 +180,11 @@ def plot_comparison(files, mode="baselines"):
     sb.set_style(style="whitegrid")
     colours = [
         "darkorange",
-        "wheat",
+        # "wheat",
         "lightsteelblue",
         "royalblue",
-        # "lavender",
-        # "slateblue",
+        "salmon",
+        "silver",
         # "dodgerblue",
         # # 'bisque',
         # "linen",
