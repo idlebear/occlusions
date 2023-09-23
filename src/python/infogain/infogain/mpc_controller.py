@@ -594,10 +594,17 @@ class MPPI:
             #         linear environment but will need to be modified and expanded to a general
             #         case for more involved envs.
             if act[3] > state[0]:
-                angle = np.arctan((act[4] - state[0]) / (act[3] - state[0]))
-                # in anticipation of obstacles on both sides, use abs() instead of reversing the sign
-                # J_vis += -self.M * angle
-                J_vis += abs(self.M * angle)
+                # BUGBUG: A second hack to handle the case where cars are on both sides of the
+                #         road.  On the same side, the angle is positive, but on the opposite
+                #         the angle is reversed.  Just check which side of the road they are on and go
+                #         with that.  In the future, we'll have to check which side of the trajectory
+                #         they are on...
+                if act[4] > 0:
+                    # flipped (opposite) side
+                    angle = np.arctan((act[4] - state[1]) / (act[3] - state[0]))
+                else:
+                    angle = -np.arctan((act[4] - state[1]) / (act[3] - state[0]))
+                J_vis += -self.M * angle
 
         return J_vis
 
