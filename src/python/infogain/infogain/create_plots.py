@@ -23,12 +23,16 @@ height = width / 1.5
 
 SHOW_BASELINES = True
 HEADER_STR = "mppi"
-HEADER_SUBSTR = "optimized-twoside"
-PREFIX_STR = "Optimized-Twoside-Trials"
+# HEADER_SUBSTR = "optimized-twoside"
+# PREFIX_STR = "Optimized-Twoside-Trials"
+HEADER_SUBSTR = "optimized-oneside"
+PREFIX_STR = "Optimized-Oneside-Trials"
 
 # TABLE formatting
-TITLE = "Two-Sided Occlusions"
-CAPTION = "Cars parked on both sides"
+# TITLE = "Two-Sided Occlusions"
+# CAPTION = "Cars parked on both sides"
+TITLE = "One-Side Occlusions"
+CAPTION = "Cars parked on the same side as the AV."
 
 
 class Tags(IntEnum):
@@ -118,6 +122,7 @@ def plot_comparison(files, mode="baselines"):
                 for run in runs:
                     df_run = df.loc[df["run"] == run].reset_index()
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
+            df["y"] += 2.0
 
             df_list.append(df)
 
@@ -141,7 +146,7 @@ def plot_comparison(files, mode="baselines"):
     policies = [
         "Ours",
         "Higgins",
-        "Anderson",
+        "Andersen",
         "None",
         "Nominal",
     ]
@@ -182,7 +187,8 @@ def plot_comparison(files, mode="baselines"):
         "darkorange",
         # "wheat",
         "lightsteelblue",
-        "royalblue",
+        "deepskyblue",
+        # "royalblue",
         "salmon",
         "silver",
         # "dodgerblue",

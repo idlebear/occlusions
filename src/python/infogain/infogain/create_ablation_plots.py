@@ -53,13 +53,14 @@ def make_plot(
     fig, ax = plt.subplots()
     fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
 
+    sb.color_palette("viridis", as_cmap=True)
     sb.lineplot(
         x=x,
         y=y,
         hue=policy,
         data=data,
         hue_order=order,
-        palette=colours,
+        # palette=colours,
         # linewidth=2.5,
     )
 
@@ -74,8 +75,8 @@ def make_plot(
         handles=handles,
         labels=labels,
         loc=legend_location,
-        title="Method",
-        title_fontsize=18,
+        title=None,
+        # title_fontsize=18,
         fontsize=16,
     )
 
