@@ -290,7 +290,7 @@ class MPC:
 
             J = J + err_X.T @ self.Q @ err_X + err_U.T @ self.R @ err_U
 
-            if mode == "Anderson":
+            if mode == "Andersen":
                 J += self.anderson_visibility_cost(i + 1)
             elif mode == "Higgins":
                 J += self.higgins_visibility_cost(i + 1)
@@ -471,7 +471,7 @@ class MPPI:
             self.mode = MPPI.visibility_method.OURS
         elif mode == "Higgins":
             self.mode = MPPI.visibility_method.HIGGINS
-        elif mode == "Anderson":
+        elif mode == "Andersen":
             self.mode = MPPI.visibility_method.ANDERSON
         else:
             self.mode = MPPI.visibility_method.NONE
@@ -621,10 +621,11 @@ class MPPI:
 
             # if the exp is going to overflow, just use the max value
             inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
-            if inner > EXP_OVERFLOW_LIMIT:
-                score = self.M * inner
-            else:
-                score = self.M * np.log(1 + np.exp(inner))
+            with np.errstate(over="raise"):
+                try:
+                    score = self.M * np.log(1 + np.exp(inner))
+                except FloatingPointError:
+                    score = self.M * inner
 
             J_vis += score
 

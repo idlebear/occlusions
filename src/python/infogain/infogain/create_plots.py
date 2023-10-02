@@ -119,6 +119,8 @@ def plot_comparison(files, mode="baselines"):
                     df_run = df.loc[df["run"] == run].reset_index()
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
 
+            df["y"] += 2.0  # move lane centre to zero
+
             df_list.append(df)
 
     df = pd.concat(df_list, ignore_index=True, sort=False)
@@ -141,7 +143,7 @@ def plot_comparison(files, mode="baselines"):
     policies = [
         "Ours",
         "Higgins",
-        "Anderson",
+        "Andersen",
         "None",
         "Nominal",
     ]
@@ -182,7 +184,7 @@ def plot_comparison(files, mode="baselines"):
         "darkorange",
         # "wheat",
         "lightsteelblue",
-        "royalblue",
+        "deepskyblue",
         "salmon",
         "silver",
         # "dodgerblue",
