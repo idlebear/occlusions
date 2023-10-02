@@ -11,11 +11,11 @@ def write_table(
     if verbose:
         format_str = " c c c c "
         sub_columns = 4
-        column_labels = " & $\\mu$ & $\\sigma$ & min & max "
+        column_labels = " & $\\mu$ & $\\sigma$ & min & max"
     else:
         format_str = " c c "
         sub_columns = 2
-        column_labels = " & $\\mu$ & $\\sigma$ "
+        column_labels = " & $\\mu$ & $\\sigma$"
 
     column_format = "\\begin{tabular}{@{} l"
     title_str1 = "  "
@@ -57,7 +57,7 @@ def write_table(
                     + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f} & {(df_slice[col].min()):5.3f} & {(df_slice[col].max()):5.3f}"
                 )
             else:
-                s += " & " + f"{(df_slice[col].mean()):5.3f} & {(df_slice[col].std()):5.3f}"
+                s += " & " + f"{(df_slice[col].mean()):5.1f} & {(df_slice[col].std()):5.2f}"
 
         s += "\\\\"
         print(s)

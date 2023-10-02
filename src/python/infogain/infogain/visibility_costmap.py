@@ -80,11 +80,11 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
         )
     target_pts = list(set(target_pts))
 
-    def dump_targets(map, target_pts):
+    def dump_targets(map, target_pts, results):
         grid = np.array(map)
 
-        for x, y in target_pts:
-            grid[y, x] = 0.5
+        for (x, y), val in zip(target_pts, results):
+            grid[y, x] = val
 
         dump_grid(grid)
 
@@ -98,20 +98,20 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
         def draw_vis(map, pts, src, result):
             visibility_map = np.array(map)
             for pt, val in zip(pts, result):
-                visibility_map[pt[1], pt[0]] = val + 0.1
+                visibility_map[pt[1], pt[0]] = max(val / 2 + 0.1, visibility_map[pt[1], pt[0]])
             visibility_map[src[1], src[0]] = 2
 
             dump_grid(visibility_map)
 
-        result = np.sum(result, axis=1)
+        summed_result = np.sum(result, axis=1)
 
         # to normalize the results, convert the visibility into a proportion of the region requested and convert to
         # non-info so we penalize locations that give nothing
-        result /= len(target_pts)
-        assert np.max(result) <= 1
+        summed_result /= len(target_pts)
+        assert np.max(summed_result) <= 1
 
         for pt in obs_pts:
             pt[0] = int(pt[0] - GRID_SIZE // 2)
             pt[1] = int(pt[1] - GRID_SIZE // 2)
 
-        costmap.update(obs_pts, result)
+        costmap.update(obs_pts, summed_result)

@@ -124,6 +124,8 @@ def plot_comparison(files, mode="baselines"):
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
             df["y"] += 2.0
 
+            df["y"] += 2.0  # move lane centre to zero
+
             df_list.append(df)
 
     df = pd.concat(df_list, ignore_index=True, sort=False)

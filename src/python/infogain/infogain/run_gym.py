@@ -88,7 +88,7 @@ def main(args):
             )
             R = np.array([[1.0, 0], [0, 1.0 / np.pi]]) / args.horizon
 
-            # M = np.array([2 / np.pi])  # Anderson
+            # M = np.array([2 / np.pi])  # Andersen
             mpc = MPC(
                 mode=args.visibility_cost,
                 vehicle=vehicle,
@@ -519,7 +519,7 @@ if __name__ == "__main__":
         "--visibility-cost",
         default="none",
         type=str,
-        help="method to determine visibility cost: None, Anderson, Higgins, Ours",
+        help="method to determine visibility cost: None, Andersen, Higgins, Ours",
     )
 
     argparser.add_argument(
