@@ -291,7 +291,7 @@ class MPC:
             J = J + err_X.T @ self.Q @ err_X + err_U.T @ self.R @ err_U
 
             if mode == "Andersen":
-                J += self.anderson_visibility_cost(i + 1)
+                J += self.andersen_visibility_cost(i + 1)
             elif mode == "Higgins":
                 J += self.higgins_visibility_cost(i + 1)
 
@@ -401,7 +401,7 @@ class MPC:
 
         return J_vis
 
-    def anderson_visibility_cost(self, index):
+    def andersen_visibility_cost(self, index):
         J_vis = 0
 
         for ag in range(self.num_agents):
@@ -463,7 +463,7 @@ class MPPI:
     class visibility_method(Enum):
         OURS = 0
         HIGGINS = 1
-        ANDERSON = 2
+        ANDERSEN = 2
         NONE = 3
 
     def __init__(self, mode, vehicle, limits, c_lambda=1, Q=None, M=1, seed=None) -> None:
@@ -472,7 +472,7 @@ class MPPI:
         elif mode == "Higgins":
             self.mode = MPPI.visibility_method.HIGGINS
         elif mode == "Andersen":
-            self.mode = MPPI.visibility_method.ANDERSON
+            self.mode = MPPI.visibility_method.ANDERSEN
         else:
             self.mode = MPPI.visibility_method.NONE
 
@@ -581,12 +581,12 @@ class MPPI:
                 )
             elif self.mode == MPPI.visibility_method.HIGGINS:
                 step_score += self.higgins_visibility_cost(state, actors=actors)
-            elif self.mode == MPPI.visibility_method.ANDERSON:
-                step_score += self.anderson_visibility_cost(state, actors=actors)
+            elif self.mode == MPPI.visibility_method.ANDERSEN:
+                step_score += self.andersen_visibility_cost(state, actors=actors)
 
             u_weight[step] = step_score
 
-    def anderson_visibility_cost(self, state, actors):
+    def andersen_visibility_cost(self, state, actors):
         J_vis = 0
 
         for act in actors:
@@ -653,7 +653,7 @@ class MPPI:
             raise ValueError("Planning outside of available cost map!")
 
         # NOTE: Reversing the sense of the cost map to make it a penalty instead of a reward
-        return self.M * (1 - costmap[map_y, map_x]) * (DISCOUNT_FACTOR**step)
+        return self.M * (1.0 - costmap[map_y, map_x]) * (DISCOUNT_FACTOR**step)
 
 
 import matplotlib.pyplot as plt
