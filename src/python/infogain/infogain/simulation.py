@@ -261,6 +261,7 @@ class Simulation:
         record_data=False,
     ):
         self.num_actors = num_actors
+        self.generated_actors = 0
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
 
@@ -519,13 +520,17 @@ class Simulation:
         return vis_poly
 
     def _generate_parkade(self):
-        x = max(self.next_agent_x, self.ego.x[0] + WINDOW_SIZE / 2)
+        x = max(self.next_agent_x, self.ego.x[0] + WINDOW_SIZE)
 
-        while x - self.ego.x[0] < WINDOW_SIZE:
+        if self.generated_actors > 0:
+            return
+
+        while len(self.actor_list) < self.num_actors and x - self.ego.x[0] < WINDOW_SIZE * 2.0:
             # left side
             rnd = self.generator.uniform()
             if rnd < 0.6:
                 # create a parked car
+                self.generated_actors += 1
                 rnd = self.generator.uniform()
                 if rnd < 0:
                     # some small percentage of cars are really badly parked
@@ -546,6 +551,10 @@ class Simulation:
                 )
                 self.actor_list.append(actor)
             else:
+                actor = Blank(
+                    id=self.ticks,
+                    x=np.array([x + x_wiggle, y, orientation, 0, 0]),
+                )
                 # blank space
                 pass
 
@@ -695,7 +704,7 @@ class Simulation:
     def _get_map(self):
         map = np.zeros([GRID_SIZE * 2, GRID_SIZE * 2])
         for actor in self.actor_list:
-            if actor.is_real():
+            if actor.is_real() and actor.distance_to(self.ego.x) <= SCAN_RANGE:
                 if type(actor) == Obstacle:
                     footprint = actor.get_footprint()
                     dy, dx = footprint.shape

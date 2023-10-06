@@ -23,12 +23,16 @@ height = width / 1.5
 
 SHOW_BASELINES = True
 HEADER_STR = "mppi"
-HEADER_SUBSTR = "optimized-twoside"
-PREFIX_STR = "Optimized-Twoside-Trials"
+# HEADER_SUBSTR = "optimized-twoside"
+# PREFIX_STR = "Optimized-Twoside-Trials"
+HEADER_SUBSTR = "optimized-oneside"
+PREFIX_STR = "Optimized-Oneside-Trials"
 
 # TABLE formatting
-TITLE = "Two-Sided Occlusions"
-CAPTION = "Cars parked on both sides"
+# TITLE = "Two-Sided Occlusions"
+# CAPTION = "Cars parked on both sides"
+TITLE = "One-Side Occlusions"
+CAPTION = "Cars parked on the same side as the AV."
 
 
 class Tags(IntEnum):
@@ -185,6 +189,7 @@ def plot_comparison(files, mode="baselines"):
         # "wheat",
         "lightsteelblue",
         "deepskyblue",
+        # "royalblue",
         "salmon",
         "silver",
         # "dodgerblue",
