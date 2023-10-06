@@ -14,7 +14,7 @@ from os.path import isfile, join
 from latex import write_table
 
 mpl.use("pdf")
-# import scienceplots
+#    port scienceplots
 # plt.style.use(['science', 'ieee'])
 
 # width as measured in inkscape
@@ -22,10 +22,11 @@ width = 8  # 3.487
 height = width / 1.5
 
 SHOW_BASELINES = True
-HEADER_STR = "weight-test"
-HEADER_SUBSTR = "Higgins"
-# HEADER_SUBSTR = "Ours"
-PREFIX_STR = HEADER_SUBSTR + "_Weight_Trials"
+HEADER_STR = "weight-and-scan-test"
+# HEADER_SUBSTR = "Higgins"
+HEADER_SUBSTR = "Ours"
+# HEADER_SUBSTR = "Andersen"
+PREFIX_STR = HEADER_SUBSTR + "_Scan_Weight_Trials"
 
 
 class Tags(IntEnum):
@@ -53,13 +54,14 @@ def make_plot(
     fig, ax = plt.subplots()
     fig.subplots_adjust(left=0.15, bottom=0.16, right=0.99, top=0.97)
 
+    sb.color_palette("viridis", as_cmap=True)
     sb.lineplot(
         x=x,
         y=y,
         hue=policy,
         data=data,
         hue_order=order,
-        palette=colours,
+        # palette=colours,
         # linewidth=2.5,
     )
 
@@ -74,7 +76,7 @@ def make_plot(
         handles=handles,
         labels=labels,
         loc=legend_location,
-        title="Method",
+        title=None,
         title_fontsize=18,
         fontsize=16,
     )
@@ -119,18 +121,22 @@ def plot_comparison(files, mode="baselines"):
                     df_run = df.loc[df["run"] == run].reset_index()
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
 
-            df["weight-name"] = ["w:" + str(w) for w in df["visibility-weight"]]
+            df["y"] += 2
+            df["weight-name"] = [str(w) for w in df["visibility-weight"]]
 
             df_list.append(df)
 
     df = pd.concat(df_list, ignore_index=True, sort=False)
 
-    WEIGHT_LIMIT = 1.5
-    weights = ["w:" + str(w) for w in sorted(list(set(df["visibility-weight"]))) if w < WEIGHT_LIMIT]
+    # df = df[(df["visibility-weight"] >= 0.05) & (df["visibility-weight"] <= 0.054)]
+    WEIGHT_LIMIT = 6000
+    weights = [str(w) for w in sorted(list(set(df["visibility-weight"]))) if w < WEIGHT_LIMIT]
+    # weights = [0.02, 0.03, 0.04, 0.05, 0.1][::-1]
+    str_weights = [str(w) for w in weights]
 
     colours = [
-        "darkorange",
-        "wheat",
+        # "darkorange",
+        # "wheat",
         "lightsteelblue",
         "royalblue",
         "lavender",
@@ -145,11 +151,11 @@ def plot_comparison(files, mode="baselines"):
         # "indianred",
         # "lightcoral",
         # "gold",
-        # "teal",
+        "teal",
         # "darkcyan",
         "cyan",
         # "khaki",
-        # "darkkhaki",
+        "darkkhaki",
         # "lightgray",
         # "lime",
     ]
@@ -164,7 +170,7 @@ def plot_comparison(files, mode="baselines"):
 
     write_table(
         df,
-        policies=weights,
+        policies=str_weights,
         policy_column="weight-name",
         columns=["x", "y", "v"],
         ranges=["last", "all", "all"],
@@ -174,13 +180,13 @@ def plot_comparison(files, mode="baselines"):
         label="tbl:data",
     )
 
-    df_slice = df[(df["t"] <= 25) & (df["visibility-weight"] < WEIGHT_LIMIT)]
+    df_slice = df[(df["t"] <= 25)]
     make_plot(
         "t",
         "x",
         policy="weight-name",
         data=df_slice,
-        order=weights,
+        order=str_weights,
         colours=colours,
         x_label="Time (s)",
         y_label="X (m)",
@@ -194,11 +200,11 @@ def plot_comparison(files, mode="baselines"):
         "y",
         policy="weight-name",
         data=df_slice,
-        order=weights,
-        colours=None,
+        order=str_weights,
+        colours=colours,
         x_label="Time (s)",
         y_label="Y (m)",
-        y_limit=[-3, 3],
+        y_limit=None,
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_y_plot.pdf",
     )
@@ -208,11 +214,11 @@ def plot_comparison(files, mode="baselines"):
         "v",
         policy="weight-name",
         data=df_slice,
-        order=weights,
-        colours=None,
+        order=str_weights,
+        colours=colours,
         x_label="Time (s)",
         y_label="V (m/s)",
-        y_limit=[4, 8],
+        y_limit=[5, 8],
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_v_plot.pdf",
     )
