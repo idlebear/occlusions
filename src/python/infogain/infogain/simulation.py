@@ -261,7 +261,6 @@ class Simulation:
         record_data=False,
     ):
         self.num_actors = num_actors
-        self.generated_actors = 0
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
 
@@ -369,6 +368,7 @@ class Simulation:
         )
 
         self.actor_list = []
+        self.generated_actors = 0
 
         self.sim_time = 0.0
         self.next_time = 0.0
@@ -537,6 +537,7 @@ class Simulation:
                     y = -LANE_WIDTH + 1
                 else:
                     y = -LANE_WIDTH - CAR_OFFSET
+
                 x_wiggle = self.generator.uniform() * CAR_WIGGLE
                 orientation = self.generator.uniform() * CAR_ROTATION - CAR_ROTATION / 2
 
@@ -551,10 +552,6 @@ class Simulation:
                 )
                 self.actor_list.append(actor)
             else:
-                actor = Blank(
-                    id=self.ticks,
-                    x=np.array([x + x_wiggle, y, orientation, 0, 0]),
-                )
                 # blank space
                 pass
 
