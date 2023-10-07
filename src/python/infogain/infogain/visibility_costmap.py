@@ -109,6 +109,11 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
         # non-info so we penalize locations that give nothing
         summed_result /= len(target_pts)
         assert np.max(summed_result) <= 1
+        min_sum = np.min(summed_result)
+        summed_result -= min_sum
+        max_sum = np.max(summed_result)
+        if max_sum:
+            summed_result /= max_sum
 
         for pt in obs_pts:
             pt[0] = int(pt[0] - GRID_SIZE // 2)
