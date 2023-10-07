@@ -107,8 +107,8 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
 
         # to normalize the results, convert the visibility into a proportion of the region requested and convert to
         # non-info so we penalize locations that give nothing
-        summed_result /= len(target_pts)
-        assert np.max(summed_result) <= 1
+        # summed_result /= len(target_pts)
+        # assert np.max(summed_result) <= 1
         min_sum = np.min(summed_result)
         summed_result -= min_sum
         max_sum = np.max(summed_result)
