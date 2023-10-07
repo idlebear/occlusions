@@ -250,6 +250,7 @@ class Simulation:
         generator_name="uniform",
         generator_args=None,
         num_actors=1,
+        limit_actors=False,
         pois_lambda=0.01,
         screen=None,
         service_time=SERVICE_TIME,
@@ -261,6 +262,7 @@ class Simulation:
         record_data=False,
     ):
         self.num_actors = num_actors
+        self.limit_actors = limit_actors
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
 
@@ -522,9 +524,6 @@ class Simulation:
     def _generate_parkade(self):
         x = max(self.next_agent_x, self.ego.x[0] + WINDOW_SIZE)
 
-        if self.generated_actors > 0:
-            return
-
         while len(self.actor_list) < self.num_actors and x - self.ego.x[0] < WINDOW_SIZE * 2.0:
             # left side
             rnd = self.generator.uniform()
@@ -562,6 +561,7 @@ class Simulation:
                 y = LANE_WIDTH + CAR_OFFSET
                 x_wiggle = self.generator.uniform() * CAR_WIGGLE
                 orientation = self.generator.uniform() * CAR_ROTATION - CAR_ROTATION / 2
+                self.generated_actors += 1
 
                 actor = Obstacle(
                     id=self.ticks,
@@ -586,6 +586,7 @@ class Simulation:
         while len(self.actor_list) < self.num_actors:
             rnd = self.generator.uniform()
             if rnd < 0.4:
+                self.generated_actors += 1
                 scale = 1 + 9 * self.generator.uniform()
                 if rnd < 0.2:
                     y = -LANE_WIDTH - np.ceil(scale / 2) - self.generator.uniform() * 5
@@ -970,8 +971,10 @@ class Simulation:
 
         # apply the requested action to the ego vehicle
         self.ego.set_control(action)
-        # self._generate_new_agents()
-        self._generate_parkade()
+
+        if not self.limit_actors or self.generated_actors < self.num_actors:
+            # self._generate_new_agents()
+            self._generate_parkade()
 
         # move everyone
         finished_actors = []

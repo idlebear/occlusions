@@ -37,7 +37,7 @@ def main(args):
             env = make_vec_env(
                 OcclusionEnv,
                 n_envs=args.instances,
-                env_kwargs={"num_actors": args.actors},
+                env_kwargs={"num_actors": args.actors, "limit_actors": args.limit_actors},
                 vec_env_cls=SubprocVecEnv,
             )
         else:
@@ -516,12 +516,16 @@ if __name__ == "__main__":
         help="Run multiple environments simultaneously",
     )
     argparser.add_argument(
+        "--limit-actors",
+        action="store_true",
+        help="Stop spawning actors after the specified number is generated.",
+    )
+    argparser.add_argument(
         "--visibility-cost",
         default="none",
         type=str,
         help="method to determine visibility cost: None, Andersen, Higgins, Ours",
     )
-
     argparser.add_argument(
         "--visibility-weight",
         default=1,

@@ -27,6 +27,11 @@ class OcclusionEnv(gym.Env):
             num_actors = 5
 
         try:
+            limit_actors = kwargs["limit_actors"]
+        except KeyError:
+            limit_actors = False
+
+        try:
             seed = kwargs["seed"]
         except KeyError:
             seed = 42
@@ -50,6 +55,7 @@ class OcclusionEnv(gym.Env):
         self.sim = Simulation(
             screen=self.surface,
             num_actors=num_actors,
+            limit_actors=limit_actors,
             generator_name="uniform",
             generator_args=generator_args,
             tick_time=TICK_TIME,
