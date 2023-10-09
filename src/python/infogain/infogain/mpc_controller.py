@@ -606,6 +606,11 @@ class MPPI:
                     angle = -np.arctan((act[4] - state[1]) / (act[3] - state[0]))
                 J_vis += -self.M * angle
 
+                # BUGBUG: A third hack to take only the next obstacle into consideration -- otherwise
+                #         the error scales with the number of occlusions, pushing the vehicle
+                #         further and further away
+                break
+
         return J_vis
 
     def higgins_visibility_cost(self, state, actors):
@@ -614,18 +619,22 @@ class MPPI:
         r_fov_2 = r_fov**2
 
         for act in actors:
-            dx = state[0] - act[0]
-            dy = state[1] - act[1]
-            d_agent_2 = dx * dx + dy * dy
-            d_agent = np.sqrt(d_agent_2)
+            # BUGBUG: hacky test to see if the obstacle is still ahead of the AV -- works in this
+            #         linear environment but will need to be modified and expanded to a general
+            #         case for more involved envs.
+            if act[3] > state[0]:
+                dx = state[0] - act[0]
+                dy = state[1] - act[1]
+                d_agent_2 = dx * dx + dy * dy
+                d_agent = np.sqrt(d_agent_2)
 
-            # if the exp is going to overflow, just use the max value
-            inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
-            with np.errstate(over="raise"):
-                try:
-                    score = self.M * np.log(1 + np.exp(inner))
-                except FloatingPointError:
-                    score = self.M * inner
+                # if the exp is going to overflow, just use the max value
+                inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
+                with np.errstate(over="raise"):
+                    try:
+                        score = self.M * np.log(1 + np.exp(inner))
+                    except FloatingPointError:
+                        score = self.M * inner
 
             J_vis += score
 
