@@ -661,8 +661,10 @@ class MPPI:
         if map_x < 0 or map_x > max_x - 1 or map_y < 0 or map_y > max_y - 1:
             raise ValueError("Planning outside of available cost map!")
 
-        # NOTE: Reversing the sense of the cost map to make it a penalty instead of a reward
-        return self.M * (1.0 - costmap[map_y, map_x]) * (DISCOUNT_FACTOR**step)
+        reward = self.M * (costmap[map_y, map_x]) * (DISCOUNT_FACTOR**step)
+
+        # NOTE: Reversing the sense of the cost map to make it a reward instead of a penalty
+        return -reward
 
 
 import matplotlib.pyplot as plt
