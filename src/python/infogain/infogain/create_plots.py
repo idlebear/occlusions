@@ -25,8 +25,8 @@ SHOW_BASELINES = True
 HEADER_STR = "mppi"
 # HEADER_SUBSTR = "optimized-twoside"
 # PREFIX_STR = "Optimized-Twoside-Trials"
-HEADER_SUBSTR = "optimized-oneside"
-PREFIX_STR = "Optimized-Oneside-Trials"
+HEADER_SUBSTR = "two-side"
+PREFIX_STR = HEADER_SUBSTR + "-Trials"
 
 # TABLE formatting
 # TITLE = "Two-Sided Occlusions"
@@ -124,6 +124,7 @@ def plot_comparison(files, mode="baselines"):
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
 
             df["y"] += 2.0  # move lane centre to zero
+            df.loc[df["policy"] == "Ours", "policy"] = "Proposed"
 
             df_list.append(df)
 
@@ -145,7 +146,7 @@ def plot_comparison(files, mode="baselines"):
     runs = set(df["run"])
     seeds = set(df["seed"])
     policies = [
-        "Ours",
+        "Proposed",
         "Higgins",
         "Andersen",
         "None",
@@ -332,5 +333,40 @@ def plot_comparison(files, mode="baselines"):
 
 if __name__ == "__main__":
     path = "results/"
-    files = [path + "/" + f for f in listdir(path) if isfile(join(path, f))]
+
+    argparser = argparse.ArgumentParser(description=__doc__)
+    argparser.add_argument(
+        "-p",
+        "--path",
+        default="results",
+        type=str,
+        help="path to data files",
+    )
+    argparser.add_argument(
+        "-m",
+        "--method",
+        default="mppi",
+        type=str,
+        help="method to summarize: mppi, mpc, ...",
+    )
+    argparser.add_argument(
+        "-s",
+        "--sub-group",
+        default="oneside",
+        type=str,
+        help="subgroup",
+    )
+
+    args = argparser.parse_args()
+
+    HEADER_STR = args.method
+    HEADER_SUBSTR = args.sub_group
+    PREFIX_STR = HEADER_STR + "-" + HEADER_SUBSTR + "-Trials"
+
+    files = []
+    for f in listdir(args.path):
+        file_path = join(args.path, f)
+        if isfile(file_path):
+            files.append(file_path)
+
     plot_comparison(files)

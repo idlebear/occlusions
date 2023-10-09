@@ -22,11 +22,11 @@ width = 8  # 3.487
 height = width / 1.5
 
 SHOW_BASELINES = True
-HEADER_STR = "weight-and-scan-test"
-# HEADER_SUBSTR = "Higgins"
-HEADER_SUBSTR = "Ours"
+HEADER_STR = "weight-test"
+HEADER_SUBSTR = "Higgins"
+# HEADER_SUBSTR = "Ours"
 # HEADER_SUBSTR = "Andersen"
-PREFIX_STR = HEADER_SUBSTR + "_Scan_Weight_Trials"
+PREFIX_STR = HEADER_SUBSTR + "_Weight_Trials"
 
 
 class Tags(IntEnum):
@@ -226,5 +226,40 @@ def plot_comparison(files, mode="baselines"):
 
 if __name__ == "__main__":
     path = "results/"
-    files = [path + "/" + f for f in listdir(path) if isfile(join(path, f))]
+
+    argparser = argparse.ArgumentParser(description=__doc__)
+    argparser.add_argument(
+        "-p",
+        "--path",
+        default="results",
+        type=str,
+        help="path to data files",
+    )
+    argparser.add_argument(
+        "-m",
+        "--method",
+        default="weight-test",
+        type=str,
+        help="weight-test group name",
+    )
+    argparser.add_argument(
+        "-s",
+        "--sub-group",
+        default="oneside",
+        type=str,
+        help="type to graph: Higgins, Proposed, Andersen",
+    )
+
+    args = argparser.parse_args()
+
+    HEADER_STR = args.method
+    HEADER_SUBSTR = args.sub_group
+    PREFIX_STR = HEADER_STR + "-" + HEADER_SUBSTR + "-Weight-Trials"
+
+    files = []
+    for f in listdir(args.path):
+        file_path = join(args.path, f)
+        if isfile(file_path):
+            files.append(file_path)
+
     plot_comparison(files)

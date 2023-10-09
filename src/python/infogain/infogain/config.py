@@ -99,7 +99,7 @@ CAR_SCALE = 4.8
 CAR_ROTATION = 0  # PI / 12
 
 # MPC/MPPI parameters
-FORGET_FACTOR = 0.9  # allow the costmap to forget about entries over time
+FORGET_FACTOR = 0.5  # allow the costmap to forget about entries over time
 DISCOUNT_FACTOR = 1  # discount cost over the horizon
 X_WEIGHT = 1
 Y_WEIGHT = 1
