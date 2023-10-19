@@ -101,15 +101,14 @@ CAR_ROTATION = 0  # PI / 12
 # MPC/MPPI parameters
 FORGET_FACTOR = 0.5  # allow the costmap to forget about entries over time
 DISCOUNT_FACTOR = 1  # discount cost over the horizon
-X_WEIGHT = 1
-Y_WEIGHT = 1
-LAMBDA = 200
-V_WEIGHT = 2
+X_WEIGHT = 50.0
+Y_WEIGHT = 250.0
+LAMBDA = 20000
+V_WEIGHT = 1000
 THETA_WEIGHT = 0
 DELTA_WEIGHT = 0
 ACCEL_VARIATION = 3
-OMEGA_VARIATION = PI / 2
-EXP_OVERFLOW_LIMIT = 709.0
+OMEGA_VARIATION = PI / 4
 
 
 # Data capture

@@ -33,18 +33,19 @@ def main(args):
 
     if args.method == "rl":
         # Parallel environments
+        env_kwargs = {"num_actors": args.actors, "limit_actors": args.limit_actors}
         if args.multipass:
             env = make_vec_env(
                 OcclusionEnv,
                 n_envs=args.instances,
-                env_kwargs={"num_actors": args.actors, "limit_actors": args.limit_actors},
+                env_kwargs=env_kwargs,
                 vec_env_cls=SubprocVecEnv,
             )
         else:
             env = make_vec_env(
                 OcclusionEnv,
                 n_envs=args.instances,
-                env_kwargs={"num_actors": args.actors},
+                env_kwargs=env_kwargs,
             )
 
         model = PPO("CnnPolicy", env, verbose=1, tensorboard_log="./occlusion_log")
@@ -60,7 +61,11 @@ def main(args):
                 model.save(f"ppo_occlusions_{i}.model")
 
     else:
-        env = OcclusionEnv(num_actors=args.actors, seed=args.seed)
+        env = OcclusionEnv(
+            num_actors=args.actors,
+            seed=args.seed,
+            limit_actors=args.limit_actors,
+        )
 
         M = args.visibility_weight
 
@@ -106,7 +111,7 @@ def main(args):
                 vehicle=vehicle,
                 limits=(ACCEL_VARIATION, OMEGA_VARIATION),
                 c_lambda=LAMBDA,
-                Q=np.diag([X_WEIGHT, Y_WEIGHT, V_WEIGHT, THETA_WEIGHT, DELTA_WEIGHT]),
+                Q=np.diag([args.x_weight, args.y_weight, args.velocity_weight, THETA_WEIGHT, DELTA_WEIGHT]),
                 M=M,
                 seed=args.seed,
             )
@@ -124,6 +129,12 @@ def main(args):
         + "-"
         + str(args.visibility_weight)
         + "-"
+        + str(args.x_weight)
+        + "-"
+        + str(args.y_weight)
+        + "-"
+        + str(args.velocity_weight)
+        + "-"
         + str(args.simulation_steps)
         + "-"
         + str(args.horizon)
@@ -136,7 +147,7 @@ def main(args):
     results_file_name = path.join(RESULTS_DIR, results_str)
     f = open(results_file_name, "w")
     f.write(
-        "policy,seed,run,samples,horizon,visibility-weight,t,x,y,v,theta,accel_requested,accel_allowed,u2,delta,costmap_time,planning_time\n"
+        "policy,seed,run,samples,horizon,visibility-weight,x-weight,y-weight,velocity-weight,t,x,y,v,theta,accel_requested,accel_allowed,u2,delta,costmap_time,planning_time\n"
     )
     f.flush
 
@@ -305,16 +316,17 @@ def main(args):
                 states_nom = [
                     state,
                 ]
+
                 x = state[0]
                 v = state[2]
                 a = A_DES
                 for _ in range(args.horizon):
-                    x += v * env.sim.tick_time
+                    x += V_DES * env.sim.tick_time
                     v += a * env.sim.tick_time
                     if v >= V_DES:
                         v = V_DES
                         a = 0
-                    states_nom.append([x, -LANE_WIDTH / 2, v, 0, 0])
+                    states_nom.append([x, -LANE_WIDTH / 2, V_DES, 0, 0])
 
                 states_nom = np.array(states_nom).T  # each state in a column
 
@@ -337,7 +349,7 @@ def main(args):
 
                 # warm start the controls for next time
                 controls_nom[:, :-1] = u[:, 1:]
-                # controls_nom[:, -1] = u[0, 0]
+                # controls_nom[:, -1] = u[:, -1]
 
                 if args.show_sim:
                     from mpc_controller import visualize_variations
@@ -391,6 +403,12 @@ def main(args):
                 + str(args.horizon)
                 + ","
                 + str(args.visibility_weight)
+                + ","
+                + str(args.x_weight)
+                + ","
+                + str(args.y_weight)
+                + ","
+                + str(args.velocity_weight)
                 + ","
                 + str(step * env.sim.tick_time)
                 + ","
@@ -531,6 +549,24 @@ if __name__ == "__main__":
         default=1,
         type=float,
         help="Weight to apply to the visibility cost function -- a.k.a. M in the research paper",
+    )
+    argparser.add_argument(
+        "--velocity-weight",
+        default=V_WEIGHT,
+        type=float,
+        help="Weight to apply to the velocity cost",
+    )
+    argparser.add_argument(
+        "--x-weight",
+        default=X_WEIGHT,
+        type=float,
+        help="Weight to apply to the X cost",
+    )
+    argparser.add_argument(
+        "--y-weight",
+        default=Y_WEIGHT,
+        type=float,
+        help="Weight to apply to the Y cost",
     )
 
     args = argparser.parse_args()

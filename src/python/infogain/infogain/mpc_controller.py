@@ -6,7 +6,9 @@ import ModelParameters.Ackermann as Ackermann
 import ModelParameters.GenericCar as GenericCar
 
 
-from config import LANE_WIDTH, DISCOUNT_FACTOR, EXP_OVERFLOW_LIMIT, SCAN_RANGE
+from config import LANE_WIDTH, DISCOUNT_FACTOR, SCAN_RANGE
+
+USE_FINAL_WEIGHT_ONLY = True
 
 
 # Basic step function -- apply the control to advance one step
@@ -393,10 +395,11 @@ class MPC:
             d_agent = csi.sqrt(d_agent_2)
 
             inner = self.agents[2, ag] / d_agent * (r_fov_2 - d_agent_2)
-            if inner > EXP_OVERFLOW_LIMIT:
-                score = self.M * inner
-            else:
-                score = self.M * csi.log(1 + csi.exp(inner))
+            with np.errstate(over="raise"):
+                try:
+                    score = self.M * csi.log(1 + csi.exp(inner))
+                except FloatingPointError:
+                    score = self.M * inner
             J_vis += score
 
         return J_vis
@@ -466,7 +469,7 @@ class MPPI:
         ANDERSEN = 2
         NONE = 3
 
-    def __init__(self, mode, vehicle, limits, c_lambda=1, Q=None, M=1, seed=None) -> None:
+    def __init__(self, mode, vehicle, limits, c_lambda=1, Q=None, R=None, M=1, seed=None) -> None:
         if mode == "Ours":
             self.mode = MPPI.visibility_method.OURS
         elif mode == "Higgins":
@@ -482,10 +485,15 @@ class MPPI:
         self.seed = seed
 
         if Q is None:
-            self.Q = np.eye(vehicle.state_size)
+            self.Q = np.eye(vehicle.STATE_LEN)
         else:
             self.Q = Q
         self.M = M
+
+        if R is None:
+            self.R = np.eye(vehicle.CONTROL_LEN)
+        else:
+            self.R = R
 
         self.gen = np.random.default_rng(seed)
 
@@ -505,7 +513,7 @@ class MPPI:
         dt,
     ):
         u_N, u_M = u_nom.shape
-        u_dist = np.zeros([samples, u_N, u_M])  # one extra for weights
+        u_dist = np.zeros([samples, u_N, u_M])
         u_weight = np.zeros([samples, u_M])
 
         for i in range(samples):
@@ -523,12 +531,20 @@ class MPPI:
             )
 
         u_weighted = np.zeros_like(u_nom)
-        weights = np.exp(-1.0 / (self.c_lambda) * np.sum(u_weight, axis=1)).reshape((-1, 1))
-        total_weight = np.sum(weights)
+        if USE_FINAL_WEIGHT_ONLY:
+            weights = np.exp(-1.0 / (self.c_lambda) * u_weight[:, -1]).reshape((-1, 1))
+            total_weight = np.sum(weights)
 
-        for step in range(u_M):
-            u_dist[:, :, step] = weights * u_dist[:, :, step]
-            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
+            for step in range(u_M):
+                u_dist[:, :, step] = weights * u_dist[:, :, step]
+                u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
+        else:
+            for step in range(u_M):
+                weights = np.exp(-1.0 / (self.c_lambda) * u_weight[:, step]).reshape((-1, 1))
+                total_step_weight = np.sum(weights)
+
+                u_dist[:, :, step] = weights * u_dist[:, :, step]
+                u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_step_weight
 
         return u_weighted, u_dist
 
@@ -554,19 +570,24 @@ class MPPI:
         control_len, steps = u_nom.shape
 
         state = np.array(initial_state)
+        step_score = 0
         for step in range(steps):
-            u_i = np.array(u_nom[:, step])
+            u_step = np.array(u_nom[:, step])
             for control_num in range(control_len):
                 noise = self.gen.random() * self.limits[control_num] * 2 - self.limits[control_num]
-                u_i[control_num] += noise
+                u_step[control_num] += noise
                 u_dist[control_num, step] = noise
 
-            dstep = step_fn(self.vehicle, state, control=u_i, dt=dt)
+            dstep = step_fn(self.vehicle, state, control=u_step, dt=dt)
             state = state + dstep * dt
 
             # penalize error in trajectory
             state_err = x_nom[:, step + 1] - state
-            step_score = state_err.T @ self.Q @ state_err
+            step_score += state_err.T @ self.Q @ state_err
+
+            # penalize any control action
+            control_err = u_step - u_nom[:, step]
+            step_score += control_err.T @ self.R @ control_err
 
             # check for obstacles
             step_score += self.obstacle_cost(state=state, actors=actors)
@@ -593,7 +614,7 @@ class MPPI:
             # BUGBUG: hacky test to see if the obstacle is still ahead of the AV -- works in this
             #         linear environment but will need to be modified and expanded to a general
             #         case for more involved envs.
-            if act[3] > state[0]:
+            if act[0] > state[0]:
                 # BUGBUG: A second hack to handle the case where cars are on both sides of the
                 #         road.  On the same side, the angle is positive, but on the opposite
                 #         the angle is reversed.  Just check which side of the road they are on and go
@@ -622,19 +643,19 @@ class MPPI:
             # BUGBUG: hacky test to see if the obstacle is still ahead of the AV -- works in this
             #         linear environment but will need to be modified and expanded to a general
             #         case for more involved envs.
-            if act[3] > state[0]:
-                dx = state[0] - act[0]
-                dy = state[1] - act[1]
-                d_agent_2 = dx * dx + dy * dy
-                d_agent = np.sqrt(d_agent_2)
+            # if act[0] > state[0]:
+            dx = state[0] - act[0]
+            dy = state[1] - act[1]
+            d_agent_2 = dx * dx + dy * dy
+            d_agent = np.sqrt(d_agent_2)
 
-                # if the exp is going to overflow, just use the max value
-                inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
-                with np.errstate(over="raise"):
-                    try:
-                        score = self.M * np.log(1 + np.exp(inner))
-                    except FloatingPointError:
-                        score = self.M * inner
+            # if the exp is going to overflow, just use the max value
+            inner = act[2] / d_agent * (r_fov_2 - d_agent_2)
+            with np.errstate(over="raise"):
+                try:
+                    score = self.M * np.log(1 + np.exp(inner))
+                except FloatingPointError:
+                    score = self.M * inner
 
             J_vis += score
 
@@ -649,7 +670,7 @@ class MPPI:
             # TODO: Use multiple circle of dm2 to check collisions -- use this approximation for now
             #       so we're consistant
             if d_agent_2 < act[2]:
-                return 10000
+                return 10000000.0
 
         return 0
 

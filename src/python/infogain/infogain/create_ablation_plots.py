@@ -89,7 +89,7 @@ def make_plot(
     fig.savefig(plot_name)
 
 
-def plot_comparison(files, mode="baselines"):
+def plot_comparison(files, args):
     sb.set_theme(style="whitegrid")
     sb.set()
 
@@ -98,6 +98,10 @@ def plot_comparison(files, mode="baselines"):
     plt.rc("xtick", labelsize=16)
     plt.rc("ytick", labelsize=16)
     plt.rc("axes", labelsize=12)
+
+    HEADER_STR = args.method
+    HEADER_SUBSTR = args.sub_group
+    PREFIX_STR = HEADER_STR + "-" + HEADER_SUBSTR + "-Weight-Trials"
 
     df_list = []
     for f in files:
@@ -122,15 +126,15 @@ def plot_comparison(files, mode="baselines"):
                     df.loc[df["run"] == run, "t"] = df_run.index.values * 0.1
 
             df["y"] += 2
-            df["weight-name"] = [str(w) for w in df["visibility-weight"]]
+            df["weight-name"] = [str(w) for w in df[args.column]]
 
             df_list.append(df)
 
     df = pd.concat(df_list, ignore_index=True, sort=False)
 
     # df = df[(df["visibility-weight"] >= 0.05) & (df["visibility-weight"] <= 0.054)]
-    WEIGHT_LIMIT = 6000
-    weights = [str(w) for w in sorted(list(set(df["visibility-weight"]))) if w < WEIGHT_LIMIT]
+    WEIGHT_LIMIT = np.inf
+    weights = [str(w) for w in sorted(list(set(df[args.column]))) if w < WEIGHT_LIMIT]
     # weights = [0.02, 0.03, 0.04, 0.05, 0.1][::-1]
     str_weights = [str(w) for w in weights]
 
@@ -218,7 +222,7 @@ def plot_comparison(files, mode="baselines"):
         colours=colours,
         x_label="Time (s)",
         y_label="V (m/s)",
-        y_limit=[5, 8],
+        y_limit=[5, 12],
         legend_location="lower left",
         plot_name=f"{PREFIX_STR}_v_plot.pdf",
     )
@@ -249,12 +253,15 @@ if __name__ == "__main__":
         type=str,
         help="type to graph: Higgins, Proposed, Andersen",
     )
+    argparser.add_argument(
+        "-c",
+        "--column",
+        default="visibility-weight",
+        type=str,
+        help="type to graph: Higgins, Proposed, Andersen",
+    )
 
     args = argparser.parse_args()
-
-    HEADER_STR = args.method
-    HEADER_SUBSTR = args.sub_group
-    PREFIX_STR = HEADER_STR + "-" + HEADER_SUBSTR + "-Weight-Trials"
 
     files = []
     for f in listdir(args.path):
@@ -262,4 +269,4 @@ if __name__ == "__main__":
         if isfile(file_path):
             files.append(file_path)
 
-    plot_comparison(files)
+    plot_comparison(files, args)
