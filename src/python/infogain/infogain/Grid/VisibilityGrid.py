@@ -16,11 +16,12 @@ make it persistant, and have it move with the vehicle (same logic as the Occupan
 
 
 class VisibilityGrid:
-    def __init__(self, dim, resolution=1, origin=(0.0, 0.0)):
+    def __init__(self, dim, resolution=1, origin=(0.0, 0.0), alpha=0.8):
         self.dim = dim
         self.resolution = resolution
         self.origin = origin
         self.grid_size = int(dim / resolution)
+        self.alpha = alpha
 
         # allocate a mutex/lock
         self.mutex = Lock()
@@ -87,7 +88,11 @@ class VisibilityGrid:
         try:
             # add in the visibility values
             for pt, val in zip(points, values):
-                self.grid[pt[1], pt[0]] = max(val, self.grid[pt[1], pt[0]])
+                if self.alpha < 0:
+                    # use the max method
+                    self.grid[pt[1], pt[0]] = max(val, self.grid[pt[1], pt[0]])
+                else:
+                    self.grid[pt[1], pt[0]] = self.alpha * val + (1.0 - self.alpha) * self.grid[pt[1], pt[0]]
 
         finally:
             self.mutex.release()

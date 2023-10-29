@@ -7,7 +7,7 @@ from time import time
 
 from config import *
 from trajectory import generate_trajectory
-from polycheck import visibility_from_region
+from polygpu import visibility_from_region
 
 from Grid.VisibilityGrid import VisibilityGrid
 
@@ -91,7 +91,7 @@ def update_visibility_costmap(costmap, obs, map, origin, resolution, obs_traject
     if len(target_pts):
         # results are num observation points rows by num region of interest points columns
         result = np.zeros((len(obs_pts), len(target_pts)))
-        visibility_from_region(map, obs_pts, target_pts, result)
+        result = visibility_from_region(map, obs_pts, target_pts).reshape((len(obs_pts), -1))
         # log_result = -np.log(result + 0.00000001) * result
         # summed_log_result = np.sum(log_result, axis=1)
 
