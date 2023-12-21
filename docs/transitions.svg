@@ -1,0 +1,2140 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="210mm"
+   height="297mm"
+   viewBox="0 0 210 297"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.3.2 (1:1.3.2+202311252150+091e20ef0f)"
+   sodipodi:docname="transitions.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showguides="false"
+     inkscape:zoom="1.0280428"
+     inkscape:cx="410.00239"
+     inkscape:cy="414.37964"
+     inkscape:window-width="1860"
+     inkscape:window-height="1016"
+     inkscape:window-x="60"
+     inkscape:window-y="27"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1">
+    <marker
+       style="overflow:visible"
+       id="DartArrow"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Dart arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         transform="scale(-0.5)"
+         id="path6" />
+    </marker>
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect57"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect56"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect55"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect54"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect53"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect52"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect51"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect49"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect48"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect47"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect46"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect45"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect44"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect42"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect41"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect40"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect39"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect38"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect37"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect36"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect35"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect34"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect33"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect32"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect31"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect30"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect29"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect28"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect27"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect26"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect25"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect24"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect23"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect22"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect21"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect20"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect19"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect18"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect17"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect16"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect15"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect14"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect13"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <marker
+       style="overflow:visible"
+       id="DartArrow-8"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Dart arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         transform="scale(-0.5)"
+         id="path6-5" />
+    </marker>
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-0"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <marker
+       style="overflow:visible"
+       id="DartArrow-5"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Dart arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         transform="scale(-0.5)"
+         id="path6-8" />
+    </marker>
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-6"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <marker
+       style="overflow:visible"
+       id="DartArrow-2"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Dart arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         transform="scale(-0.5)"
+         id="path6-4" />
+    </marker>
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-06"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <marker
+       style="overflow:visible"
+       id="DartArrow-81"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Dart arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         transform="scale(-0.5)"
+         id="path6-3" />
+    </marker>
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-1"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect44-8"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect46-3"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect49-3"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-8"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect51-3"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect52-7"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect53-9"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-0-8"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-1-1"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect45-8"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect47-5"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect48-2"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect54-2"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect55-2"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect56-7"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect57-0"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-6-6"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+    <inkscape:path-effect
+       effect="bspline"
+       id="path-effect50-06-3"
+       is_visible="true"
+       lpeversion="1.3"
+       weight="33.333333"
+       steps="2"
+       helper_size="0"
+       apply_no_weight="true"
+       apply_with_weight="true"
+       only_selected="false"
+       uniform="false" />
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <g
+       id="g11"
+       inkscape:export-filename="transition-probabilities.pdf"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96">
+      <g
+         id="g10">
+        <g
+           id="g9">
+          <circle
+             style="opacity:0.936777;fill:none;stroke-width:1.4;stroke-miterlimit:1;stroke:#000000"
+             id="path1"
+             cx="45.309784"
+             cy="55.923981"
+             r="11.539472" />
+          <g
+             id="g4"
+             transform="translate(-18.7417,-69.518009)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="61.484615"
+               y="127.28283"
+               id="text1"><tspan
+                 sodipodi:role="line"
+                 id="tspan1"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="61.484615"
+                 y="127.28283">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="64.89473"
+               y="128.96602"
+               id="text2"><tspan
+                 sodipodi:role="line"
+                 id="tspan2"
+                 style="stroke-width:0.264583"
+                 x="64.89473"
+                 y="128.96602">1</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g8"
+           transform="translate(-3.7067719,3.4661104)">
+          <circle
+             style="opacity:0.936777;fill:none;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-4"
+             cx="49.016556"
+             cy="106.16656"
+             r="11.539472" />
+          <g
+             id="g5"
+             transform="translate(-39.877132,-47.478841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="86.163147"
+               y="155.28925"
+               id="text1-7"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-5"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="86.163147"
+                 y="155.28925">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="89.392006"
+               y="157.3831"
+               id="text3"><tspan
+                 sodipodi:role="line"
+                 id="tspan3"
+                 style="stroke-width:0.264583"
+                 x="89.392006"
+                 y="157.3831">2</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g7"
+           transform="translate(-5.8234367,12.724808)">
+          <circle
+             style="opacity:0.936777;fill:none;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-9"
+             cx="51.133221"
+             cy="150.61655"
+             r="11.539472" />
+          <g
+             id="g6"
+             transform="translate(-60.685826,-26.463841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="109.1819"
+               y="178.57259"
+               id="text1-1"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-7"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="109.1819"
+                 y="178.57259">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="112.40639"
+               y="180.34785"
+               id="text4"><tspan
+                 sodipodi:role="line"
+                 id="tspan4"
+                 style="stroke-width:0.264583"
+                 x="112.40639"
+                 y="180.34785">3</tspan></text>
+          </g>
+        </g>
+      </g>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+         x="39.081493"
+         y="34.533478"
+         id="text10"><tspan
+           sodipodi:role="line"
+           id="tspan10"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+           x="39.081493"
+           y="34.533478">t=1</tspan></text>
+    </g>
+    <g
+       id="g12"
+       transform="translate(-3.668847)">
+      <g
+         id="g10-8"
+         transform="translate(60.783542,0.85027819)">
+        <g
+           id="g9-8">
+          <circle
+             style="opacity:0.936777;fill:none;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-3"
+             cx="45.309784"
+             cy="55.923981"
+             r="11.539472" />
+          <g
+             id="g4-1"
+             transform="translate(-18.7417,-69.518009)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="61.484615"
+               y="127.28283"
+               id="text1-8"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-9"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="61.484615"
+                 y="127.28283">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="64.89473"
+               y="128.96602"
+               id="text2-6"><tspan
+                 sodipodi:role="line"
+                 id="tspan2-4"
+                 style="stroke-width:0.264583"
+                 x="64.89473"
+                 y="128.96602">1</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g8-3"
+           transform="translate(-3.7067719,3.4661104)">
+          <circle
+             style="opacity:0.936777;fill:#cccccc;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-4-3"
+             cx="49.016556"
+             cy="106.16656"
+             r="11.539472" />
+          <g
+             id="g5-3"
+             transform="translate(-39.877132,-47.478841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="86.163147"
+               y="155.28925"
+               id="text1-7-8"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-5-6"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="86.163147"
+                 y="155.28925">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="89.392006"
+               y="157.3831"
+               id="text3-0"><tspan
+                 sodipodi:role="line"
+                 id="tspan3-4"
+                 style="stroke-width:0.264583"
+                 x="89.392006"
+                 y="157.3831">2</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g7-8"
+           transform="translate(-5.8234367,12.724808)">
+          <circle
+             style="opacity:0.936777;fill:#cccccc;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-9-8"
+             cx="51.133221"
+             cy="150.61655"
+             r="11.539472" />
+          <g
+             id="g6-8"
+             transform="translate(-60.685826,-26.463841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="109.1819"
+               y="178.57259"
+               id="text1-1-9"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-7-7"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="109.1819"
+                 y="178.57259">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="112.40639"
+               y="180.34785"
+               id="text4-7"><tspan
+                 sodipodi:role="line"
+                 id="tspan4-6"
+                 style="stroke-width:0.264583"
+                 x="112.40639"
+                 y="180.34785">3</tspan></text>
+          </g>
+        </g>
+      </g>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+         x="99.865036"
+         y="34.533478"
+         id="text10-8"><tspan
+           sodipodi:role="line"
+           id="tspan10-0"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+           x="99.865036"
+           y="34.533478">t=2</tspan></text>
+    </g>
+    <g
+       id="g13">
+      <g
+         id="g10-3"
+         transform="translate(114.22939,1.0275072)">
+        <g
+           id="g9-0">
+          <circle
+             style="opacity:0.936777;fill:#cccccc;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-92"
+             cx="45.309784"
+             cy="55.923981"
+             r="11.539472" />
+          <g
+             id="g4-5"
+             transform="translate(-18.7417,-69.518009)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="61.484615"
+               y="127.28283"
+               id="text1-4"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-0"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="61.484615"
+                 y="127.28283">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="64.89473"
+               y="128.96602"
+               id="text2-5"><tspan
+                 sodipodi:role="line"
+                 id="tspan2-9"
+                 style="stroke-width:0.264583"
+                 x="64.89473"
+                 y="128.96602">1</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g8-4"
+           transform="translate(-3.7067719,3.4661104)">
+          <circle
+             style="opacity:0.936777;fill:none;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-4-6"
+             cx="49.016556"
+             cy="106.16656"
+             r="11.539472" />
+          <g
+             id="g5-9"
+             transform="translate(-39.877132,-47.478841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="86.163147"
+               y="155.28925"
+               id="text1-7-2"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-5-2"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="86.163147"
+                 y="155.28925">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="89.392006"
+               y="157.3831"
+               id="text3-4"><tspan
+                 sodipodi:role="line"
+                 id="tspan3-7"
+                 style="stroke-width:0.264583"
+                 x="89.392006"
+                 y="157.3831">2</tspan></text>
+          </g>
+        </g>
+        <g
+           id="g7-7"
+           transform="translate(-5.8234367,12.724808)">
+          <circle
+             style="opacity:0.936777;fill:#cccccc;stroke:#000000;stroke-width:1.4;stroke-miterlimit:1"
+             id="path1-9-5"
+             cx="51.133221"
+             cy="150.61655"
+             r="11.539472" />
+          <g
+             id="g6-4"
+             transform="translate(-60.685826,-26.463841)">
+            <text
+               xml:space="preserve"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="109.1819"
+               y="178.57259"
+               id="text1-1-8"><tspan
+                 sodipodi:role="line"
+                 id="tspan1-7-1"
+                 style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:6.35px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+                 x="109.1819"
+                 y="178.57259">S</tspan></text>
+            <text
+               xml:space="preserve"
+               style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+               x="112.40639"
+               y="180.34785"
+               id="text4-2"><tspan
+                 sodipodi:role="line"
+                 id="tspan4-8"
+                 style="stroke-width:0.264583"
+                 x="112.40639"
+                 y="180.34785">3</tspan></text>
+          </g>
+        </g>
+      </g>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+         x="153.31088"
+         y="34.533478"
+         id="text10-5"><tspan
+           sodipodi:role="line"
+           id="tspan10-1"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.76111px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+           x="153.31088"
+           y="34.533478">t=3</tspan></text>
+    </g>
+    <g
+       id="g66-0"
+       transform="translate(-15.65194,31.58263)">
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+         x="75.514801"
+         y="199.28502"
+         id="text57-2"><tspan
+           sodipodi:role="line"
+           id="tspan57-83"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+           x="75.514801"
+           y="199.28502">P</tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+         x="78.133133"
+         y="201.12567"
+         id="text58-80"><tspan
+           sodipodi:role="line"
+           id="tspan58-40"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+           x="78.133133"
+           y="201.12567">33</tspan></text>
+    </g>
+    <g
+       id="g68">
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 59.061114,56.162368 c 8.858737,-0.0098 17.717473,-0.01968 26.576213,-0.02952"
+         id="path44"
+         inkscape:path-effect="#path-effect44"
+         inkscape:original-d="m 59.061114,56.162368 c 8.858737,-0.0098 17.717473,-0.01968 26.576213,-0.02952"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 58.022043,62.010064 c 10.480201,12.12086 20.960402,24.241719 31.440604,36.36258"
+         id="path46"
+         inkscape:path-effect="#path-effect46"
+         inkscape:original-d="m 58.022043,62.010064 c 10.480201,12.12086 20.960402,24.241719 31.440604,36.36258"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 55.5283,117.49206 c 11.107203,11.97457 22.214414,23.94915 33.321617,35.92372"
+         id="path49"
+         inkscape:path-effect="#path-effect49"
+         inkscape:original-d="m 55.5283,117.49206 c 11.107203,11.97457 22.214413,23.94915 33.321617,35.92372"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="M 56.09696,155.58627 C 67.526024,144.6366 78.955086,133.68693 90.384155,122.73725"
+         id="path50"
+         inkscape:path-effect="#path-effect50"
+         inkscape:original-d="M 56.09696,155.58627 C 67.526026,144.6366 78.955088,133.68693 90.384155,122.73725"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="M 55.102337,100.90907 C 66.906746,90.232961 78.711155,79.55685 90.515563,68.880742"
+         id="path51"
+         inkscape:path-effect="#path-effect51"
+         inkscape:original-d="M 55.102337,100.90907 C 66.906747,90.232962 78.711156,79.556851 90.515563,68.880742"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 58.632133,109.57346 c 9.000865,-0.056 18.00173,-0.11195 27.002593,-0.16793"
+         id="path52"
+         inkscape:path-effect="#path-effect52"
+         inkscape:original-d="m 58.632133,109.57346 c 9.000865,-0.056 18.00173,-0.11195 27.002593,-0.16793"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 59.304634,164.29229 c 8.505816,-0.0371 17.011635,-0.0741 25.51745,-0.1112"
+         id="path53"
+         inkscape:path-effect="#path-effect53"
+         inkscape:original-d="m 59.304634,164.29229 c 8.505816,-0.0371 17.011635,-0.0741 25.51745,-0.1112"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow-8)"
+         d="m 58.867211,161.22018 c 13.323189,26.97056 26.646374,53.94111 39.969567,80.91168"
+         id="path50-4"
+         inkscape:path-effect="#path-effect50-0"
+         inkscape:original-d="m 58.867211,161.22018 c 13.323191,26.97056 26.646376,53.94111 39.969567,80.91168"
+         transform="translate(-4.278979,-94.649533)"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow-81)"
+         d="M 68.912327,145.90135 C 82.621644,118.98852 96.33096,92.075693 110.04028,65.162857"
+         id="path50-0"
+         inkscape:path-effect="#path-effect50-1"
+         inkscape:original-d="M 68.912327,145.90135 C 82.621644,118.98852 96.33096,92.075693 110.04028,65.162857"
+         transform="translate(-15.920646,6.1567167)"
+         sodipodi:nodetypes="cc" />
+      <g
+         id="g67"
+         transform="translate(-37.571821,-44.482186)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042"><tspan
+               sodipodi:role="line"
+               id="tspan57-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2"><tspan
+               sodipodi:role="line"
+               id="tspan58-05"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">32</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-3"
+         transform="translate(-35.988289,-137.18082)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-6"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-0"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-5"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-2"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-9"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">11</tspan><tspan
+               sodipodi:role="line"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="206.41733"
+               id="tspan67" /></text>
+        </g>
+      </g>
+      <g
+         id="g67-1"
+         transform="translate(-34.777808,-120.71711)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-7"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-4"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-3"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-1"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-4"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-6"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">12</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-2"
+         transform="translate(-46.564587,-122.67267)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-64"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-1"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-2"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-8"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-8"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-92"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">13</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-6"
+         transform="translate(-39.444441,-84.055709)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-8"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-3"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-8"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-3"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-3"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-3"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">22</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-7"
+         transform="translate(-42.55542,-97.969111)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-68"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-9"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-0"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-6"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-87"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-90"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">21</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-73"
+         transform="translate(-43.006072,-70.725467)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-2"
+           cx="103.19653"
+           cy="193.00826"
+           r="5.2541199" />
+        <g
+           id="g66-1-6"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-52"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-65"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-879"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-60"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">23</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-4"
+         transform="translate(-37.773752,-29.423878)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-87"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-08"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-6"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-47"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-93"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">33</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-30"
+         transform="translate(-48.825752,-47.130293)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-1"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-7"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-89"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-15"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-49"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">31</tspan></text>
+        </g>
+      </g>
+    </g>
+    <g
+       id="g69">
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 115.76344,56.221682 c 8.89038,0.0374 17.78077,0.0748 26.67115,0.112199"
+         id="path45"
+         inkscape:path-effect="#path-effect45"
+         inkscape:original-d="m 115.76344,56.221682 c 8.89038,0.0374 17.78077,0.0748 26.67115,0.112199"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 112.73102,120.05565 c 10.9098,11.0848 21.8196,22.1696 32.72941,33.2544"
+         id="path47"
+         inkscape:path-effect="#path-effect47"
+         inkscape:original-d="m 112.73102,120.05565 c 10.9098,11.0848 21.8196,22.1696 32.72941,33.2544"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 113.53625,65.645572 c 11.21635,10.396046 22.4327,20.792091 33.64906,31.188141"
+         id="path48"
+         inkscape:path-effect="#path-effect48"
+         inkscape:original-d="m 113.53625,65.645572 c 11.21635,10.396048 22.4327,20.792094 33.64906,31.188141"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 116.23064,165.29963 c 8.49587,-0.16355 16.99174,-0.32711 25.48761,-0.49066"
+         id="path54"
+         inkscape:path-effect="#path-effect54"
+         inkscape:original-d="m 116.23064,165.29963 c 8.49587,-0.16355 16.99174,-0.3271 25.48761,-0.49066"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 116.19076,110.47506 c 8.58255,-0.0292 17.16509,-0.0583 25.74763,-0.0875"
+         id="path55"
+         inkscape:path-effect="#path-effect55"
+         inkscape:original-d="m 116.19076,110.47506 c 8.58255,-0.0292 17.16509,-0.0584 25.74763,-0.0875"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="M 113.12225,101.14216 C 124.37757,90.410027 135.63289,79.677894 146.88821,68.945761"
+         id="path56"
+         inkscape:path-effect="#path-effect56"
+         inkscape:original-d="M 113.12225,101.14216 C 124.37757,90.410028 135.63289,79.677894 146.88821,68.945761"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow)"
+         d="m 114.37757,155.62306 c 11.35428,-10.60003 22.70854,-21.20004 34.06282,-31.80007"
+         id="path57"
+         inkscape:path-effect="#path-effect57"
+         inkscape:original-d="m 114.37757,155.62306 c 11.35428,-10.60003 22.70854,-21.20004 34.06282,-31.80007"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow-5)"
+         d="M 51.570198,138.50867 C 65.413266,111.96379 79.256332,85.418911 93.099403,58.874023"
+         id="path50-8"
+         inkscape:path-effect="#path-effect50-6"
+         inkscape:original-d="M 51.570198,138.50867 C 65.413267,111.96379 79.256332,85.418911 93.099403,58.874023"
+         transform="translate(58.691854,13.56505)"
+         sodipodi:nodetypes="cc" />
+      <path
+         style="fill:none;stroke:#0000ff;stroke-width:0.665;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#DartArrow-2)"
+         d="m 54.578965,169.59133 c 13.394261,26.86558 26.788517,53.73115 40.182777,80.59673"
+         id="path50-9"
+         inkscape:path-effect="#path-effect50-06"
+         inkscape:original-d="m 54.578965,169.59133 c 13.394262,26.86558 26.788519,53.73115 40.182777,80.59673"
+         transform="translate(55.781438,-100.47037)"
+         sodipodi:nodetypes="cc" />
+      <g
+         id="g67-29"
+         transform="translate(18.492948,-44.860446)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-0"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-99"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-4"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-5"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-1"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">32</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-3-9"
+         transform="translate(19.02211,-137.2)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-6-3"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-0-5"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-5-7"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-0-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-2-8"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-9-1"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">11</tspan><tspan
+               sodipodi:role="line"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="206.41733"
+               id="tspan67-9" /></text>
+        </g>
+      </g>
+      <g
+         id="g67-1-2"
+         transform="translate(19.411764,-118.6784)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-7-5"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-4-3"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-3-4"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-1-9"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-4-0"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-6-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">12</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-2-6"
+         transform="translate(7.2745946,-120.60579)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-64-2"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-1-1"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-2-2"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-8-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-8-7"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-92-3"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">13</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-6-6"
+         transform="translate(17.950207,-83.156978)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-8-2"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-3-8"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-8-9"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-3-6"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-3-0"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-3-7"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">22</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-7-0"
+         transform="translate(12.512113,-96.771386)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-68-5"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-9-6"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-0-7"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-6-7"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-87-4"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-90-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">21</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-73-4"
+         transform="translate(13.028161,-68.752829)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-2-8"
+           cx="103.19653"
+           cy="193.00826"
+           r="5.2541199" />
+        <g
+           id="g66-1-6-5"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-52-8"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-65-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-879-6"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-60-0"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">23</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-4-8"
+         transform="translate(20.345029,-28.456271)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-87-6"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-08-0"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-6-4"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-2-6"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-47-7"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-93-6"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">33</tspan></text>
+        </g>
+      </g>
+      <g
+         id="g67-30-1"
+         transform="translate(7.645031,-46.447943)">
+        <circle
+           style="opacity:1;fill:#ffffff;stroke:#0000ff;stroke-width:1.09571;stroke-miterlimit:1;stroke-dasharray:none"
+           id="path66-1-3"
+           cx="103.72569"
+           cy="193.53741"
+           r="5.2541199" />
+        <g
+           id="g66-1-7-7"
+           transform="translate(24.692479,-4.8841363)">
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="75.514801"
+             y="199.28502"
+             id="text57-042-89-7"><tspan
+               sodipodi:role="line"
+               id="tspan57-2-15-2"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:5.64444px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="75.514801"
+               y="199.28502">P</tspan></text>
+          <text
+             xml:space="preserve"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+             x="78.133133"
+             y="201.12567"
+             id="text58-2-49-6"><tspan
+               sodipodi:role="line"
+               id="tspan58-05-2-4"
+               style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:4.23333px;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;stroke-width:0.264583"
+               x="78.133133"
+               y="201.12567">31</tspan></text>
+        </g>
+      </g>
+    </g>
+    <text
+       xml:space="preserve"
+       style="font-size:4.9389px;line-height:1.25;font-family:'Latin Modern Roman';-inkscape-font-specification:'Latin Modern Roman, Normal';font-variant-ligatures:none;stroke-width:0.264583"
+       x="84.856262"
+       y="194.94821"
+       id="text68"><tspan
+         sodipodi:role="line"
+         id="tspan68"
+         style="stroke-width:0.264583"
+         x="84.856262"
+         y="194.94821" /></text>
+  </g>
+</svg>
