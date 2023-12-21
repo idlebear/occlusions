@@ -11,8 +11,9 @@ import visilibity as vis
 from policies.VelocityGrid import VelocityGrid
 from policies.flow.flow import flow
 
-from polycheck import Vertex, VertexList, PolygonList
-from polycheck import visibility_from_region, faux_scan
+# from polycheck import Vertex, VertexList, PolygonList
+# from polycheck import visibility_from_region, faux_scan
+from polygpu import faux_scan, visibility_from_region
 
 # from dogm_py import LaserMeasurementGridParams
 # from dogm_py import LaserMeasurementGrid
@@ -555,27 +556,27 @@ class Simulation:
                 pass
 
             # right side
-            rnd = self.generator.uniform()
-            if rnd < 0:  #  0.6:
-                # create a parked car
-                y = LANE_WIDTH + CAR_OFFSET
-                x_wiggle = self.generator.uniform() * CAR_WIGGLE
-                orientation = self.generator.uniform() * CAR_ROTATION - CAR_ROTATION / 2
-                self.generated_actors += 1
+            # rnd = self.generator.uniform()
+            # if rnd < 0.6:
+            #     # create a parked car
+            #     y = LANE_WIDTH + CAR_OFFSET
+            #     x_wiggle = self.generator.uniform() * CAR_WIGGLE
+            #     orientation = self.generator.uniform() * CAR_ROTATION - CAR_ROTATION / 2
+            #     self.generated_actors += 1
 
-                actor = Obstacle(
-                    id=self.ticks,
-                    x=np.array([x + x_wiggle, y, orientation + np.pi, 0, 0]),
-                    scale=Ackermann.LENGTH,
-                    ratio=Ackermann.WIDTH / Ackermann.LENGTH,
-                    resolution=GRID_RESOLUTION,
-                    image="red_car",
-                    image_scale=self.image_scale,
-                )
-                self.actor_list.append(actor)
-            else:
-                # blank space
-                pass
+            #     actor = Obstacle(
+            #         id=self.ticks,
+            #         x=np.array([x + x_wiggle, y, orientation + np.pi, 0, 0]),
+            #         scale=Ackermann.LENGTH,
+            #         ratio=Ackermann.WIDTH / Ackermann.LENGTH,
+            #         resolution=GRID_RESOLUTION,
+            #         image="red_car",
+            #         image_scale=self.image_scale,
+            #     )
+            #     self.actor_list.append(actor)
+            # else:
+            #     # blank space
+            #     pass
 
             x = x + CAR_SPACING
             self.next_agent_x = x
@@ -744,8 +745,8 @@ class Simulation:
                 min_angle = np.pi / 2
                 min_pt = None
                 for pt in poly:
-                    angle = np.arctan((pt[1] - self.ego.x[1]) / (pt[0] - self.ego.x[0]))
-                    if abs(angle) < abs(min_angle):
+                    angle = abs(np.arctan((pt[1] - self.ego.x[1]) / (pt[0] - self.ego.x[0])))
+                    if angle < min_angle:
                         min_angle = angle
                         min_pt = pt
                 actor_state["min_pt"] = min_pt
@@ -761,28 +762,22 @@ class Simulation:
         # calculate the visibility polygon
         shapes = []
 
+        # build a list of polygons in the environment
+        polygons = []
         for actor in self.actor_list:
             if type(actor) is Blank or actor.collided:
                 continue
+            polygons.append(actor.get_poly())
+        polygons = np.array(polygons)
 
-            pts = actor.get_poly()
-            vertices = [Vertex(pt) for pt in pts]
-            shapes.append(VertexList(vertices))
-
-        polygon_list = PolygonList(shapes)
-
-        scan_data = np.zeros((SCAN_RAYS,))
-
-        faux_scan(
-            polygon_list,
-            start_x=self.ego.x[0],
-            start_y=self.ego.x[1],
-            start_angle=SCAN_START_ANGLE + self.ego.x[STATE.THETA],
-            angle_increment=SCAN_ANGLE_INCREMENT,
+        scan_data = faux_scan(
+            polygons,
+            origin=self.ego.x[0:2],
+            angle_start=SCAN_START_ANGLE + self.ego.x[STATE.THETA],
+            angle_inc=SCAN_ANGLE_INCREMENT,
             num_rays=SCAN_RAYS,
             max_range=SCAN_RANGE,
             resolution=SCAN_RESOLUTION,
-            results=scan_data,
         )
 
         # clear any rays that didn't hit anything
@@ -1080,7 +1075,7 @@ class Simulation:
                 self.maps = self.map_ax.imshow(np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
                 plt.show(block=False)
 
-            map_img = Image.fromarray(self.probability_map * 255.0).astype(np.uint8).convert("RGB")
+            map_img = Image.fromarray((self.probability_map * 255.0).astype(np.uint8)).convert("RGB")
             self.maps.set_data(map_img)
 
             self.map_fig.canvas.draw()
