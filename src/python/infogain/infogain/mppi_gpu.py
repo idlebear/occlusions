@@ -311,9 +311,142 @@ mod = SourceModule(
 
     }
 
+    __global__ void perform_rollout(
+        curandState *globalState,
+        const CostMap* costmap,
+        const State* x_nom,   // nominal states, num_controls + 1 x state_size
+        const Control* u_nom,   // nominal controls, num_controls x control_size
+        int num_controls,
+        const Obstacle* obstacle_data,
+        int num_obstacles,
+        int samples,
+        float dt,
+        Control* u_dist,
+        float* u_weight,
+        float c_lambda,
+        const float* Q,
+        const float* R
+    ) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < samples) {
+            // rollout the trajectory -- assume we are placing the result in the larger u_dist/u_weight arrays
+            rollout(globalState, i, costmap, x_nom, u_nom, num_controls, obstacles, num_obstacles, dt, &u_dist[i * num_controls * control_size], &u_weight[i * num_controls], c_lambda);
 
+            float weights = expf(-1.0f / c_lambda * u_weight[(i+1) * u_M - 1]);
+            atomicAdd(&total_weight, weights);
+
+            for (int step = 0; step < u_M; step++) {
+                u_dist[i * u_N * u_M + step] *= weights;
+                atomicAdd(&u_weighted[step], u_nom[step] + u_dist[i * u_N * u_M + step] / total_weight);
+            }
+        }
+    }
+
+
+    __global__ void collect_rollouts(
+        int samples,
+        const Control* u_dist,
+        const float* u_weight,
+        int num_controls,
+        Control* u_mppi
+    ) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < num_controls) {
+            float u = 0.0;
+            for (int j = 0; j < samples; j++) {
+                u += u_dist[j * num_controls + i] * u_weight[j];
+            }
+            u_mppi[i] = u;
+        }
+    }
 
 
 
 """
 )
+
+
+def mppi(
+    costmap,
+    origin,
+    resolution,
+    x_nom,
+    u_nom,
+    actors,
+    samples,
+    dt,
+    Q,
+    R,
+    c_lambda,
+):
+    costmap = costmap.astype(np.float32)
+    height, width = costmap.shape
+    data_gpu = cuda.mem_alloc(costmap.nbytes)
+    cuda.memcpy_htod(data_gpu, costmap)
+
+    actors = np.array(actors, dtype=np.float32)
+    num_actors = len(actors)
+    actors_gpu = cuda.mem_alloc(actors.nbytes)
+    cuda.memcpy_htod(actors_gpu, actors)
+
+    u_nom = np.array(u_nom, dtype=np.float32)
+    num_controls = len(u_nom)
+    u_nom_gpu = cuda.mem_alloc(u_nom.nbytes)
+    cuda.memcpy_htod(u_nom_gpu, u_nom)
+
+    x_nom = np.array(x_nom, dtype=np.float32)
+    x_nom_gpu = cuda.mem_alloc(x_nom.nbytes)
+    cuda.memcpy_htod(x_nom_gpu, x_nom)
+
+    controls_size = u_nom.nbytes
+    u_mppi_gpu = cuda.mem_alloc(controls_size)
+    u_dist_gpu = cuda.mem_alloc(controls_size * samples)
+    u_weight_gpu = cuda.mem_alloc(controls_size * samples)
+
+    # block_size = 256
+    # num_blocks = max(128, int((num_points + block_size - 1) / block_size))
+    block = (BLOCK_SIZE, MAX_BLOCKS, 1)
+    grid = (int((samples + block[0] - 1) / block[0]), int((num_controls + block[1] - 1) / block[1]))
+
+    # perform the rollouts
+    func = mod.get_function("perform_rollout")
+    func(
+        data_gpu,
+        np.int32(height),
+        np.int32(width),
+        np.float32(origin[0]),
+        np.float32(origin[1]),
+        np.float32(resolution),
+        actors_gpu,
+        np.int32(num_actors),
+        x_nom_gpu,
+        u_nom_gpu,
+        np.int32(num_controls),
+        u_dist_gpu,
+        u_weight_gpu,
+        np.float32(c_lambda),
+        np.int32(samples),
+        np.float32(dt),
+        np.float32(Q),
+        np.float32(R),
+        block=block,
+        grid=grid,
+    )
+
+    # collect the rollouts into a single control
+    func = mod.get_function("collect_rollouts")
+    func(
+        np.int32(samples),
+        u_dist_gpu,
+        u_weight_gpu,
+        np.int32(num_controls),
+        u_mppi_gpu,
+        block=block,
+        grid=grid,
+    )
+
+    # copy the results back
+    u_mppi = np.zeros(controls_size, dtype=np.float32)
+    cuda.memcpy_dtoh(u_mppi, u_mppi_gpu)
+
+    return u_mppi
