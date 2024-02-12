@@ -2,15 +2,29 @@ import pycuda.gpuarray as gpuarray
 import pycuda.driver as cuda
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
+from pycuda import characterize
 
 import numpy as np
 
 BLOCK_SIZE = 32
-Y_BLOCK_SIZE = 32
-MAX_BLOCKS = 32
 
-mod = SourceModule(
-    """
+
+class MPPI:
+
+    # TODO: this is a bit of a hack to make the visibility methods in the GPU code
+    #       match the ones in the python code.
+    visibility_methods = {
+        "Ours": 0,
+        "Higgins": 1,
+        "Andersen": 2,
+        "None": 3,
+    }
+
+    mod = SourceModule(
+        """
+    #include <cuda_runtime.h>
+    #include <curand.h>
+    #include <curand_kernel.h>
     #include <cmath>
     #include <cfloat>
 
@@ -19,10 +33,33 @@ mod = SourceModule(
     const float DISCOUNT_FACTOR = 1.0;
 
     typedef enum _VisibilityMethod {
-        OURS,
-        HIGGINS,
-        ANDERSEN,
+        OURS = 0,
+        HIGGINS = 1,
+        ANDERSEN = 2,
+        NONE = 3
     } VisibilityMethod;
+
+    typedef struct _Costmap_Params {
+        float *data;
+        long height;
+        long width;
+        float origin_x;
+        float origin_y;
+        float resolution;
+    } Costmap_Params;
+
+    typedef struct _Optimization_Params {
+        long samples;
+        long num_controls;
+        long num_obstacles;
+        float M;
+        float dt;
+        float u_limits[2];
+        float Q[5];
+        float R[2];
+        long method;
+        float c_lambda;
+    } Optimization_Params;
 
 
     typedef struct _Object {
@@ -37,15 +74,6 @@ mod = SourceModule(
         float min_y;
         float distance;
     } Obstacle;
-
-    typedef struct _Costmap {
-        float *map_data;
-        float ox;
-        float oy;
-        float resolution;
-        int height;
-        int width;
-    } Costmap;
 
     typedef struct _State {
         float x;
@@ -62,321 +90,34 @@ mod = SourceModule(
 
 
     __device__
-    float obstacle_cost( const float *obstacle_data, int num_obstacles, float px, float py, float radius ) {
-        // Obstacles are stored as a flat array of floats, with each obstacle being a triplet of floats (x, y, radius)
+    float obstacle_cost(const float *obstacle_data, int num_obstacles, float px, float py, float radius) {
+      // Obstacles are stored as a flat array of floats, with each obstacle being a triplet of floats (x, y, radius)
 
-        for (int i = 0; i < num_obstacles; i++) {
-            auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i]);
-            float dx = obstacle->loc.x - px;
-            float dy = obstacle->loc.y - py;
-            float d_2 = dx * dx + dy * dy;
-            float min_dist = obstacle->loc.radius + radius;
-
-            if (d_2 < min_dist * min_dist) {
-                return 100000.0;
-            }
-        }
-        return 0.0;
-    }
-
-
-    __device__
-    float higgins_cost( const float M, const float *obstacle_data, int num_obstacles, float px, float py ) {
-
-        float cost = 0.0;
-
-        float r_fov = SCAN_RANGE;
-        float r_fov_2 = r_fov**2;
-
-        for (int i = 0; i < num_obstacles; i++) {
-            auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i*sizeof(Obstacle)]);
-            float dx = obstacle->loc.x - px;
-            float dy = obstacle->loc.y - py;
-            float d_2 = dx * dx + dy * dy;
-            float d = sqrt(d_2);
-
-            float inner = obstacle->loc.radius / d * (r_fov_2 - d_2);
-            auto inner_exp = exp(inner);
-            float score;
-            if( inner_exp == INFINITY ) {
-                score = M * inner;
-            } else {
-                score = M * log(1 + inner_exp);
-            }
-            cost += score;
-        }
-
-        return cost;
-    }
-
-    __device__
-    float andersen_cost( const float M, const float *obstacle_data, int num_obstacles, float px, float py, float vx, float vy ) {
-        float cost = 0.0;
-        float v = sqrt(vx * vx + vy * vy);
-
-        for (int i = 0; i < num_obstacles; i++) {
-            auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i]);
-            float dx = obstacle->loc.x - px;
-            float dy = obstacle->loc.y - py;
-
-            // check if the obstacle is in front of the vehicle
-            auto dot = dx * vx + dy * vy;
-            if( dot > 0 ) {
-                float d = sqrt(dx * dx + dy * dy);
-                cost += M * acos(dot / (d * v));
-            }
-        }
-
-        return cost;
-    }
-
-
-    __device__
-    float our_cost( const float M, const Costmap *costmap, const float px, const float py, const float discount_factor, const int step) {
-        float cost = 0.0;
-
-        int map_x = int((px - costmap->ox) / costmap->resolution);
-        int map_y = int((py - costmap->oy) / costmap->resolution);
-
-        if (map_x < 0 || map_x >= costmap->width || map_y < 0 || map_y >= costmap->height) {
-            return 100000.0;
-        }
-
-        cost = -M * (costmap->map_data[map_y * costmap->width + map_x]) * pow( discount_factor, step);
-
-        return cost;
-    }
-
-
-    // Basic step function -- apply the control to advance one step
-    __device__
-    void euler( const State *state, const Control *control, State *result) {
-        result->x = state->v * cos(state->theta);
-        result->y = state->v * sin(state->theta);
-        result->v = control->a;
-        result->theta = state->v * tan(state->delta) / VEHICLE_LENGTH;
-        result->delta = control->delta;
-    }
-
-    inline __device__
-    void update_state( const State *state, const State *update, float dt, State *result) {
-        result->x = state->x + update->x * dt;
-        result->y = state->y + update->y * dt;
-        result->v = state->v + update->v * dt;
-        result->theta = state->theta + update->theta * dt;
-        result->delta = state->delta + update->delta * dt;
-    }
-
-    //
-    // Also define the Runge-Kutta variant as it is (apparently) a much
-    // better approximation of the first order derivative
-    //  https://en.wikipedia.org/wiki/Runge-Kutta_methods
-    __device__
-    void runge_kutta_step( const State *state, const Control *control, float dt, State *result) {
-        State k1, k2, k3, k4;
-        State tmp_state;
-
-        euler( state, control, &k1 );
-        update_state( state, &k1, dt / 2, &tmp_state );
-        euler( &tmp_state, control, &k2 );
-        update_state( state, &k2, dt / 2, &tmp_state );
-        euler( &tmp_state, control, &k3 );
-        update_state( state, &k3, dt, &tmp_state );
-        euler( &tmp_state, control, &k4 );
-
-        result->x = (k1.x + 2 * (k2.x + k3.x) + k4.x) / 6.0;
-        result->y = (k1.y + 2 * (k2.y + k3.y) + k4.y) / 6.0;
-        result->v = (k1.v + 2 * (k2.v + k3.v) + k4.v) / 6.0;
-        result->theta = (k1.theta + 2 * (k2.theta + k3.theta) + k4.theta) / 6.0;
-        result->delta = (k1.delta + 2 * (k2.delta + k3.delta) + k4.delta) / 6.0;
-    }
-
-
-
-    __global__
-    void setup_kernel (curandState* state, unsigned long seed ) {
-        int id = threadIdx.x + blockIdx.x * blockDim.x;
-        curand_init ( seed, id, 0, &state[id] );
-    }
-
-    __global__ void generate_kernel(curandState* globalState, float* random_nums) {
-        int idx = threadIdx.x + blockIdx.x * blockDim.x;
-        random_nums[idx] = generate_random_number(globalState, idx);
-    }
-
-    __device__
-    float generate_random_number(curandState* globalState, int ind) {
-        curandState localState = globalState[ind];
-        float RANDOM = curand_uniform(&localState);
-        globalState[ind] = localState;
-        return RANDOM;
-    }
-
-    __device__
-    void generate_controls(
-            curandState *globalState,
-            int index,
-            const Control *u_nom,
-            const int num_controls,
-            float *u_limits,
-            Control *u_dist
-    ) {
-        curandState localState = globalState[ind];
-        for( int i = 0; i < num_controls; i++) {
-            auto a_dist = curand_uniform(&localState) * u_limits[0] * 2 - u_limits[0];
-            auto delta_dist = curand_uniform(&localState) * u_limits[1] * 2 - u_limits[1];
-            u_dist[i].a = a_dist;
-            u_dist[i].delta = delta_dist;
-        }
-        globalState[ind] = localState;
-    }
-
-
-    __device__
-    float rollout(
-            curandState *globalState,
-            int index,
-
-            const Costmap *costmap,
-            const State *x_nom,
-            const Control *u_nom,
-            int num_controls,
-
-            const float *obstacle_data,
-            int num_obstacles,
-
-            const float M,
-            const float dt,
-
-            float *u_limits,
-
-            float *Q,
-            float *R,
-
-            Control *u_dist,
-            float *u_weight,
-            VisibilityMethod method
-    ){
-        generate_controls( globalState, index, u_nom, num_controls, u_limits, u_dist);
-
-        State current_state;
-        State state_step;
-        update_state( &x_nom[0], &state_step, 0, &current_state );
-
-        float score = 0.0;
-        for (int i = 1; i <= num_controls; i++) {
-            // generate the next state
-            Control c = { u_nom[i-1].a + u_dist[i-1].a, u_nom[i-1].delta + u_dist[i-1].delta };
-            runge_kutta_step( &current_state, &c, dt, &state_step );
-            update_state( &current_state, &state_step, dt, &current_state );
-
-            // penalize error in trajectory
-            auto state_err = (x_nom[i].x - current_state.x) * Q[0] * (x_nom[i].x - current_state.x) +
-                             (x_nom[i].y - current_state.y) * Q[1] * (x_nom[i].y - current_state.y) +
-                             (x_nom[i].v - current_state.v) * Q[2] * (x_nom[i].v - current_state.v) +
-                             (x_nom[i].theta - current_state.theta) * Q[3] * (x_nom[i].theta - current_state.theta) +
-                             (x_nom[i].delta - current_state.delta) * Q[4] * (x_nom[i].delta - current_state.delta);
-
-            // penalize control action
-            auto control_err = (c.a - u_nom[i-1].a) * R[0] * (c.a - u_nom[i-1].a) +
-                               (c.delta - u_nom[i-1].delta) * R[1] * (c.delta - u_nom[i-1].delta);
-
-            // penalize obstacles
-            auto obstacle_err = obstacle_cost(obstacle_data, num_obstacles, current_state.x, current_state.y, VEHICLE_LENGTH);
-
-            // penalize visibility
-            float visibility_err = 0.0;
-            if (method == OURS) {
-                visibility_err = our_cost(M, costmap, current_state.x, current_state.y, DISCOUNT_FACTOR, i);
-            } else if (method == HIGGINS) {
-                visibility_err = higgins_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y);
-            } else if (method == ANDERSEN) {
-                visibility_err = andersen_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y, state_step.x, state_step.y);
-            }
-            score += state_err + control_err + obstacle_err + visibility_err;
-
-            u_weight[i-1] = score;
-        }
-    }
-
-
-
-const float SCAN_RANGE = 30.0;
-const float VEHICLE_LENGTH = 3.0;
-const float DISCOUNT_FACTOR = 1.0;
-
-typedef enum _VisibilityMethod {
-    OURS,
-    HIGGINS,
-    ANDERSEN,
-} VisibilityMethod;
-
-
-typedef struct _Object {
-    float x;
-    float y;
-    float radius;
-} Object;
-
-typedef struct _Obstacle {
-    Object loc;
-    float min_x;
-    float min_y;
-    float distance;
-} Obstacle;
-
-typedef struct _Costmap {
-    float *map_data;
-    float ox;
-    float oy;
-    float resolution;
-    int height;
-    int width;
-} Costmap;
-
-typedef struct _State {
-    float x;
-    float y;
-    float v;
-    float theta;
-    float delta;
-} State;
-
-typedef struct _Control {
-    float a;
-    float delta;
-} Control;
-
-
-__device__
-float obstacle_cost( const float *obstacle_data, int num_obstacles, float px, float py, float radius ) {
-    // Obstacles are stored as a flat array of floats, with each obstacle being a triplet of floats (x, y, radius)
-
-    for (int i = 0; i < num_obstacles; i++) {
-        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i]);
+      for (int i = 0; i < num_obstacles; i++) {
+        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i * (sizeof(Obstacle)/sizeof(float))]);
         float dx = obstacle->loc.x - px;
         float dy = obstacle->loc.y - py;
         float d_2 = dx * dx + dy * dy;
         float min_dist = obstacle->loc.radius + radius;
 
         if (d_2 < min_dist * min_dist) {
-            return 100000.0;
+          return 100000.0;
         }
+      }
+      return 0.0;
     }
-    return 0.0;
-}
 
 
-__device__
-float higgins_cost( const float M, const float *obstacle_data, int num_obstacles, float px, float py ) {
+    __device__
+    float higgins_cost(const float M, const float *obstacle_data, int num_obstacles, float px, float py) {
 
-    float cost = 0.0;
+      float cost = 0.0;
 
-    float r_fov = SCAN_RANGE;
-    float r_fov_2 = r_fov**2;
+      float r_fov = SCAN_RANGE;
+      float r_fov_2 = r_fov*r_fov;
 
-    for (int i = 0; i < num_obstacles; i++) {
-        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i*sizeof(Obstacle)]);
+      for (int i = 0; i < num_obstacles; i++) {
+        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i * (sizeof(Obstacle)/sizeof(float))]);
         float dx = obstacle->loc.x - px;
         float dy = obstacle->loc.y - py;
         float d_2 = dx * dx + dy * dy;
@@ -385,376 +126,425 @@ float higgins_cost( const float M, const float *obstacle_data, int num_obstacles
         float inner = obstacle->loc.radius / d * (r_fov_2 - d_2);
         auto inner_exp = exp(inner);
         float score;
-        if( inner_exp == INFINITY ) {
-            score = M * inner;
+        if (inner_exp == INFINITY) {
+          score = inner;
         } else {
-            score = M * log(1 + inner_exp);
+          score = log(1 + inner_exp);
         }
-        cost += score;
+        cost += M * score * score;
+      }
+
+      return cost;
     }
 
-    return cost;
-}
+    __device__
+    float
+    andersen_cost(const float M, const float *obstacle_data, int num_obstacles, float px, float py, float vx, float vy) {
+      float cost = 0.0;
+      float v = sqrt(vx * vx + vy * vy);
 
-__device__
-float andersen_cost( const float M, const float *obstacle_data, int num_obstacles, float px, float py, float vx, float vy ) {
-    float cost = 0.0;
-    float v = sqrt(vx * vx + vy * vy);
-
-    for (int i = 0; i < num_obstacles; i++) {
-        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i]);
-        float dx = obstacle->loc.x - px;
-        float dy = obstacle->loc.y - py;
+      for (int i = 0; i < num_obstacles; i++) {
+        auto obstacle = reinterpret_cast<const Obstacle *>(&obstacle_data[i * (sizeof(Obstacle)/sizeof(float))]);
+        float dx = obstacle->min_x - px;
+        float dy = obstacle->min_y - py;
 
         // check if the obstacle is in front of the vehicle
         auto dot = dx * vx + dy * vy;
-        if( dot > 0 ) {
-            float d = sqrt(dx * dx + dy * dy);
-            cost += M * acos(dot / (d * v));
+        if (dot > 0) {
+          float d = sqrt(dx * dx + dy * dy);
+          cost += M * acos(dot / (d * v));
         }
+      }
+
+      return cost;
     }
 
-    return cost;
-}
 
+    __device__
+    float our_cost(const float M, const float *costmap, long height, long width, float origin_x, float origin_y, float resolution, const float px, const float py, const float discount_factor,
+                   const int step) {
+      float cost = 0.0;
 
-__device__
-float our_cost( const float M, const Costmap *costmap, const float px, const float py, const float discount_factor, const int step) {
-    float cost = 0.0;
+      long map_x = long((px - origin_x) / resolution);
+      long map_y = long((py - origin_y) / resolution);
 
-    int map_x = int((px - costmap->ox) / costmap->resolution);
-    int map_y = int((py - costmap->oy) / costmap->resolution);
-
-    if (map_x < 0 || map_x >= costmap->width || map_y < 0 || map_y >= costmap->height) {
+      if (map_x < 0 || map_x >= width || map_y < 0 || map_y >= height) {
         return 100000.0;
+      }
+
+      cost = -M * (costmap[map_y * width + map_x]) * pow(discount_factor, step);
+
+      return cost;
     }
 
-    cost = -M * (costmap->map_data[map_y * costmap->width + map_x]) * pow( discount_factor, step);
 
-    return cost;
-}
+    // Basic step function -- apply the control to advance one step
+    __device__
+    void euler(const State *state, const Control *control, State *result) {
+      result->x = state->v * cos(state->theta);
+      result->y = state->v * sin(state->theta);
+      result->v = control->a;
+      result->theta = state->v * tan(state->delta) / VEHICLE_LENGTH;
+      result->delta = control->delta;
+    }
 
+    inline __device__
+    void update_state(const State *state, const State *update, float dt, State *result) {
+      result->x = state->x + update->x * dt;
+      result->y = state->y + update->y * dt;
+      result->v = state->v + update->v * dt;
+      result->theta = state->theta + update->theta * dt;
+      result->delta = state->delta + update->delta * dt;
+    }
 
-// Basic step function -- apply the control to advance one step
-__device__
-void euler( const State *state, const Control *control, State *result) {
-    result->x = state->v * cos(state->theta);
-    result->y = state->v * sin(state->theta);
-    result->v = control->a;
-    result->theta = state->v * tan(state->delta) / VEHICLE_LENGTH;
-    result->delta = control->delta;
-}
+    //
+    // Also define the Runge-Kutta variant as it is (apparently) a much
+    // better approximation of the first order derivative
+    //  https://en.wikipedia.org/wiki/Runge-Kutta_methods
+    __device__
+    void runge_kutta_step(const State *state, const Control *control, float dt, State *result) {
+      State k1, k2, k3, k4;
+      State tmp_state;
 
-inline __device__
-void update_state( const State *state, const State *update, float dt, State *result) {
-    result->x = state->x + update->x * dt;
-    result->y = state->y + update->y * dt;
-    result->v = state->v + update->v * dt;
-    result->theta = state->theta + update->theta * dt;
-    result->delta = state->delta + update->delta * dt;
-}
+      euler(state, control, &k1);
+      update_state(state, &k1, dt / 2, &tmp_state);
+      euler(&tmp_state, control, &k2);
+      update_state(state, &k2, dt / 2, &tmp_state);
+      euler(&tmp_state, control, &k3);
+      update_state(state, &k3, dt, &tmp_state);
+      euler(&tmp_state, control, &k4);
 
-//
-// Also define the Runge-Kutta variant as it is (apparently) a much
-// better approximation of the first order derivative
-//  https://en.wikipedia.org/wiki/Runge-Kutta_methods
-__device__
-void runge_kutta_step( const State *state, const Control *control, float dt, State *result) {
-    State k1, k2, k3, k4;
-    State tmp_state;
-
-    euler( state, control, &k1 );
-    update_state( state, &k1, dt / 2, &tmp_state );
-    euler( &tmp_state, control, &k2 );
-    update_state( state, &k2, dt / 2, &tmp_state );
-    euler( &tmp_state, control, &k3 );
-    update_state( state, &k3, dt, &tmp_state );
-    euler( &tmp_state, control, &k4 );
-
-    result->x = (k1.x + 2 * (k2.x + k3.x) + k4.x) / 6.0;
-    result->y = (k1.y + 2 * (k2.y + k3.y) + k4.y) / 6.0;
-    result->v = (k1.v + 2 * (k2.v + k3.v) + k4.v) / 6.0;
-    result->theta = (k1.theta + 2 * (k2.theta + k3.theta) + k4.theta) / 6.0;
-    result->delta = (k1.delta + 2 * (k2.delta + k3.delta) + k4.delta) / 6.0;
-}
+      result->x = (k1.x + 2 * (k2.x + k3.x) + k4.x) / 6.0;
+      result->y = (k1.y + 2 * (k2.y + k3.y) + k4.y) / 6.0;
+      result->v = (k1.v + 2 * (k2.v + k3.v) + k4.v) / 6.0;
+      result->theta = (k1.theta + 2 * (k2.theta + k3.theta) + k4.theta) / 6.0;
+      result->delta = (k1.delta + 2 * (k2.delta + k3.delta) + k4.delta) / 6.0;
+    }
 
 
-
-__global__
-void setup_kernel (curandState* state, unsigned long seed ) {
-    int id = threadIdx.x + blockIdx.x * blockDim.x;
-    curand_init ( seed, id, 0, &state[id] );
-}
-
-__global__ void generate_kernel(curandState* globalState, float* random_nums) {
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    random_nums[idx] = generate_random_number(globalState, idx);
-}
-
-__device__
-float generate_random_number(curandState* globalState, int ind) {
-    curandState localState = globalState[ind];
-    float RANDOM = curand_uniform(&localState);
-    globalState[ind] = localState;
-    return RANDOM;
-}
-
-__device__
-void generate_controls(
-        curandState *globalState,
-        int index,
-        const Control *u_nom,
-        const int num_controls,
-        float *u_limits,
-        Control *u_dist
-) {
-    curandState localState = globalState[ind];
-    for( int i = 0; i < num_controls; i++) {
+    __device__
+    void generate_controls(
+            curandState *globalState,
+            int index,
+            const Control *u_nom,
+            const int num_controls,
+            const float *u_limits,
+            Control *u_dist
+    ) {
+      curandState localState = globalState[index];
+      for (int i = 0; i < num_controls; i++) {
         auto a_dist = curand_uniform(&localState) * u_limits[0] * 2 - u_limits[0];
         auto delta_dist = curand_uniform(&localState) * u_limits[1] * 2 - u_limits[1];
         u_dist[i].a = a_dist;
         u_dist[i].delta = delta_dist;
+      }
+      globalState[index] = localState;
     }
-    globalState[ind] = localState;
-}
 
 
-__device__
-float rollout(
-        curandState *globalState,
-        int index,
-
-        const Costmap *costmap,
-        const State *x_nom,
-        const Control *u_nom,
-        int num_controls,
-
-        const float *obstacle_data,
-        int num_obstacles,
-
-        const float M,
-        const float dt,
-
-        float *u_limits,
-
-        float *Q,
-        float *R,
-
-        Control *u_dist,
-        float *u_weight,
-        VisibilityMethod method
-){
-    generate_controls( globalState, index, u_nom, num_controls, u_limits, u_dist);
-
-    State current_state;
-    State state_step;
-    update_state( &x_nom[0], &state_step, 0, &current_state );
-
-    float score = 0.0;
-    for (int i = 1; i <= num_controls; i++) {
-        // generate the next state
-        Control c = { u_nom[i-1].a + u_dist[i-1].a, u_nom[i-1].delta + u_dist[i-1].delta };
-        runge_kutta_step( &current_state, &c, dt, &state_step );
-        update_state( &current_state, &state_step, dt, &current_state );
-
-        // penalize error in trajectory
-        auto state_err = (x_nom[i].x - current_state.x) * Q[0] * (x_nom[i].x - current_state.x) +
-                         (x_nom[i].y - current_state.y) * Q[1] * (x_nom[i].y - current_state.y) +
-                         (x_nom[i].v - current_state.v) * Q[2] * (x_nom[i].v - current_state.v) +
-                         (x_nom[i].theta - current_state.theta) * Q[3] * (x_nom[i].theta - current_state.theta) +
-                         (x_nom[i].delta - current_state.delta) * Q[4] * (x_nom[i].delta - current_state.delta);
-
-        // penalize control action
-        auto control_err = (c.a - u_nom[i-1].a) * R[0] * (c.a - u_nom[i-1].a) +
-                           (c.delta - u_nom[i-1].delta) * R[1] * (c.delta - u_nom[i-1].delta);
-
-        // penalize obstacles
-        auto obstacle_err = obstacle_cost(obstacle_data, num_obstacles, current_state.x, current_state.y, VEHICLE_LENGTH);
-
-        // penalize visibility
-        float visibility_err = 0.0;
-        if (method == OURS) {
-            visibility_err = our_cost(M, costmap, current_state.x, current_state.y, DISCOUNT_FACTOR, i);
-        } else if (method == HIGGINS) {
-            visibility_err = higgins_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y);
-        } else if (method == ANDERSEN) {
-            visibility_err = andersen_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y, state_step.x, state_step.y);
-        }
-        score += state_err + control_err + obstacle_err + visibility_err;
+    // External functions -- each is wrapped with extern "C" to prevent name mangling
+    // because pycuda doesn't support C++ name mangling
+    extern "C" __global__
+    void setup_kernel(curandState *state, unsigned long seed) {
+      int id = threadIdx.x + blockIdx.x * blockDim.x;
+      curand_init(seed, id, 0, &state[id]);
     }
-    *u_weight = score;
-}
 
-__global__ void perform_rollout(
-        curandState *globalState,
-        const Costmap* costmap,
-        const float* x_nom,   // nominal states, num_controls + 1 x state_size
-        int state_size,
-        const float* u_nom,   // nominal controls, num_controls x control_size
-        int num_controls,
-        int control_size,
-        const float* obstacle_data,
-        int num_obstacles,
-        int obstacle_size,
-        int samples,
-        float M,
-        float dt,
-        const float* u_limits,
-        Control* u_dist,
-        float* u_weight,
-        float c_lambda,
-        const float* Q,
-        const float* R,
-        VisibilityMethod method
-) {
-    int start_sample_index = blockIdx.y * blockDim.y + threadIdx.y;
 
-    for (int j = start_sample_index; j < samples; j += blockDim.x * gridDim.x) {
+    extern "C" __global__
+    void perform_rollout(
+            curandState *globalState,
+            const float *costmap,
+            const Costmap_Params *costmap_args,
+            const float *x_nom,   // nominal states, num_controls + 1 x state_size
+            const float *u_nom,   // nominal controls, num_controls x control_size
+            const float *obstacle_data,
+            const Optimization_Params *optimization_args,
+            float *u_dists,
+            float *u_weights
+    ) {
+      int start_sample_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+      auto height = costmap_args->height;
+      auto width = costmap_args->width;
+      auto origin_x = costmap_args->origin_x;
+      auto origin_y = costmap_args->origin_y;
+      auto resolution = costmap_args->resolution;
+
+      auto num_controls = optimization_args->num_controls;
+      auto num_obstacles = optimization_args->num_obstacles;
+      auto M = optimization_args->M;
+      auto dt = optimization_args->dt;
+      const float *u_limits = optimization_args->u_limits;
+      const float *Q = optimization_args->Q;
+      const float *R = optimization_args->R;
+      VisibilityMethod method = (VisibilityMethod) optimization_args->method;
+
+      // for (int sample_index = start_sample_index; sample_index < optimization_args->samples; sample_index += blockDim.x * gridDim.x) {
+      for (int sample_index = start_sample_index; sample_index < 200; sample_index += blockDim.x * gridDim.x) {
+        float score = 0.0;
+
         // rollout the trajectory -- assume we are placing the result in the larger u_dist/u_weight arrays
-        rollout(globalState, start_sample_index, j, costmap, x_nom, u_nom, num_controls, obstacle_data, num_obstacles,
-                M, dt,
-                &u_dist[j * num_controls * control_size], &u_weight[j * num_controls], c_lambda);
-    }
+        const State *x_nom_states = reinterpret_cast<const State *>(x_nom);
+        const Control *u_nom_controls = reinterpret_cast<const Control *>(u_nom);
+        Control *u_dist_controls = reinterpret_cast<Control *>(&u_dists[sample_index * num_controls * 2]);
 
+        generate_controls(globalState, start_sample_index, u_nom_controls, num_controls, u_limits, u_dist_controls);
 
-    const float M,
-    const float dt,
+        State current_state;
+        State state_step;
+        update_state(&x_nom_states[0], &state_step, 0, &current_state);
 
-    float *u_limits,
+        for (int i = 1; i <= num_controls; i++) {
+          // generate the next state
+          Control c = {u_nom_controls[i - 1].a + u_dist_controls[i - 1].a, u_nom_controls[i - 1].delta + u_dist_controls[i - 1].delta};
+          runge_kutta_step(&current_state, &c, dt, &state_step);
+          update_state(&current_state, &state_step, dt, &current_state);
 
-    float *Q,
-    float *R,
+          // penalize error in trajectory
+        //   auto state_err = (x_nom_states[i].x - current_state.x) * Q[0] * (x_nom_states[i].x - current_state.x) +
+        //                    (x_nom_states[i].y - current_state.y) * Q[1] * (x_nom_states[i].y - current_state.y) +
+        //                    (x_nom_states[i].v - current_state.v) * Q[2] * (x_nom_states[i].v - current_state.v) +
+        //                   (x_nom_states[i].theta - current_state.theta) * Q[3] * (x_nom_states[i].theta - current_state.theta) +
+        //                   (x_nom_states[i].delta - current_state.delta) * Q[4] * (x_nom_states[i].delta - current_state.delta);
+        auto state_err = 0.0;
+/*
+          // penalize control action
+          auto control_err = (c.a - u_nom_controls[i - 1].a) * R[0] * (c.a - u_nom_controls[i - 1].a) +
+                             (c.delta - u_nom_controls[i - 1].delta) * R[1] * (c.delta - u_nom_controls[i - 1].delta);
 
-    Control *u_dist,
-    float *u_weight,
-    VisibilityMethod method
+          // penalize obstacles
+          auto obstacle_err = obstacle_cost(obstacle_data, num_obstacles, current_state.x, current_state.y, VEHICLE_LENGTH);
 
-}
-
-__global__
-void calculate_weights(
-    int samples,
-    float* u_weight,
-    float* u_weight_totals,
-    float c_lambda
-) {
-    int start_sample_index = blockIdx.y * blockDim.y + threadIdx.y;
-
-    for (int j = start_sample_index; j < samples; j += blockDim.x * gridDim.x) {
-        u_weight[j] = expf(-1.0f / c_lambda * u_weight[j]);
-        atomicAdd(&(u_weight_totals[j]), u_weight[j]);
-    }
-}
-
-
-__global__
-void calculate_mppi_control(
-        int samples,
-        const Control* u_dist,
-        const float* u_weight,
-        const float* u_weight_totals,
-        int num_controls,
-        Control* u_mppi
-) {
-    int start_sample_index = blockIdx.y * blockDim.y + threadIdx.y;
-    int start_control_index = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (int j = start_sample_index; j < samples; j += blockDim.x * gridDim.x) {
-        for (int i = start_control_index; i < num_controls; i += blockDim.y * gridDim.y) {
-            atomicAdd( &(u_mppi[i*sizeof(Control)].a), u_dist[(j*num_controls + i)*sizeof(Control)].a * u_weight[j] / u_weight_totals[j] );
-            atomicAdd( &(u_mppi[i*sizeof(Control)].delta), u_dist[(j*num_controls + i)*sizeof(Control)].delta * u_weight[j] / u_weight_totals[j] );
+          // penalize visibility
+          float visibility_err = 0.0;
+          if (method == OURS) {
+            visibility_err = our_cost(M, costmap, height, width, origin_x, origin_y, resolution, current_state.x, current_state.y, DISCOUNT_FACTOR, i);
+          } else if (method == HIGGINS) {
+            visibility_err = higgins_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y);
+          } else if (method == ANDERSEN) {
+            visibility_err = andersen_cost(M, obstacle_data, num_obstacles, current_state.x, current_state.y, state_step.x, state_step.y);
+          }
+          score += state_err + control_err + obstacle_err + visibility_err;
+          */
         }
+        u_weights[sample_index] = score;
+      }
     }
-}
+
+    extern "C" __global__
+    void calculate_weights(
+            int samples,
+            float *u_weights,
+            float c_lambda,
+            float *u_weight_total
+    ) {
+      int start_sample_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+      for (int sample_index = start_sample_index; sample_index < samples; sample_index += blockDim.x * gridDim.x) {
+        u_weights[sample_index] = expf(-1.0f / c_lambda * 0.5); // u_weights[sample_index]);
+        atomicAdd(u_weight_total, u_weights[sample_index]);
+      }
+    }
 
 
 
+    extern "C" __global__
+    void calculate_mppi_control(
+            int samples,
+            const Control *u_dist,
+            int num_controls,
+            const float *u_weights,
+            const float *u_weight_total,
+            Control *u_mppi
+    ) {
+      int start_sample_index = blockIdx.x * blockDim.x + threadIdx.x;
+      int start_control_index = blockIdx.y * blockDim.y + threadIdx.y;
 
-"""
-)
+      for (int sample_index = start_sample_index; sample_index < samples; sample_index += blockDim.x * gridDim.x) {
+        for (int control_index = start_control_index; control_index < num_controls; control_index += blockDim.y * gridDim.y) {
+          auto dist_index = sample_index * num_controls + control_index;
+          atomicAdd(&(u_mppi[control_index].a),u_dist[dist_index].a * u_weights[sample_index] / u_weight_total[0]);
+          atomicAdd(&(u_mppi[control_index].delta), u_dist[dist_index].delta * u_weights[sample_index] / u_weight_total[0]);
+        }
+      }
+    }
 
-
-def mppi(
-    costmap,
-    origin,
-    resolution,
-    x_nom,
-    u_nom,
-    actors,
-    samples,
-    dt,
-    Q,
-    R,
-    c_lambda,
-):
-    costmap = costmap.astype(np.float32)
-    height, width = costmap.shape
-    data_gpu = cuda.mem_alloc(costmap.nbytes)
-    cuda.memcpy_htod(data_gpu, costmap)
-
-    actors = np.array(actors, dtype=np.float32)
-    num_actors = len(actors)
-    actors_gpu = cuda.mem_alloc(actors.nbytes)
-    cuda.memcpy_htod(actors_gpu, actors)
-
-    u_nom = np.array(u_nom, dtype=np.float32)
-    num_controls = len(u_nom)
-    u_nom_gpu = cuda.mem_alloc(u_nom.nbytes)
-    cuda.memcpy_htod(u_nom_gpu, u_nom)
-
-    x_nom = np.array(x_nom, dtype=np.float32)
-    x_nom_gpu = cuda.mem_alloc(x_nom.nbytes)
-    cuda.memcpy_htod(x_nom_gpu, x_nom)
-
-    controls_size = u_nom.nbytes
-    u_mppi_gpu = cuda.mem_alloc(controls_size)
-    u_dist_gpu = cuda.mem_alloc(controls_size * samples)
-    u_weight_gpu = cuda.mem_alloc(controls_size * samples)
-
-    # block_size = 256
-    # num_blocks = max(128, int((num_points + block_size - 1) / block_size))
-    block = (BLOCK_SIZE, MAX_BLOCKS, 1)
-    grid = (int((samples + block[0] - 1) / block[0]), int((num_controls + block[1] - 1) / block[1]))
-
-    # perform the rollouts
-    func = mod.get_function("perform_rollout")
-    func(
-        data_gpu,
-        np.int32(height),
-        np.int32(width),
-        np.float32(origin[0]),
-        np.float32(origin[1]),
-        np.float32(resolution),
-        actors_gpu,
-        np.int32(num_actors),
-        x_nom_gpu,
-        u_nom_gpu,
-        np.int32(num_controls),
-        u_dist_gpu,
-        u_weight_gpu,
-        np.float32(c_lambda),
-        np.int32(samples),
-        np.float32(dt),
-        np.float32(Q),
-        np.float32(R),
-        block=block,
-        grid=grid,
+    """,
+        no_extern_c=True,
     )
 
-    # collect the rollouts into a single control
-    func = mod.get_function("collect_rollouts")
-    func(
-        np.int32(samples),
-        u_dist_gpu,
-        u_weight_gpu,
-        np.int32(num_controls),
-        u_mppi_gpu,
-        block=block,
-        grid=grid,
-    )
+    def __init__(self, samples, seed, u_limits, M, Q, R, method, c_lambda):
 
-    # copy the results back
-    u_mppi = np.zeros(controls_size, dtype=np.float32)
-    cuda.memcpy_dtoh(u_mppi, u_mppi_gpu)
+        self.samples = np.int32(samples)
+        self.c_lambda = np.float32(c_lambda)
+        self.method = np.int32(MPPI.visibility_methods[method])
 
-    return u_mppi
+        block = (BLOCK_SIZE, 1, 1)
+        grid = (int((self.samples + block[0] - 1) / block[0]), 1)
+
+        # setup the random number generator
+        self.globalState_gpu = cuda.mem_alloc(
+            block[0] * grid[0] * characterize.sizeof("curandState", "#include <curand_kernel.h>")
+        )
+        setup_kernel = MPPI.mod.get_function("setup_kernel")
+        setup_kernel(
+            self.globalState_gpu,
+            np.uint32(seed),
+            block=block,
+            grid=grid,
+        )
+
+        self.optimization_dtype = np.dtype(
+            [
+                ("samples", np.int32),
+                ("num_controls", np.int32),
+                ("num_obstacles", np.int32),
+                ("M", np.float32),
+                ("dt", np.float32),
+                ("u_limits", np.float32, 2),
+                ("Q", np.float32, 5),
+                ("R", np.float32, 2),
+                ("method", np.int32),
+                ("c_lambda", np.float32),
+            ]
+        )
+
+        self.optimization_args = np.zeros(1, dtype=self.optimization_dtype)
+        self.optimization_args["samples"] = np.int32(samples)
+        self.optimization_args["M"] = np.float32(M)
+        self.optimization_args["u_limits"] = np.array(u_limits, dtype=np.float32)
+        self.optimization_args["Q"] = np.array(Q, dtype=np.float32)
+        self.optimization_args["R"] = np.array(R, dtype=np.float32)
+        self.optimization_args["method"] = np.int32(MPPI.visibility_methods[method])
+        self.optimization_args["c_lambda"] = np.float32(c_lambda)
+
+        self.optimization_args_gpu = cuda.mem_alloc(self.optimization_args.nbytes)
+        cuda.memcpy_htod(self.optimization_args_gpu, self.optimization_args)
+
+        self.costmap_dtype = np.dtype(
+            [
+                ("height", np.int32),
+                ("width", np.int32),
+                ("origin_x", np.float32),
+                ("origin_y", np.float32),
+                ("resolution", np.float32),
+            ]
+        )
+        self.costmap_args = np.zeros(1, dtype=self.costmap_dtype)
+        self.costmap_args_gpu = cuda.mem_alloc(self.costmap_args.nbytes)
+
+    def find_control(self, costmap, origin, resolution, x_nom, u_nom, actors, dt):
+        costmap = costmap.astype(np.float32)
+        height, width = costmap.shape
+        costmap_gpu = cuda.mem_alloc(costmap.nbytes)
+        cuda.memcpy_htod(costmap_gpu, costmap)
+
+        self.costmap_args["height"] = height
+        self.costmap_args["width"] = width
+        self.costmap_args["origin_x"] = origin[0]
+        self.costmap_args["origin_y"] = origin[1]
+        self.costmap_args["resolution"] = resolution
+        cuda.memcpy_htod(self.costmap_args_gpu, self.costmap_args)
+
+        if len(actors):
+            actors = np.array(actors, dtype=np.float32)
+            num_actors = len(actors)
+            actors_gpu = cuda.mem_alloc(actors.nbytes)
+            cuda.memcpy_htod(actors_gpu, actors)
+        else:
+            num_actors = 0
+            actors_gpu = np.intp(0)
+
+        u_nom = np.array(u_nom, dtype=np.float32).T
+        controls_size = u_nom.nbytes
+        num_controls, num_control_elements = u_nom.shape
+        u_nom_gpu = cuda.mem_alloc(u_nom.nbytes)
+        cuda.memcpy_htod(u_nom_gpu, u_nom)
+
+        x_nom = np.array(x_nom, dtype=np.float32).T
+        x_nom_gpu = cuda.mem_alloc(x_nom.nbytes)
+        cuda.memcpy_htod(x_nom_gpu, x_nom)
+
+        # allocate space for the outputs
+        u_mppi_gpu = cuda.mem_alloc(controls_size)
+        u_weight_gpu = cuda.mem_alloc(int(self.samples * np.float32(1).nbytes))
+        u_dist_gpu = cuda.mem_alloc(int(controls_size * self.samples))
+
+        # 1D blocks -- 1 thread per sample
+        block = (BLOCK_SIZE, 1, 1)
+        grid = (int((self.samples + block[0] - 1) / block[0]), 1)
+
+        # update the optimization parameters
+        self.optimization_args["dt"] = np.float32(dt)
+        self.optimization_args["num_controls"] = np.int32(num_controls)
+        self.optimization_args["num_obstacles"] = np.int32(num_actors)
+        cuda.memcpy_htod(self.optimization_args_gpu, self.optimization_args)
+
+        # Synchronize the device
+        cuda.Context.synchronize()
+
+        # # perform the rollouts
+        func = MPPI.mod.get_function("perform_rollout")
+        func(
+            self.globalState_gpu,
+            costmap_gpu,
+            self.costmap_args_gpu,
+            x_nom_gpu,
+            u_nom_gpu,
+            actors_gpu,
+            self.optimization_args_gpu,
+            u_dist_gpu,
+            u_weight_gpu,
+            block=block,
+            grid=grid,
+        )
+
+        # Synchronize the device
+        cuda.Context.synchronize()
+
+        # calculate the weights -- the block size remains the same
+        u_weight_total = cuda.mem_alloc(np.float32(1).nbytes)
+        func = MPPI.mod.get_function("calculate_weights")
+        func(
+            self.samples,
+            u_weight_gpu,
+            self.c_lambda,
+            u_weight_total,
+            block=block,
+            grid=grid,
+        )
+
+        # Synchronize the device
+        cuda.Context.synchronize()
+
+        # final evaluation of the control -- 2D blocks, 1 thread per control and sample
+        block = (BLOCK_SIZE, BLOCK_SIZE, 1)
+        grid = (int((self.samples + block[0] - 1) / block[0]), int((num_controls + block[1] - 1) / block[1]))
+
+        # collect the rollouts into a single control
+        func = MPPI.mod.get_function("calculate_mppi_control")
+        func(
+            self.samples,
+            u_dist_gpu,
+            np.int32(num_controls),
+            u_weight_gpu,
+            u_weight_total,
+            u_mppi_gpu,
+            block=block,
+            grid=grid,
+        )
+
+        # Synchronize the device
+        cuda.Context.synchronize()
+
+        # copy the results back
+        u_dist = np.zeros((self.samples * num_controls * num_control_elements), dtype=np.float32)
+        cuda.memcpy_dtoh(u_dist, u_dist_gpu)
+
+        u_mppi = np.zeros_like(u_nom)
+        cuda.memcpy_dtoh(u_mppi, u_mppi_gpu)
+
+        exit()
+
+        return u_mppi.T, u_dist.reshape((self.samples, num_control_elements, -1))
