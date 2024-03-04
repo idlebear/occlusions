@@ -30,65 +30,60 @@ class MPPI:
     #include <cmath>
     #include <cfloat>
 
-    const float SCAN_RANGE = 30.0;
-    const float VEHICLE_LENGTH = 3.0;
-    const float DISCOUNT_FACTOR = 1.0;
-
-    typedef enum _VisibilityMethod {
+    enum VisibilityMethod {
         OURS = 0,
         HIGGINS = 1,
         ANDERSEN = 2,
         NONE = 3
-    } VisibilityMethod;
+    };
 
-    typedef struct _Costmap_Params {
+    struct Costmap_Params {
         int height;
         int width;
         float origin_x;
         float origin_y;
         float resolution;
-    } Costmap_Params;
+    };
 
-    typedef struct _Optimization_Params {
+    struct Optimization_Params {
         int samples;
         float M;
         float dt;
         int num_controls;
         int num_obstacles;
-        float x_init[5];
+        float x_init[4];
         float u_limits[2];
-        float Q[5];
+        float Q[4];
         float R[2];
         long method;
         float c_lambda;
     } Optimization_Params;
 
 
-    typedef struct _Object {
+    struct Object {
         float x;
         float y;
         float radius;
     } Object;
 
-    typedef struct _Obstacle {
+    struct Obstacle {
         Object loc;
         float min_x;
         float min_y;
         float distance;
-    } Obstacle;
+    };
 
-    typedef struct _State {
+    struct State {
         float x;
         float y;
         float v;
         float theta;
-        float delta;
-    } State;
+    };
 
-    typedef struct _Control {
+    struct Control {
         float a;
         float delta;
-    } Control;
+    };
 
 
     __device__
@@ -187,8 +182,7 @@ class MPPI:
       result->x = state->v * cos(state->theta);
       result->y = state->v * sin(state->theta);
       result->v = control->a;
-      result->theta = state->v * tan(state->delta) / VEHICLE_LENGTH;
-      result->delta = control->delta;
+      result->theta = state->v * tan(control->delta) / VEHICLE_LENGTH;
     }
 
     inline __device__
@@ -197,7 +191,6 @@ class MPPI:
       result->y = state->y + update->y * dt;
       result->v = state->v + update->v * dt;
       result->theta = state->theta + update->theta * dt;
-      result->delta = state->delta + update->delta * dt;
     }
 
     //
@@ -221,7 +214,6 @@ class MPPI:
       result->y = (k1.y + 2 * (k2.y + k3.y) + k4.y) / 6.0;
       result->v = (k1.v + 2 * (k2.v + k3.v) + k4.v) / 6.0;
       result->theta = (k1.theta + 2 * (k2.theta + k3.theta) + k4.theta) / 6.0;
-      result->delta = (k1.delta + 2 * (k2.delta + k3.delta) + k4.delta) / 6.0;
     }
 
 
@@ -323,8 +315,7 @@ class MPPI:
                 auto state_err = (x_nom_states[i].x - current_state.x) * Q[0] * (x_nom_states[i].x - current_state.x) +
                                  (x_nom_states[i].y - current_state.y) * Q[1] * (x_nom_states[i].y - current_state.y) +
                                  (x_nom_states[i].v - current_state.v) * Q[2] * (x_nom_states[i].v - current_state.v) +
-                                (x_nom_states[i].theta - current_state.theta) * Q[3] * (x_nom_states[i].theta - current_state.theta) +
-                                (x_nom_states[i].delta - current_state.delta) * Q[4] * (x_nom_states[i].delta - current_state.delta);
+                                (x_nom_states[i].theta - current_state.theta) * Q[3] * (x_nom_states[i].theta - current_state.theta);
 
                 // penalize control action
                 float control_err = (c.a - u_nom_controls[i - 1].a) * R[0] * (c.a - u_nom_controls[i - 1].a) +
@@ -430,9 +421,9 @@ class MPPI:
                 ("dt", np.float32),
                 ("num_controls", np.int32),
                 ("num_obstacles", np.int32),
-                ("x_init", np.float32, 5),
+                ("x_init", np.float32, 4),
                 ("u_limits", np.float32, 2),
-                ("Q", np.float32, 5),
+                ("Q", np.float32, 4),
                 ("R", np.float32, 2),
                 ("method", np.int32),
                 ("c_lambda", np.float32),
@@ -447,9 +438,7 @@ class MPPI:
         self.optimization_args["R"] = np.array(R, dtype=np.float32)
         self.optimization_args["method"] = np.int32(MPPI.visibility_methods[method])
         self.optimization_args["c_lambda"] = np.float32(c_lambda)
-
         self.optimization_args_gpu = cuda.mem_alloc(self.optimization_args.nbytes)
-        cuda.memcpy_htod(self.optimization_args_gpu, self.optimization_args)
 
         self.costmap_dtype = np.dtype(
             [
@@ -509,10 +498,6 @@ class MPPI:
         self.optimization_args["num_controls"] = np.int32(num_controls)
         self.optimization_args["num_obstacles"] = np.int32(num_actors)
         self.optimization_args["x_init"] = x_init
-
-        # print(self.costmap_args)
-        # print(self.optimization_args)
-
         cuda.memcpy_htod(self.optimization_args_gpu, self.optimization_args)
 
         # # Synchronize the device
@@ -710,7 +695,8 @@ class Ackermann4:
         dv = control[0]
         dtheta = state[2] * np.tan(control[1]) / self.L
 
-        return np.vertcat(dx, dy, dv, dtheta)
+        # return np.vertcat(dx, dy, dv, dtheta)
+        return np.array([dx, dy, dv, dtheta])
 
 
 class Ackermann5:
@@ -812,10 +798,10 @@ if __name__ == "__main__":
 
     samples = 1000
     seed = 123
-    u_limits = [3.4, 4.7]
+    u_limits = [3.4, np.pi / 24]
     M = -0.4
-    Q = [3, 4, 5, 6, 7]
-    R = [8, 9]
+    Q = [1, 1, 1, 1]
+    R = [1, 1]
     method = "None"
     c_lambda = 1
 
@@ -825,18 +811,18 @@ if __name__ == "__main__":
     costmap = np.zeros((100, 100))
     origin = (0, 0)
     resolution = 1
-    x_nom = np.zeros((5, 10))
+    x_nom = np.zeros((4, 10))
     u_nom = np.ones((2, 9))
-    x_init = np.array([0.0, 0.0, 1.0, 0.0, 0.0])
+    x_init = np.array([0.0, 0.0, 1.0, 0.0])
     actors = []
     dt = 0.1
     u_mppi, u_dist = mppi.find_control(costmap, origin, resolution, x_init, x_nom, u_nom, actors, dt)
 
     toc = time()
-    print(f"Time: {toc - tic}")
+    print(f"Time: {toc - tic}, per sample: {(toc - tic) / samples}")
 
     visualize_variations(
-        vehicle=Ackermann5(),
+        vehicle=Ackermann4(),
         initial_state=x_init,
         u_nom=u_nom,
         u_variations=u_dist,
