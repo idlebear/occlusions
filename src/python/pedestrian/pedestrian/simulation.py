@@ -236,6 +236,7 @@ class Simulation:
         if tracks is not None:
             self.track_data, self.display_offset, self.display_diff = self.load_tracks(tracks)
         else:
+            self.track_data = None
             self.tracks = None
             self.display_diff = DEFAULT_DISPLAY_SIZE  # meters
             self.display_offset = [0, 0]
@@ -396,7 +397,10 @@ class Simulation:
         self.ego.set_visible(True)
 
         self.actor_list = []
-        self.tracks = deepcopy(self.track_data)
+        if self.track_data is not None:
+            self.tracks = deepcopy(self.track_data)
+        else:
+            self.tracks = None
 
         self.sim_time = 0.0
         self.next_time = 0.0

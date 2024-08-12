@@ -10,11 +10,19 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sb
 
+import trajectron.model
 from trajectron.model.trajectron import Trajectron
 from trajectron.environment import Environment, Scene
 from trajectron.environment import Environment, Scene, GeometricMap
 from trajectron.model.model_registrar import ModelRegistrar
 from trajectron.model.online.online_trajectron import OnlineTrajectron
+
+# Gratuitous hack to relocate model module to the trajectron namespace
+import trajectron
+import sys
+
+sys.modules["model"] = trajectron.model
+
 
 from .agent_track import AgentTrack
 
@@ -186,7 +194,6 @@ class Tracker:
         update_agents = []
         for agent in agents:
             agent_id = str(agent["id"])
-            update_agents.append(agent_id)
             if agent_id not in self.agent_tracks:
                 if agent["type"] == "VEHICLE":
                     agent_type = self.env.NodeType.VEHICLE
@@ -196,11 +203,12 @@ class Tracker:
                     id=agent_id, agent_type=agent_type, history_length=self.history_len, dt=self.dt
                 )
             x, y = agent["pos"][:2]
-            self.agent_tracks[agent_id].update(
+            if self.agent_tracks[agent_id].update(
                 [
                     [x - self.map_origin[0], y - self.map_origin[1], agent["heading"], self.timestep],
                 ]
-            )
+            ):
+                update_agents.append(agent_id)
 
         start = time.time()
         if self.incremental:

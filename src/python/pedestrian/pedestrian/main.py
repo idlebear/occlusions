@@ -26,6 +26,7 @@ from trajectory_planner.frenet_optimal_trajectory import (
     PlannerArgs,
     Frenet_path,
 )
+from trajectory_planner.trajectory_eval import evaluate
 
 from Actor import STATE as ActorStateEnum
 
@@ -138,6 +139,10 @@ def get_control(mppi, costmap, origin, robot_model, u_nom, initial_state, goal, 
     total_weight = np.sum(u_weights)
     if total_weight:
         u_weights = u_weights / total_weight
+    else:
+        # no valid control! Overwrite the control with emergency stop
+        print("EMERGENCY STOP")
+        u[0] = [-initial_state[ActorStateEnum.VELOCITY] / args.tick_time, 0]
 
     print(f"Time to find control: {mppi_time}")
 
@@ -241,6 +246,12 @@ def simulate(args, delivery_log=None):
 
     # self.controlNN = ControlPredictor("./models/tesla_car.model")
 
+    # for now, assume an empty map -- we can add objects later
+    grid_origin = sim.display_offset
+    grid_resolution = GRID_RESOLUTION
+    grid_size = int(max(sim.display_diff) / grid_resolution)
+    local_map = np.zeros((grid_size, grid_size))
+
     action = None
     u = None
     while True:
@@ -270,6 +281,17 @@ def simulate(args, delivery_log=None):
         paths = generate_trajectories(start, end, args)
         # path_index, distance = project_position_to_path(info["ego"]["pos"], path=path)
         # path_index = min(len(path) - 1, sim.ticks)
+
+        grid = np.zeros([])
+        best_trajectory = evaluate(
+            grid=local_map,
+            origin=grid_origin,
+            resolution=grid_resolution,
+            trajectories=paths,
+            agents=visible_agents,
+            stopping_threshold=0.5,
+            dt=args.tick_time,
+        )
 
         u, trajectories, trajectory_weights = get_control(
             mppi=mppi,

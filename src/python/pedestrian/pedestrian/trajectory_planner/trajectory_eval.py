@@ -52,15 +52,45 @@ def get_agent_footprint(agent, trajectory_index=0, origin=(0, 0), resolution=0.1
 
     return translated_points.astype(int).tolist()
 
+def populate_grid( grid, origin, resolution, agents, target, prediction_num, belief ):
+    # make a copy of the grid
+    grid = np.copy(grid)
+
+    # draw in the agents
+    for agent in agents:
+        if agent == target:
+            continue
+
+        N, K, D = agent["predictions"].shape
+        for n in range(N):
+            draw_agent_in_occupancy(
+                grid,
+                origin=origin,
+                resolution=resolution,
+                centre=agent["predictions"][n, prediction_num, :AgentTrack.DataColumm.DX],
+                size=agent["size"],
+                yaw=agent["predictions"][n, prediction_num, AgentTrack.DataColumm.HEADING],
+                visibility=belief[agent["id"][n]],
+            )
+    return grid
+
 
 def get_perception_dictionary(
-    scenario, trajectory, visibility, agents, target_agent, target_agent_trajectory, prediction_num, beliefs
+    grid,
+    origin,
+    resolution,
+    trajectory,
+    target_agent,
+    target_agent_trajectory,
+    prediction_num,
 ):
     """
     Update the APCM based on the current occupancy grid, visibility grid, and trajectory
 
     Arguments:
-    scenario: the scenario object
+    grid: a grid map of the environment
+    origin: the origin of (0,0) corner of the grid, relative to the data
+    resolution: the representative size of each cell in the map
     trajectory: the current trajectory
     visibility: the visibility grid
     map: the current map
@@ -68,46 +98,14 @@ def get_perception_dictionary(
     prediction_num: the index number of the prediction
     """
 
-    grid_size = GRID_SIZE * 2
-
-    # TODO: focus on using the stored map first and ignore the lidar data.  There are two choices here: we
-    #       either assume that there is no street furniture/occlusions in the scene and just start with a blank map
-    #       or we start with the current map drawn from LIDAR data and update it with the current occupancy grid
-
-    current_map = scenario.get_map(trajectory[0], grid_size)
-    resolution = scenario.map._resolution
-
-    map_x_size, map_y_size = current_map.shape
-    map_origin = (
-        trajectory[0, 0] - (map_x_size * resolution) / 2.0,
-        trajectory[0, 1] - (map_y_size * resolution) / 2.0,
-    )
-
     # get the target agent's footprint -- there are going to be duplicates, so use a set and then convert to a list
     agent_target = get_agent_footprint(
         target_agent,
         trajectory_index=target_agent_trajectory,
-        origin=map_origin,
+        origin=origin,
         resolution=resolution,
         prediction_num=prediction_num,
     )
-
-    # draw in the agents
-    for agent in agents:
-        if agent == target_agent:
-            continue
-
-        N, K, D = agent["predictions"].shape
-        for n in range(N):
-            draw_agent_in_occupancy(
-                current_map,
-                origin=map_origin,
-                resolution=scenario.map._resolution,
-                centre=agent["predictions"][n, prediction_num, :2],
-                size=agent["size"],
-                yaw=agent["predictions"][n, prediction_num, 2],
-                visibility=beliefs[agent["id"][n]],
-            )
 
     # TODO: we could reduce the number of observations made by limiting the observation points to those on the trajectory
     #       in the interval in question.  For now, get them all and sort it out later.
@@ -115,17 +113,17 @@ def get_perception_dictionary(
     # TODO: make sure that the time-step is used instead of the prediction number
     obs_pts = [
         [
-            int((pt[0] - map_origin[0]) / scenario.map._resolution),
-            int((pt[1] - map_origin[1]) / scenario.map._resolution),
+            int((pt[0] - origin[0]) / resolution),
+            int((pt[1] - origin[1]) / resolution),
         ]
-        for pt in trajectory
+        for (x,y) in zip( trajectory.x, trajectory.y ))
     ]
 
     tic = time.time()
     visibility_dictionary = get_visibility_dictionary(
-        current_map,
-        origin=map_origin,
-        resolution=scenario.map._resolution,
+        grid,
+        origin=origin,
+        resolution=resolution,
         obs_trajectory=obs_pts,
         target_pts=agent_target,
     )
@@ -135,9 +133,9 @@ def get_perception_dictionary(
     return visibility_dictionary
 
 
-def calculate_similarity(agent, trajectories, prediction_idx):
+def calculate_similarity(trajectories, prediction_idx):
     """
-    Calculate the similarity of the current prediction to the previous prediction
+    Calculate the similarity of each trajectory to all of the other trajectories at the requested index
     """
 
     similarity = []
@@ -205,15 +203,8 @@ def get_relative_velocity(av_velocity, agent_velocity):
     return np.linalg.norm(av_velocity[:2] - agent_velocity[:2])
 
 
-def time_to_collision(av_pos, av_size, av_velocity, agents, prediction_num, beliefs, alpha=0.2, beta=1.0, dt=0.1):
+def calculate_collision_probabilities(av_pos, av_size, av_velocity, agents, prediction_num, beliefs, alpha=0.2, beta=1.0, dt=0.1):
     """
-    Calculate the time to collision for the current trajectory with all of the listed agent
-    trajectories.
-
-    The TTC is found by finding the minimum distance between the two objects and dividing by the relative
-    velocity of the two objects.  If the relative velocity is less than or equal to zero, then the TTC is
-    set to infinity.
-
     Each agent is represented by three collision circles of radius root2*(max(length/3,width)), separated by
     length/3 along the length of the agent (left, centered, and right).
 
@@ -241,15 +232,15 @@ def time_to_collision(av_pos, av_size, av_velocity, agents, prediction_num, beli
 
     return collision_probs
 
-    return collision_probs
 
-
-def evaluate_trajectory(scenario, trajectory, agents, num_predictions=1, prediction_iterval=0.1, dt=0.1):
+def evaluate_trajectory(grid, origin, resolution, av_trajectory, av_size, agents, prediction_iterval=0.1, dt=0.1):
     """
     Evaluate the trajectory using the APCM
 
     Arguments:
-    scenario: the scenario object
+    grid: grid representation of the environment
+    origin: location in space of grid
+    resolution: size of each grid cell
     trajectory: the AV trajectory to evaluate
     agents: the list of agent predictions
     prediction_interval: time between predictions
@@ -273,23 +264,24 @@ def evaluate_trajectory(scenario, trajectory, agents, num_predictions=1, predict
         belief[0, :] = 1.0 / N
 
         # for each prediction
-        for k in range(K):
+        for k in range(1, K):
+
+            tic = time.time()
+
+            # Draw all of the other agents on the grid
+            current_grid = populate_grid( grid=grid, origin=origin, resolution=resolution, agents=agents, target=agent, prediction_num=k, belief=belief[k] )
 
             # We need to evaluate the probability of viewing each footprint of the agent at the current time step
-            tic = time.time()
             visibility = {}
             for traj_num in range(N):
                 visibility[traj_num] = get_perception_dictionary(
-                    scenario=scenario,
-                    trajectory=trajectory,
-                    visibility=None,
-                    agents=agents,
+                    grid=current_grid,
+                    origin=origin,
+                    resolution=resolution,
+                    trajectory=av_trajectory,
                     target_agent=agent,
                     target_agent_trajectory=traj_num,
-                    prediction_num=k,
-                    beliefs=beliefs,
-                    prediction_interval=prediction_iterval,
-                    dt=dt,
+                    prediction_num=k
                 )
 
             perception_time = time.time() - tic
@@ -299,7 +291,7 @@ def evaluate_trajectory(scenario, trajectory, agents, num_predictions=1, predict
 
             time_step = k * steps_per_prediction
 
-            obs_loc = trajectory[time_step, :2]  # get the position of the AV at the current time step
+            obs_loc = [av_trajectory.x[time_step], av_trajectory.x[time_step]]  # get the position of the AV at the current time step
 
             for candidate_num in range(N):
 
@@ -323,7 +315,46 @@ def evaluate_trajectory(scenario, trajectory, agents, num_predictions=1, predict
     # now evaluate each time step for the probability of stopping based on TTC > beta and occupancy/belief > alpha
     collision_probs = np.zeros([K, len(agents)])
     for k in range(K):
-        collision_probs[k, :] = time_to_collision(trajectory[k, :3], agents, k, beliefs, alpha=0.2, beta=1.0, dt=dt)
+        time_step = k * steps_per_prediction
+        av_pos = [av_trajectory.x[time_step], av_trajectory.x[time_step]]  # get the position of the AV at the current time step
+        av_velocity = [av_trajectory.s_d[time_step]*np.cos(av_trajectory.yaw[time_step]),av_trajectory.s_d[time_step]*np.sin(av_trajectory.yaw[time_step])]
+        collision_probs[k, :] = calculate_collision_probabilities(av_pos=av_pos, av_size=av_size, av_velocity=av_velocity, agents=agents, k=k, belief=belief, alpha=0.2, beta=1.0, dt=dt)
 
     # return the mean probability of stopping over all agents and the min stopping time
     return np.mean(collision_probs, axis=1), np.min(collision_probs, axis=1), np.sum(collision_probs, axis=1)
+
+
+def evaluate(grid, origin, resolution, trajectories, av_size, agents, prediction_interval, stopping_threshold=1.0, dt=0.1):
+    # Evaluate each of the trajectories for visibility.  The result for each trajectory is a vector with the
+    # probability (mean, min, sum) of stopping at each time step.  Then, the cumulative stopping probability
+    # is (1 - prob(not stopping)), which can be expressed for each time stop as
+    #  1 - PROD( ( 1 - P_stop[k] ) ), k = 0...K
+
+    trajectory_stops = np.zeros(len(trajectories))
+
+    for traj_index, trajectory in enumerate(trajectories):
+        stop_mean, stop_min, stop_sum = evaluate_trajectory(
+            grid=grid,
+            origin=origin,
+            resolution=resolution,
+            av_trajectory=trajectory,
+            av_size=av_size,
+            agents=agents,
+            prediction_iterval=prediction_interval,
+            dt=dt,
+        )
+
+        # force reasonable limits on stopping probability
+        np.clip(stop_sum, 0.0, 1.0)
+
+        # initialize, assuming we will not stop
+        trajectory_stops[traj_index] = len(stop_sum)
+
+        # Assume, for now, that the sum of probabilities is the most reasonable option
+        prob_not_stop = 1
+        for k in range(len(stop_sum)):
+            prob_not_stop = prob_not_stop * (1.0 - stop_sum[k])
+            if (1 - prob_not_stop) > stopping_threshold:
+                trajectory_stops[traj_index] = k
+
+    return np.argmin(trajectory_stops)

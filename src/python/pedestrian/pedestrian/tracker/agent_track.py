@@ -53,43 +53,48 @@ class AgentTrack:
         for row in pos_data:
             x, y, heading, t = row
             if self.current_index:
-                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumm.X]) / self.dt
-                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumm.Y]) / self.dt
+                time_interval = (t - self.data[self.current_index - 1, AgentTrack.DataColumm.TIME]) * self.dt
+                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumm.X]) / time_interval
+                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumm.Y]) / time_interval
+
+                while self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] < t - 1:
+                    self._insert(
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1,
+                    )
             else:
                 dx = 0
                 dy = 0
 
-            while self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] < t - 1:
-                self._insert(
-                    np.nan,
-                    np.nan,
-                    np.nan,
-                    np.nan,
-                    np.nan,
-                    self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1,
-                )
+            if self.current_index == 1:
+                # insert the speed into the previous entry as well so we don't have a continuity jump
+                self.data[
+                    self.current_index - 1,
+                    AgentTrack.DataColumm.DX : AgentTrack.DataColumm.DY + 1,
+                ] = [dx, dy]
             self._insert(x, y, dx, dy, heading, t)
 
         start_index = max(0, self.current_index - self.history_length)
         while np.isnan(self.data[start_index, AgentTrack.DataColumm.X]):
             start_index += 1
 
+        if not self.current_index or self.current_index - start_index < 3:
+            return False
+
         x = self.data[start_index : self.current_index, AgentTrack.DataColumm.X].astype(float)
         y = self.data[start_index : self.current_index, AgentTrack.DataColumm.Y].astype(float)
         dx = self.data[start_index : self.current_index, AgentTrack.DataColumm.DX].astype(float)
         dy = self.data[start_index : self.current_index, AgentTrack.DataColumm.DY].astype(float)
         heading = self.data[start_index : self.current_index, AgentTrack.DataColumm.HEADING].astype(float)
+        # dx = derivative_of(x, self.dt)
+        # dy = derivative_of(y, self.dt)
         ax = derivative_of(dx, self.dt)
         ay = derivative_of(dy, self.dt)
 
-        # data_dict = {
-        #     ("position", "x"): x,
-        #     ("position", "y"): y,
-        #     ("velocity", "x"): vx,
-        #     ("velocity", "y"): vy,
-        #     ("acceleration", "x"): ax,
-        #     ("acceleration", "y"): ay,
-        # }
         if self.node.type == "VEHICLE":
             v = np.stack((dx, dy), axis=-1)
             v_norm = np.linalg.norm(np.stack((dx, dy), axis=-1), axis=-1, keepdims=True)
@@ -149,6 +154,8 @@ class AgentTrack:
             )
         self.node.overwrite_data(node_data, header)
         self.node.first_timestep = self.data[start_index, AgentTrack.DataColumm.TIME]
+
+        return True
 
     def _insert(self, x, y, dx, dy, heading, t):
         if self.current_index >= self.history_length:

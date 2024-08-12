@@ -100,7 +100,7 @@ class Actor:
                         np.sqrt((next_pos[STATE.X] - self.x[STATE.X]) ** 2 + (next_pos[STATE.Y] - self.x[STATE.Y]) ** 2)
                         / dt
                     )
-                    self.x = [next_pos[STATE.X], next_pos[STATE.Y], orientation, speed, 0]
+                    self.x = [next_pos[STATE.X], next_pos[STATE.Y], speed, orientation, 0]
                 except IndexError:
                     self.reached_goal = True
             else:
