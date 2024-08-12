@@ -1,4 +1,4 @@
-from config import EPSILON, TICK_TIME, OCC_PROB, TARGET_TOLERANCE
+from config import EPSILON, TICK_TIME, OCC_PROB, TARGET_TOLERANCE, CONTROL_LIMITS
 from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
@@ -107,13 +107,13 @@ class Actor:
                 if self.u is not None:
                     dx = self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
                     dy = self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
-                    theta = self.x[STATE.THETA] + self.u[1] * dt
-                    v = np.clip(self.x[STATE.VELOCITY] + self.u[0] * dt, a_min=self.min_v, a_max=self.max_v)
+                    dtheta = self.x[STATE.VELOCITY] * np.tan(self.u[1]) / (self.LENGTH) * dt
+                    dv = self.x[STATE.VELOCITY] + self.u[0] * dt
                 else:
                     dx = self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
                     dy = self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
-                    theta = self.x[STATE.THETA]
-                    v = self.x[STATE.VELOCITY]
+                    dtheta = 0
+                    dv = 0
 
                 if self.goal is not None:
                     dir = self.goal[:2] - self.x[:2]
@@ -127,11 +127,12 @@ class Actor:
                 else:
                     # arrived at the goal
                     # self.x[:2] = self.goal[:2]
-                    v = 0
+                    dv = -self.x[STATE.VELOCITY]
                     self.reached_goal = True
 
-                self.x[STATE.THETA] = theta
-                self.x[STATE.VELOCITY] = v
+                self.x[STATE.THETA] += dtheta
+                v = self.x[STATE.VELOCITY] + dv
+                self.x[STATE.VELOCITY] = np.clip(v, a_min=self.min_v, a_max=self.max_v)
 
     def set_goal(self, goal):
         self.goal = goal
@@ -376,10 +377,10 @@ class DeliveryBot(Actor):
 
         self.max_v = 1.2
         self.min_v = -1.0
-        self.max_brake = 0.75
-        self.max_accel = 0.75
+        self.max_brake = -CONTROL_LIMITS[0]
+        self.max_accel = CONTROL_LIMITS[0]
         self.max_omega = np.pi / 4.0
-        self.max_delta = np.pi / 4.0
+        self.max_delta = CONTROL_LIMITS[1]
 
         self.poly_def = np.array(
             [

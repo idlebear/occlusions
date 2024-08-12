@@ -262,21 +262,23 @@ class MPPI:
         int count = 0;
         // sample until we get a valid control
         do {
-            a_dist = curand_uniform(&localState) * u_dist_limits[0] * 2.0 - u_dist_limits[0];
             count++;
             if (count > 1000) {
                 a_dist = 0;
+                printf( "No control found!" );
                 break;
             }
+            a_dist = curand_uniform(&localState) * u_dist_limits[0] * 2.0 - u_dist_limits[0];
         } while ((u_nom[i].a + a_dist > u_limits[0]) || (u_nom[i].a + a_dist < -u_limits[0]) );
         count = 0;
         do {
-            delta_dist = curand_uniform(&localState) * u_dist_limits[1] * 2.0 - u_dist_limits[1];
             count++;
             if (count > 1000) {
                 delta_dist = 0;
+                printf( "No control found!" );
                 break;
             }
+            delta_dist = curand_uniform(&localState) * u_dist_limits[1] * 2.0 - u_dist_limits[1];
         } while ( (u_nom[i].delta + delta_dist > u_limits[1] ) || ( u_nom[i].delta + delta_dist < -u_limits[1] ) );
 
         u_dist[i].a = a_dist;
@@ -396,7 +398,7 @@ class MPPI:
                                       (x_goal_state->y - current_state.y)         * Qf[1] * (x_goal_state->y - current_state.y) +
                                       (x_goal_state->v - current_state.v)         * Qf[2] * (x_goal_state->v - current_state.v) +
                                       (x_goal_state->theta - current_state.theta) * Qf[3] * (x_goal_state->theta - current_state.theta);
-                    printf( "Final error (%d): %f\\n", sample_index, final_state_err );
+                   // printf( "Final error (%d): %f\\n", sample_index, final_state_err );
                 }
 
                 // penalize control action
@@ -494,9 +496,9 @@ class MPPI:
             weight = u_weights[sample_index]/u_weight_total[0];
         }
 
-        # if( !start_sample_index && !start_control_index ) {
-        #     printf("(%d) weight: %f, normalized: %f, total: %f\\n", sample_index, u_weights[sample_index], weight, u_weight_total[0] );
-        # }
+        // if( !start_sample_index && !start_control_index ) {
+        //     printf("(%d) weight: %f, normalized: %f, total: %f\\n", sample_index, u_weights[sample_index], weight, u_weight_total[0] );
+        // }
 
         for (int control_index = start_control_index; control_index < num_controls; control_index += blockDim.y * gridDim.y) {
             int dist_index = sample_index * num_controls + control_index;

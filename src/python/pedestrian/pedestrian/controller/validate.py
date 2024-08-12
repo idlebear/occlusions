@@ -3,7 +3,7 @@ import numpy as np
 from skimage.morphology import binary_dilation, binary_opening
 import matplotlib.pyplot as plt
 
-TRAJECTORIES_TO_VISUALIZE = 100
+TRAJECTORIES_TO_VISUALIZE = 25
 
 global fig, ax, plot_lines, nom_line, weighted_line, plot_backgrounds
 fig, ax = None, None

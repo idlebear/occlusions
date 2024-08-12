@@ -447,6 +447,15 @@ class Simulation:
         self.window.draw_circle(self.ego.goal[:2], colour="red", radius=0.2)
         self._draw_actor(self.ego)
 
+    def _draw_path(self, path, colours=["red"]):
+        if type(path) == list:
+            for i, p in enumerate(path):
+                for pos in zip(p.x, p.y):
+                    self.window.draw_circle(pos[:2], colour=colours[i % len(colours)], radius=0.05)
+        else:
+            for pos in zip(path.x, path.y):
+                self.window.draw_circle(pos[:2], colour=colours[0], radius=0.05)
+
     def _draw_status(self):
         self.window.draw_status(self.collisions, self.sim_time)
 
@@ -663,7 +672,7 @@ class Simulation:
 
         return observation, reward, done, info
 
-    def render(self, actors=None, trajectories=None, trajectory_weights=None, horizon=1, prefix_str=None):
+    def render(self, actors=None, trajectories=None, trajectory_weights=None, horizon=1, path=None, prefix_str=None):
         if self.window is not None:
             self.window.clear()
 
@@ -680,6 +689,8 @@ class Simulation:
                     pass
                 self._draw_actor(actor)
 
+            self._draw_path(path)
+
             self._draw_ego()
             if trajectories is not None:
                 min_weight = np.min(trajectory_weights)
@@ -688,7 +699,7 @@ class Simulation:
                     trajectory_weights = (trajectory_weights - min_weight) / range_weight
 
                 for weight, trajectory in zip(trajectory_weights, trajectories):
-                    self.draw_polyline(trajectory, colour=[*EGO_TRAJECTORY_COLOUR, int(100 + weight * 155.0)])
+                    self.draw_polyline(trajectory, colour=[*EGO_TRAJECTORY_COLOUR, int(10 + weight * 245.0)])
             self._draw_visibility()
             self._draw_status()
 
