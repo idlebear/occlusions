@@ -251,6 +251,7 @@ class Actor:
         state = {
             "id": self.id,
             "pos": self.x,
+            "size": [self.LENGTH, self.WIDTH],
             "heading": self.x[STATE.THETA],
             "goal": self.goal,
             "type": type(self).__name__.upper(),

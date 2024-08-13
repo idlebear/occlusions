@@ -101,10 +101,11 @@ class MPPI:
         weights = np.exp(-1.0 / (self.c_lambda) * u_weight).reshape((-1, 1))
         assert np.sum(weights) > 0
         total_weight = np.sum(weights)
+        weights = weights / total_weight
 
         for step in range(u_M):
             u_dist[:, :, step] = weights * u_dist[:, :, step]
-            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) / total_weight
+            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) 
 
         return u_weighted, u_dist
 
@@ -276,7 +277,7 @@ if __name__ == "__main__":
 
     initial = np.array([0, 0, 0, 0, 0]).astype(np.float64)
 
-    u, u_variations = roller.find_control(costmap, origin, resolution, u_nom, initial, samples, dt)
+    u, u_variations, weights = roller.find_control(costmap, origin, resolution, u_nom, initial, samples, dt)
 
     state = np.array(initial)
     last_distance = 10000.0
@@ -305,5 +306,6 @@ if __name__ == "__main__":
         u_nom=u_nom,
         u_variations=u_variations,
         u_weighted=u,
+        weights=weights,
         dt=dt,
     )

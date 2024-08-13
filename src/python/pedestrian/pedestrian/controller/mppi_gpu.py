@@ -804,7 +804,7 @@ if __name__ == "__main__":
     actors = np.array(actors, dtype=np.float32)
 
     dt = 0.1
-    u_mppi, u_dist = mppi.find_control(costmap, origin, resolution, x_init, x_nom, u_nom, actors, dt)
+    u_mppi, u_dist, weights = mppi.find_control(costmap, origin, resolution, x_init, x_nom, u_nom, actors, dt)
 
     toc = time()
     print(f"Time: {toc - tic}, per sample: {(toc - tic) / samples}")
@@ -816,6 +816,7 @@ if __name__ == "__main__":
     #     u_nom=u_nom,
     #     u_variations=u_dist,
     #     u_weighted=u_mppi,
+    #     weights=weights,
     #     dt=dt,
     # )
 

@@ -703,7 +703,7 @@ class Simulation:
                     trajectory_weights = (trajectory_weights - min_weight) / range_weight
 
                 for weight, trajectory in zip(trajectory_weights, trajectories):
-                    self.draw_polyline(trajectory, colour=[*EGO_TRAJECTORY_COLOUR, int(10 + weight * 245.0)])
+                    self.draw_polyline(trajectory, colour=[*EGO_TRAJECTORY_COLOUR, int(50 + weight * 205.0)])
             self._draw_visibility()
             self._draw_status()
 

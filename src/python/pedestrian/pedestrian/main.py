@@ -14,7 +14,7 @@ import numpy as np
 
 from controller.ModelParameters.Ackermann import Ackermann4
 from controller.mppi_gpu import MPPI
-from controller.validate import visualize_variations, rollout_trajectories, validate_controls, draw_agent
+from controller.validate import visualize_variations, rollout_trajectories, validate_controls
 
 LAMBDA = 0.1
 
@@ -146,11 +146,13 @@ def get_control(mppi, costmap, origin, robot_model, u_nom, initial_state, goal, 
 
     print(f"Time to find control: {mppi_time}")
 
+    # select a sample set of trajectories for review/visualization
     trajectories = rollout_trajectories(
         vehicle=robot_model,
         initial_state=initial_state,
         u_nom=u_nom,
         u_variations=u_var,
+        weights=u_weights,
         dt=args.tick_time,
     )
 
@@ -249,7 +251,7 @@ def simulate(args, delivery_log=None):
     # for now, assume an empty map -- we can add objects later
     grid_origin = sim.display_offset
     grid_resolution = GRID_RESOLUTION
-    grid_size = int(max(sim.display_diff) / grid_resolution)
+    grid_size = int(sim.display_diff / grid_resolution)
     local_map = np.zeros((grid_size, grid_size))
 
     action = None
@@ -282,16 +284,21 @@ def simulate(args, delivery_log=None):
         # path_index, distance = project_position_to_path(info["ego"]["pos"], path=path)
         # path_index = min(len(path) - 1, sim.ticks)
 
-        grid = np.zeros([])
-        best_trajectory = evaluate(
-            grid=local_map,
-            origin=grid_origin,
-            resolution=grid_resolution,
-            trajectories=paths,
-            agents=visible_agents,
-            stopping_threshold=0.5,
-            dt=args.tick_time,
-        )
+        # if len(agent_predictions):
+        #     best_trajectory = evaluate(
+        #         grid=local_map,
+        #         origin=grid_origin,
+        #         resolution=grid_resolution,
+        #         av_size=[sim.ego.LENGTH, sim.ego.WIDTH],
+        #         trajectories=paths,
+        #         agents=visible_agents,
+        #         predictions=agent_predictions,
+        #         stopping_threshold=0.5,
+        #         prediction_interval=tracker_update_interval * args.tick_time,
+        #         dt=args.tick_time,
+        #     )
+        # else:
+        best_trajectory = 0
 
         u, trajectories, trajectory_weights = get_control(
             mppi=mppi,
@@ -301,7 +308,7 @@ def simulate(args, delivery_log=None):
             u_nom=u,
             initial_state=info["ego"]["pos"][: ActorStateEnum.DELTA],
             goal=[*info["ego"]["goal"], 0, 0],
-            path=paths[0],
+            path=paths[best_trajectory],
             agents=visible_agents,
             args=args,
         )

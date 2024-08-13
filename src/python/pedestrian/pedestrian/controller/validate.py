@@ -72,9 +72,14 @@ def run_trajectory(vehicle, initial_state, controls, dt):
     return traj
 
 
-def rollout_trajectories(vehicle, initial_state, u_nom, u_variations, dt):
+def rollout_trajectories(vehicle, initial_state, u_nom, u_variations, weights=None, dt=0.1):
     n_samples, n_controls, n_steps = u_variations.shape
-    indexes = np.random.choice(n_samples, min(n_samples, TRAJECTORIES_TO_VISUALIZE), replace=False)
+
+    if weights is not None and np.sum(weights) > 0:
+        sorted_indexes = np.argsort(weights)
+        indexes = sorted_indexes[-TRAJECTORIES_TO_VISUALIZE:]
+    else:
+        indexes = np.random.choice(n_samples, min(n_samples, TRAJECTORIES_TO_VISUALIZE), replace=False)
 
     new_traj_pts = []
     for i in indexes:
@@ -87,7 +92,7 @@ def rollout_trajectories(vehicle, initial_state, u_nom, u_variations, dt):
     return np.vstack(new_traj_pts)
 
 
-def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_weighted, dt):
+def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_weighted, weights, dt):
     # visualizing!
 
     global fig, ax, plot_lines, nom_line, weighted_line, plot_backgrounds
@@ -103,6 +108,7 @@ def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_
         u_nom=u_nom,
         initial_state=initial_state,
         u_variations=u_variations,
+        weights=weights,
         dt=dt,
     )
 
@@ -136,30 +142,26 @@ def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_
         plt.pause(0.001)
 
 
-def draw_agent(map_data, origin, resolution, agent):
+def draw_agent_probability(grid, origin, resolution, centre, size, heading=0.0, probability=1.0):
 
-    size_y, size_x = map_data.shape
+    size_y, size_x = grid.shape
 
-    centre = agent.get_location()
-    extent = agent.bounding_box.extent
-    yaw = np.deg2rad(agent.get_transform().rotation.yaw)
-
-    x = int((centre.x - origin[0]) / resolution + size_x // 2)
-    y = int((centre.y - origin[1]) / resolution + size_y // 2)
+    x = int((centre[0] - origin[0]) / resolution)
+    y = int((centre[1] - origin[1]) / resolution)
 
     # calculate the size of the rectangle in grid cells
-    half_x = int(np.ceil(extent.x / resolution))
-    half_y = int(np.ceil(extent.y / resolution))
+    half_x = int(np.ceil(size[0] / resolution))
+    half_y = int(np.ceil(size[1] / resolution))
 
-    cos_yaw = np.cos(yaw)
-    sin_yaw = np.sin(yaw)
+    cos_yaw = np.cos(heading)
+    sin_yaw = np.sin(heading)
 
     for dx in range(-half_x, half_x + 1):
         for dy in range(-half_y, half_y + 1):
             _x = int(x + dx * cos_yaw - dy * sin_yaw)
             _y = int(y + dx * sin_yaw + dy * cos_yaw)
-            if _x >= 0 and _x < GRID_SIZE and _y >= 0 and _y < GRID_SIZE:
-                map_data[_y, _x] = 1
+            if _x >= 0 and _x < size_x and _y >= 0 and _y < size_y:
+                grid[_y, _x] += probability
 
 
 def validate_controls(vehicle, initial_state, controls, obs, static_objects, resolution, dt) -> np.array:
@@ -172,7 +174,13 @@ def validate_controls(vehicle, initial_state, controls, obs, static_objects, res
     # construct a mask of static objects from the map based on the object's position and size
     static_mask = np.zeros_like(obs)
     for agent, agent_data in static_objects.items():
-        draw_agent(static_mask, initial_state, resolution, agent)
+        centre = agent.get_location()
+        extent = agent.bounding_box.extent
+        yaw = np.deg2rad(agent.get_transform().rotation.yaw)
+
+        draw_agent_probability(
+            static_mask, initial_state, resolution, [centre.x, centre.y], [extent.x, extent.y], heading=yaw
+        )
 
     pedestrian_grid = np.where(static_mask == 1, 0, obs)
     pedestrian_grid = np.where(pedestrian_grid >= 0.9, 0, pedestrian_grid)

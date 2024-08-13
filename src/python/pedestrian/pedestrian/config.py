@@ -1,5 +1,44 @@
 from numpy import pi as PI
 
+# --------------------------------------------------------------------------------
+# DEBUG flags
+# --------------------------------------------------------------------------------
+DEBUG_INFORMATION_GAIN = False
+DEBUG_VISIBILITY = False
+DEBUG_TRAJECTORIES = False
+DEBUG_MPC = False
+
+# --------------------------------------------------------------------------------
+# Figure Constants
+# --------------------------------------------------------------------------------
+FIG_LIDAR_MAP = 1
+FIG_OCCUPANCY_GRID = 2
+FIG_DYNAMIC_OCCUPANCY_GRID = 3
+FIG_TRAJECTORIES = 4
+FIG_VISIBILITY = 5
+FIG_VISIBILITY_COSTMAP = 6
+FIG_MPC = 7
+
+# --------------------------------------------------------------------------------
+# LIDAR Constants
+# --------------------------------------------------------------------------------
+LIDAR_RANGE = 25.0
+LIDAR_RAYS = 2650.0
+LIDAR_INCREMENT = (PI * 2.0) / LIDAR_RAYS
+
+# --------------------------------------------------------------------------------
+# Grid Constants
+# --------------------------------------------------------------------------------
+# Observations are made/delivered on a occupancy grid
+GRID_WIDTH = 2 * LIDAR_RANGE
+GRID_HEIGHT = GRID_WIDTH
+GRID_RESOLUTION = 0.2
+GRID_SIZE = int(GRID_WIDTH / GRID_RESOLUTION)
+GRID_ORIGIN_Y_OFFSET = 0
+GRID_ORIGIN_X_OFFSET = 0
+OCCUPANCY_THRESHOLD = 0.2
+
+
 EPSILON = 0.00000001
 DISTANCE_TOLERANCE = 0.005
 TARGET_TOLERANCE = 1.0
@@ -55,14 +94,6 @@ STATUS_YMARGIN = 8
 STATUS_X_SIZE = 300
 STATUS_XMARGIN = 16
 
-# Observations are made/delivered on a occupancy grid
-GRID_HEIGHT = 20
-GRID_WIDTH = 20
-GRID_RESOLUTION = 0.25
-GRID_ORIGIN_Y_OFFSET = 0
-GRID_ORIGIN_X_OFFSET = 0
-GRID_SIZE = int(GRID_WIDTH / GRID_RESOLUTION)
-OCCUPANCY_THRESHOLD = 0.2
 
 # Fake scanner parameters
 SCAN_RANGE = 30
