@@ -230,6 +230,12 @@ class Simulation:
         tick_time=TICK_TIME,
         record_data=False,
     ):
+        self.record_data = record_data
+        self.tick_time = tick_time
+
+        # load the random generator method
+        self.load_generator(generator_name=generator_name, generator_args=generator_args)
+
         self.num_actors = num_actors
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
@@ -240,9 +246,6 @@ class Simulation:
             self.tracks = None
             self.display_diff = DEFAULT_DISPLAY_SIZE  # meters
             self.display_offset = [0, 0]
-
-        self.record_data = record_data
-        self.tick_time = tick_time
 
         if screen is not None or record_data:
             self.window = Window(
@@ -257,9 +260,6 @@ class Simulation:
         else:
             self.window = None
             self.image_scale = 1.0
-
-        # load the draw method
-        self.load_generator(generator_name=generator_name, generator_args=generator_args)
 
         self.observation_shape = [
             int(GRID_HEIGHT / GRID_RESOLUTION),
@@ -333,6 +333,13 @@ class Simulation:
         display_scale = 1.0 / max_diff
         display_offset = [min_x, min_y]
 
+        # Frames are recorded at 25 frames/second, but only every 10th frame is
+        # annotated (0.4s/sample).  Insert correct number of frames to match the desired time
+        # step by interpolating between the frames.  For simulation step time of 0.1 seconds,
+        # we have to insert four extra frames.
+
+        # And, somewhat an artifact of the previous processing, frames increment in 10's
+        # so the calculation becomes ((frame - last_frame) / 10) * (0.4 / dt)
         for line in parsed_lines:
             frame, id, x, y = line
 
@@ -341,10 +348,17 @@ class Simulation:
             else:
                 # interpolate between the last frame and the current frame
                 last_frame = objects[id][-1][2]
-                step_x = (x - objects[id][-1][0]) / (frame - last_frame)
-                step_y = (y - objects[id][-1][1]) / (frame - last_frame)
-                for i in range(1, int(frame - last_frame) + 1):
-                    objects[id].append([objects[id][-1][0] + step_x, objects[id][-1][1] + step_y, last_frame + i])
+                additional_frames = int((frame - last_frame) / 10 * (0.4 / self.tick_time))
+                step_x = (x - objects[id][-1][0]) / additional_frames
+                step_y = (y - objects[id][-1][1]) / additional_frames
+                for i in range(1, additional_frames + 1):
+                    objects[id].append(
+                        [
+                            objects[id][-1][0] + step_x,
+                            objects[id][-1][1] + step_y,
+                            last_frame + 10.0 * (i / additional_frames),
+                        ]
+                    )
 
         return objects, display_offset, max_diff
 
