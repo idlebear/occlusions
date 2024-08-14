@@ -284,21 +284,21 @@ def simulate(args, delivery_log=None):
         # path_index, distance = project_position_to_path(info["ego"]["pos"], path=path)
         # path_index = min(len(path) - 1, sim.ticks)
 
-        # if len(agent_predictions):
-        #     best_trajectory = evaluate(
-        #         grid=local_map,
-        #         origin=grid_origin,
-        #         resolution=grid_resolution,
-        #         av_size=[sim.ego.LENGTH, sim.ego.WIDTH],
-        #         trajectories=paths,
-        #         agents=visible_agents,
-        #         predictions=agent_predictions,
-        #         stopping_threshold=0.5,
-        #         prediction_interval=tracker_update_interval * args.tick_time,
-        #         dt=args.tick_time,
-        #     )
-        # else:
-        best_trajectory = 0
+        if len(agent_predictions):
+            best_trajectory = evaluate(
+                grid=local_map,
+                origin=grid_origin,
+                resolution=grid_resolution,
+                av_size=[sim.ego.LENGTH, sim.ego.WIDTH],
+                trajectories=paths,
+                agents=visible_agents,
+                predictions=agent_predictions,
+                stopping_threshold=0.5,
+                prediction_interval=tracker_update_interval * args.tick_time,
+                dt=args.tick_time,
+            )
+        else:
+            best_trajectory = 0
 
         u, trajectories, trajectory_weights = get_control(
             mppi=mppi,

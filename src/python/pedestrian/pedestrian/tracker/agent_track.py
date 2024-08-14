@@ -13,7 +13,7 @@ from enum import IntEnum
 
 
 class AgentTrack:
-    class DataColumm(IntEnum):
+    class DataColumn(IntEnum):
         X = 0
         Y = 1
         DX = 2
@@ -33,7 +33,7 @@ class AgentTrack:
         self.dt = dt
         self.current_index = 0
         self.buffer_size = history_length * 10
-        self.data = np.zeros((self.buffer_size, AgentTrack.DataColumm.COLUMN_WIDTH), dtype=object)  # x, y, t
+        self.data = np.zeros((self.buffer_size, AgentTrack.DataColumn.COLUMN_WIDTH), dtype=object)  # x, y, t
         self.prediction = None
 
         if pos_data is not None:
@@ -53,18 +53,18 @@ class AgentTrack:
         for row in pos_data:
             x, y, heading, t = row
             if self.current_index:
-                time_interval = (t - self.data[self.current_index - 1, AgentTrack.DataColumm.TIME]) * self.dt
-                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumm.X]) / time_interval
-                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumm.Y]) / time_interval
+                time_interval = (t - self.data[self.current_index - 1, AgentTrack.DataColumn.TIME]) * self.dt
+                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumn.X]) / time_interval
+                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumn.Y]) / time_interval
 
-                while self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] < t - 1:
+                while self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] < t - 1:
                     self._insert(
                         np.nan,
                         np.nan,
                         np.nan,
                         np.nan,
                         np.nan,
-                        self.data[self.current_index - 1, AgentTrack.DataColumm.TIME] + 1,
+                        self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] + 1,
                     )
             else:
                 dx = 0
@@ -74,22 +74,22 @@ class AgentTrack:
                 # insert the speed into the previous entry as well so we don't have a continuity jump
                 self.data[
                     self.current_index - 1,
-                    AgentTrack.DataColumm.DX : AgentTrack.DataColumm.DY + 1,
+                    AgentTrack.DataColumn.DX : AgentTrack.DataColumn.DY + 1,
                 ] = [dx, dy]
             self._insert(x, y, dx, dy, heading, t)
 
         start_index = max(0, self.current_index - self.history_length)
-        while np.isnan(self.data[start_index, AgentTrack.DataColumm.X]):
+        while np.isnan(self.data[start_index, AgentTrack.DataColumn.X]):
             start_index += 1
 
         if not self.current_index or self.current_index - start_index < 3:
             return False
 
-        x = self.data[start_index : self.current_index, AgentTrack.DataColumm.X].astype(float)
-        y = self.data[start_index : self.current_index, AgentTrack.DataColumm.Y].astype(float)
-        dx = self.data[start_index : self.current_index, AgentTrack.DataColumm.DX].astype(float)
-        dy = self.data[start_index : self.current_index, AgentTrack.DataColumm.DY].astype(float)
-        heading = self.data[start_index : self.current_index, AgentTrack.DataColumm.HEADING].astype(float)
+        x = self.data[start_index : self.current_index, AgentTrack.DataColumn.X].astype(float)
+        y = self.data[start_index : self.current_index, AgentTrack.DataColumn.Y].astype(float)
+        dx = self.data[start_index : self.current_index, AgentTrack.DataColumn.DX].astype(float)
+        dy = self.data[start_index : self.current_index, AgentTrack.DataColumn.DY].astype(float)
+        heading = self.data[start_index : self.current_index, AgentTrack.DataColumn.HEADING].astype(float)
         # dx = derivative_of(x, self.dt)
         # dy = derivative_of(y, self.dt)
         ax = derivative_of(dx, self.dt)
@@ -153,7 +153,7 @@ class AgentTrack:
                 ]
             )
         self.node.overwrite_data(node_data, header)
-        self.node.first_timestep = self.data[start_index, AgentTrack.DataColumm.TIME]
+        self.node.first_timestep = self.data[start_index, AgentTrack.DataColumn.TIME]
 
         return True
 
@@ -184,8 +184,8 @@ class AgentTrack:
         # insert the current pos (last state)
         if not self.current_index:
             raise ValueError("Created a prediction with no data!")
-        self.prediction = np.zeros((N, K + 1, AgentTrack.DataColumm.COLUMN_WIDTH - 1), dtype=float)
-        current = self.data[self.current_index - 1][: AgentTrack.DataColumm.TIME]
+        self.prediction = np.zeros((N, K + 1, AgentTrack.DataColumn.COLUMN_WIDTH - 1), dtype=float)
+        current = self.data[self.current_index - 1][: AgentTrack.DataColumn.TIME]
         current = np.expand_dims(current, axis=0)  # Shape (1, 5)
         current = np.broadcast_to(current, (N, 1, 5))  # Broadcast to shape (N, 1, 5)
         self.prediction[:, 0, :] = current[:, 0, :]  # Assign the broadcasted initial state
@@ -194,11 +194,11 @@ class AgentTrack:
         # Find the velocity vector
         diffs = self.prediction[:, 1:, :2] - self.prediction[:, :-1, :2]
         dx = diffs / self.dt
-        self.prediction[:, 1:, AgentTrack.DataColumm.DX : AgentTrack.DataColumm.DY + 1] = dx
+        self.prediction[:, 1:, AgentTrack.DataColumn.DX : AgentTrack.DataColumn.DY + 1] = dx
 
         # Find the yaw of the agent at each timestep
-        yaw = np.arctan2(diffs[:, :, AgentTrack.DataColumm.Y], diffs[:, :, AgentTrack.DataColumm.X])
-        self.prediction[:, 1:, AgentTrack.DataColumm.HEADING] = yaw
+        yaw = np.arctan2(diffs[:, :, AgentTrack.DataColumn.Y], diffs[:, :, AgentTrack.DataColumn.X])
+        self.prediction[:, 1:, AgentTrack.DataColumn.HEADING] = yaw
 
         # find the mean x,y position across all predictions
         self.prediction_mean = np.mean(prediction, axis=1).squeeze()
