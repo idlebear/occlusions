@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oce-sdd-tools"
+version = "0.1.0"
+description = "OCE preprocessing and review tools for the constrained Stanford Drone Dataset."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "scipy",
+    "shapely",
+]
+
+[project.scripts]
+oce-sdd-review = "oce_sdd.review_scenes:main"
+oce-sdd-preprocess = "oce_sdd.preprocess:main"
+oce-sdd-build-models = "oce_sdd.modeling:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["oce_sdd*"]

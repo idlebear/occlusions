@@ -5,16 +5,29 @@ from math import ceil, sqrt
 import pandas as pd
 import time
 import matplotlib.pyplot as plt
+from enum import IntEnum
 
 from config import GRID_RESOLUTION
 
 from controller.validate import draw_agent_probability
 from Grid.visibility_costmap import get_visibility_dictionary, update_visibility_costmap
 
-from tracker.agent_track import AgentTrack
+
+# from tracker.agent_track import AgentTrack
+class AgentTrack:
+    class DataColumn(IntEnum):
+        X = 0
+        Y = 1
+        DX = 2
+        DY = 3
+        HEADING = 4
+        TIME = 5
+        COLUMN_WIDTH = 6
 
 
-def get_agent_footprint(size, prediction, prediction_num=1, origin=(0, 0), resolution=0.1):
+def get_agent_footprint(
+    size, prediction, prediction_num=1, origin=(0, 0), resolution=0.1
+):
     """
     Given an agent, return the locations that the agent can be observed at the current time step for the given trajectory
     """
@@ -49,7 +62,9 @@ def get_agent_footprint(size, prediction, prediction_num=1, origin=(0, 0), resol
     return translated_points.astype(int).tolist()
 
 
-def populate_grid(grid, origin, resolution, agents, predictions, target, prediction_num, beliefs):
+def populate_grid(
+    grid, origin, resolution, agents, predictions, target, prediction_num, beliefs
+):
     # make a copy of the grid
     grid = np.copy(grid)
 
@@ -59,7 +74,7 @@ def populate_grid(grid, origin, resolution, agents, predictions, target, predict
             continue
 
         try:
-            prediction = predictions[agent["id"]][0]
+            prediction = predictions[agent["id"]]
         except KeyError:
             continue  # no prediction for this agent (odd)
         N, K, D = prediction.shape
@@ -183,8 +198,12 @@ def get_min_distance(av_pos, av_heading, av_size, agent_pos, agent_heading, agen
     """
     Get the minimum distance between the av and the agent
     """
-    av_points, av_rad = get_collision_centers(pos=av_pos, heading=av_heading, size=av_size)
-    agent_points, agent_rad = get_collision_centers(pos=agent_pos, heading=agent_heading, size=agent_size)
+    av_points, av_rad = get_collision_centers(
+        pos=av_pos, heading=av_heading, size=av_size
+    )
+    agent_points, agent_rad = get_collision_centers(
+        pos=agent_pos, heading=agent_heading, size=agent_size
+    )
 
     min_distance = np.inf
     for av_pt in av_points:
@@ -204,7 +223,16 @@ def get_relative_velocity(av_velocity, agent_velocity):
 
 
 def calculate_collision_probabilities(
-    av_pos, av_size, av_velocity, agents, predictions, prediction_num, beliefs, alpha=0.1, beta=1.0, dt=0.1
+    av_pos,
+    av_size,
+    av_velocity,
+    agents,
+    predictions,
+    prediction_num,
+    beliefs,
+    alpha=0.1,
+    beta=1.0,
+    dt=0.1,
 ):
     """
     Each agent is represented by three collision circles of radius root2*(max(length/3,width)), separated by
@@ -226,7 +254,7 @@ def calculate_collision_probabilities(
     for ai, agent in enumerate(agents):
         collision_count = 0
         try:
-            trajectory_predictions = predictions[agent["id"]][0]
+            trajectory_predictions = predictions[agent["id"]]
         except KeyError:
             continue
 
@@ -239,24 +267,46 @@ def calculate_collision_probabilities(
                         av_velocity[1],
                         av_velocity[0],
                     ),
-                    agent_pos=trajectory[prediction_num, AgentTrack.DataColumn.X : AgentTrack.DataColumn.Y + 1],
-                    agent_heading=trajectory[prediction_num, AgentTrack.DataColumn.HEADING],
+                    agent_pos=trajectory[
+                        prediction_num,
+                        AgentTrack.DataColumn.X : AgentTrack.DataColumn.Y + 1,
+                    ],
+                    agent_heading=trajectory[
+                        prediction_num, AgentTrack.DataColumn.HEADING
+                    ],
                     agent_size=agent["size"],
                 )
                 relative_velocity = get_relative_velocity(
                     av_velocity,
-                    trajectory[prediction_num, AgentTrack.DataColumn.DX : AgentTrack.DataColumn.DY + 1],
+                    trajectory[
+                        prediction_num,
+                        AgentTrack.DataColumn.DX : AgentTrack.DataColumn.DY + 1,
+                    ],
                 )
-                ttc = min_distance / relative_velocity if relative_velocity > 0 else np.inf
+                ttc = (
+                    min_distance / relative_velocity
+                    if relative_velocity > 0
+                    else np.inf
+                )
                 if ttc < beta:
                     collision_count += 1
-        collision_probs[ai] = float(collision_count) / float(len(trajectory_predictions))
+        collision_probs[ai] = float(collision_count) / float(
+            len(trajectory_predictions)
+        )
 
     return collision_probs
 
 
 def evaluate_trajectory(
-    grid, origin, resolution, av_trajectory, av_size, agents, predictions, prediction_iterval=0.1, dt=0.1
+    grid,
+    origin,
+    resolution,
+    av_trajectory,
+    av_size,
+    agents,
+    predictions,
+    prediction_iterval=0.1,
+    dt=0.1,
 ):
     """
     Evaluate the trajectory using the APCM
@@ -280,7 +330,7 @@ def evaluate_trajectory(
     steps_per_prediction = int(prediction_iterval / dt)
 
     for _, prediction in predictions.items():
-        N, K, D = prediction[0].shape
+        N, K, D = prediction.shape
         break
 
     # initialize beliefs for all agents
@@ -291,7 +341,7 @@ def evaluate_trajectory(
 
     for agent in agents:
         try:
-            prediction = predictions[agent["id"]][0]
+            prediction = predictions[agent["id"]]
         except KeyError:
             continue  # no prediction for this agent (odd)
 
@@ -313,6 +363,10 @@ def evaluate_trajectory(
                 beliefs=beliefs,
             )
 
+            toc = time.time()
+            print(f"        Grid update time: {toc-tic:.5f} seconds")
+            tic = toc
+
             # We need to evaluate the probability of viewing each footprint of the agent at the current time step
             visibility = {}
             for traj_num in range(N):
@@ -326,8 +380,9 @@ def evaluate_trajectory(
                     prediction_num=k,
                 )
 
-            perception_time = time.time() - tic
-            # print(f"        Perception time: {perception_time:.5f} seconds")
+            toc = time.time()
+            print(f"        Perception time: {toc - tic:.5f} seconds")
+            tic = toc
 
             similarity = calculate_similarity(prediction, k)
 
@@ -351,12 +406,17 @@ def evaluate_trajectory(
                         occ += (1 - alt_vis) * belief[k - 1, alt_idx]
 
                     belief[k, candidate_num] += (
-                        target_vis * similarity[candidate_num, traj_num] * belief[k - 1, traj_num]
+                        target_vis
+                        * similarity[candidate_num, traj_num]
+                        * belief[k - 1, traj_num]
                         + (1 - target_vis) * occ
                     )
 
             # normalize the belief
             belief[k, :] = belief[k, :] / np.sum(belief[k, :])
+
+            toc = time.time()
+            print(f"        Belief update time: {toc - tic:.5f} seconds")
 
     # now evaluate each time step for the probability of stopping based on TTC > beta and occupancy/belief > alpha
     collision_probs = np.zeros([K, len(agents)])
@@ -384,7 +444,11 @@ def evaluate_trajectory(
         )
 
     # return the mean probability of stopping over all agents and the min stopping time
-    return np.mean(collision_probs, axis=1), np.min(collision_probs, axis=1), np.sum(collision_probs, axis=1)
+    return (
+        np.mean(collision_probs, axis=1),
+        np.min(collision_probs, axis=1),
+        np.sum(collision_probs, axis=1),
+    )
 
 
 def evaluate(

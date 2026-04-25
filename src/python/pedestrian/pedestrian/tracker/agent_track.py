@@ -52,23 +52,29 @@ class AgentTrack:
 
         for row in pos_data:
             x, y, heading, t = row
+            dx, dy = 0, 0
             if self.current_index:
                 time_interval = (t - self.data[self.current_index - 1, AgentTrack.DataColumn.TIME]) * self.dt
-                dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumn.X]) / time_interval
-                dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumn.Y]) / time_interval
+                if time_interval <= self.history_length - 1:
+                    dx = (x - self.data[self.current_index - 1, AgentTrack.DataColumn.X]) / time_interval
+                    dy = (y - self.data[self.current_index - 1, AgentTrack.DataColumn.Y]) / time_interval
 
-                while self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] < t - 1:
-                    self._insert(
-                        np.nan,
-                        np.nan,
-                        np.nan,
-                        np.nan,
-                        np.nan,
-                        self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] + 1,
-                    )
-            else:
-                dx = 0
-                dy = 0
+                    x_ = self.data[self.current_index - 1, AgentTrack.DataColumn.X]
+                    y_ = self.data[self.current_index - 1, AgentTrack.DataColumn.Y]
+                    while self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] < t - 1:
+                        x_ += dx
+                        y_ += dy
+                        self._insert(
+                            x_,
+                            y_,
+                            dx,
+                            dy,
+                            heading,
+                            self.data[self.current_index - 1, AgentTrack.DataColumn.TIME] + 1,
+                        )
+                else:
+                    # refresh -- we missed too much data
+                    self.current_index = 0
 
             if self.current_index == 1:
                 # insert the speed into the previous entry as well so we don't have a continuity jump
@@ -82,7 +88,7 @@ class AgentTrack:
         while np.isnan(self.data[start_index, AgentTrack.DataColumn.X]):
             start_index += 1
 
-        if not self.current_index or self.current_index - start_index < 3:
+        if not self.current_index or self.current_index - start_index < 3:  # self.history_length:
             return False
 
         x = self.data[start_index : self.current_index, AgentTrack.DataColumn.X].astype(float)
@@ -158,9 +164,9 @@ class AgentTrack:
         return True
 
     def _insert(self, x, y, dx, dy, heading, t):
-        if self.current_index >= self.history_length:
-            preserved_len = max(0, self.history_length - 1)
-            roll_back = max(0, self.current_index - preserved_len)
+        if self.current_index >= self.buffer_size:
+            preserved_len = self.history_length - 1
+            roll_back = self.current_index - preserved_len
             self.data = np.roll(self.data, -roll_back, axis=0)
             self.current_index = preserved_len
 
@@ -204,21 +210,25 @@ class AgentTrack:
         self.prediction_mean = np.mean(prediction, axis=1).squeeze()
         self.prediction_start = prediction_start
 
-    def get_prediction(self, prediction_start):
+    def get_prediction(self, prediction_start, map_origin=None):
         """
         Return the current set of predictions and the prediction mean for time steps starting at prediction_start
         """
+        if self.prediction is None:
+            return None
+
         N, M, D = self.prediction.shape
         start_index = 0
         if prediction_start is not None:
             start_index = max(0, prediction_start - self.prediction_start)
         if self.prediction is None or start_index > M:
-            return None, None
+            return None
 
-        return (
-            self.prediction[:, start_index : start_index + M, :],
-            self.prediction_mean[start_index : start_index + M],
-        )
+        prediction = np.array(self.prediction[:, start_index : start_index + M, :])
+        prediction[..., 0] = prediction[..., 0] + map_origin[0]
+        prediction[..., 1] = prediction[..., 1] + map_origin[1]
+
+        return prediction
 
     def plot_prediction(self, ax, colour=None, timestep=None):
         trajectories, prediction_mean = self.get_prediction(timestep)

@@ -10,12 +10,12 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import seaborn as sb
 
-import trajectron.model
-from trajectron.model.trajectron import Trajectron
-from trajectron.environment import Environment, Scene
-from trajectron.environment import Environment, Scene, GeometricMap
-from trajectron.model.model_registrar import ModelRegistrar
-from trajectron.model.online.online_trajectron import OnlineTrajectron
+# import trajectron.model
+# from trajectron.model.trajectron import Trajectron
+# from trajectron.environment import Environment, Scene
+# from trajectron.environment import Environment, Scene, GeometricMap
+# from trajectron.model.model_registrar import ModelRegistrar
+# from trajectron.model.online.online_trajectron import OnlineTrajectron
 
 # Gratuitous hack to relocate model module to the trajectron namespace
 import trajectron
@@ -41,40 +41,40 @@ standardization = {
             "y": {"mean": 0, "std": 1},
         },
     },
-    "VEHICLE": {
-        "position": {"x": {"mean": 0, "std": 80}, "y": {"mean": 0, "std": 80}},
-        "velocity": {
-            "x": {"mean": 0, "std": 15},
-            "y": {"mean": 0, "std": 15},
-            # "norm": {"mean": 0, "std": 15},
-        },
-        "acceleration": {
-            "x": {"mean": 0, "std": 4},
-            "y": {"mean": 0, "std": 4},
-            # "norm": {"mean": 0, "std": 4},
-        },
-        "heading": {
-            # "x": {"mean": 0, "std": 1},
-            # "y": {"mean": 0, "std": 1},
-            "°": {"mean": 0, "std": np.pi},
-            "d°": {"mean": 0, "std": 1},
-        },
-    },
-    "DELIVERY_BOT": {  # basically people speeds
-        "position": {
-            "x": {"mean": 0, "std": 1},
-            "y": {"mean": 0, "std": 1},
-        },
-        "velocity": {
-            "x": {"mean": 0, "std": 3},
-            "y": {"mean": 0, "std": 2},
-        },
-        "acceleration": {
-            "x": {"mean": 0, "std": 1},
-            "y": {"mean": 0, "std": 1},
-        },
-        # TODO: Add heading
-    },
+    # "VEHICLE": {
+    #     "position": {"x": {"mean": 0, "std": 80}, "y": {"mean": 0, "std": 80}},
+    #     "velocity": {
+    #         "x": {"mean": 0, "std": 15},
+    #         "y": {"mean": 0, "std": 15},
+    #         # "norm": {"mean": 0, "std": 15},
+    #     },
+    #     "acceleration": {
+    #         "x": {"mean": 0, "std": 4},
+    #         "y": {"mean": 0, "std": 4},
+    #         # "norm": {"mean": 0, "std": 4},
+    #     },
+    #     "heading": {
+    #         # "x": {"mean": 0, "std": 1},
+    #         # "y": {"mean": 0, "std": 1},
+    #         "°": {"mean": 0, "std": np.pi},
+    #         "d°": {"mean": 0, "std": 1},
+    #     },
+    # },
+    # "DELIVERY_BOT": {  # basically people speeds
+    #     "position": {
+    #         "x": {"mean": 0, "std": 1},
+    #         "y": {"mean": 0, "std": 1},
+    #     },
+    #     "velocity": {
+    #         "x": {"mean": 0, "std": 3},
+    #         "y": {"mean": 0, "std": 2},
+    #     },
+    #     "acceleration": {
+    #         "x": {"mean": 0, "std": 1},
+    #         "y": {"mean": 0, "std": 1},
+    #     },
+    #     # TODO: Add heading
+    # },
 }
 
 
@@ -90,12 +90,12 @@ class Tracker:
         device="cpu",
         dt=1.0,
     ) -> None:
-        self.scene = Scene(timesteps=initial_timestep + 1, map=map, dt=dt)
-        self.timestep = initial_timestep
 
         if scenario_map is not None:
             if map_origin is None:
-                raise ValueError("If scenario_map is provided, origin must also be provided.")
+                raise ValueError(
+                    "If scenario_map is provided, origin must also be provided."
+                )
 
             self.map_origin = map_origin
             self.map_pixels_per_meter = map_pixels_per_meter
@@ -103,41 +103,54 @@ class Tracker:
 
             self.scenario_map = {}
             self.scenario_map["PEDESTRIAN"] = GeometricMap(
-                data=scenario_map["PEDESTRIAN"], homography=homography, description="Pedestrian Spaces"
+                data=scenario_map["PEDESTRIAN"],
+                homography=homography,
+                description="Pedestrian Spaces",
             )
             self.scenario_map["VEHICLE"] = GeometricMap(
-                data=scenario_map["VEHICLE"], homography=homography, description="Vehicle Spaces"
+                data=scenario_map["VEHICLE"],
+                homography=homography,
+                description="Vehicle Spaces",
             )
 
             visualization_map = np.stack(
                 (
-                    np.max(np.maximum(scenario_map["VEHICLE"], scenario_map["PEDESTRIAN"]), axis=0),
+                    np.max(
+                        np.maximum(scenario_map["VEHICLE"], scenario_map["PEDESTRIAN"]),
+                        axis=0,
+                    ),
                     scenario_map["PEDESTRIAN"][1],
                     np.max((scenario_map["PEDESTRIAN"]), axis=0),
                 ),
                 axis=0,
             )
             self.scenario_map["VISUALIZATION"] = GeometricMap(
-                data=visualization_map, homography=homography, description="Visualization"
+                data=visualization_map,
+                homography=homography,
+                description="Visualization",
             )
 
         else:
             self.scenario_map = None
             self.map_origin = (0, 0)
 
-        self.scene.map = self.scenario_map
+        self.scene = Scene(timesteps=initial_timestep + 1, map=self.scenario_map, dt=dt)
+        self.timestep = initial_timestep
 
         self.env = Environment(
-            node_type_list=["VEHICLE", "PEDESTRIAN", "DELIVERY_BOT"],
+            # node_type_list=["VEHICLE", "PEDESTRIAN"],  # , "DELIVERY_BOT"],
+            node_type_list=["PEDESTRIAN"],  # , "DELIVERY_BOT"],
             standardization=standardization,
             scenes=[self.scene],
             robot_type=robot,
         )
         attention_radius = dict()
-        attention_radius[(self.env.NodeType.PEDESTRIAN, self.env.NodeType.PEDESTRIAN)] = 10.0
-        attention_radius[(self.env.NodeType.PEDESTRIAN, self.env.NodeType.VEHICLE)] = 20.0
-        attention_radius[(self.env.NodeType.VEHICLE, self.env.NodeType.PEDESTRIAN)] = 20.0
-        attention_radius[(self.env.NodeType.VEHICLE, self.env.NodeType.VEHICLE)] = 30.0
+        attention_radius[
+            (self.env.NodeType.PEDESTRIAN, self.env.NodeType.PEDESTRIAN)
+        ] = 10.0
+        # attention_radius[(self.env.NodeType.PEDESTRIAN, self.env.NodeType.VEHICLE)] = 20.0
+        # attention_radius[(self.env.NodeType.VEHICLE, self.env.NodeType.PEDESTRIAN)] = 20.0
+        # attention_radius[(self.env.NodeType.VEHICLE, self.env.NodeType.VEHICLE)] = 30.0
         self.env.attention_radius = attention_radius
 
         if not torch.cuda.is_available() or (device is not None and device == "cpu"):
@@ -164,7 +177,9 @@ class Tracker:
         # Add hyperparams from arguments
         self.hyperparams["dynamic_edges"] = args.dynamic_edges
         self.hyperparams["edge_state_combine_method"] = args.edge_state_combine_method
-        self.hyperparams["edge_influence_combine_method"] = args.edge_influence_combine_method
+        self.hyperparams["edge_influence_combine_method"] = (
+            args.edge_influence_combine_method
+        )
         self.hyperparams["edge_addition_filter"] = args.edge_addition_filter
         self.hyperparams["edge_removal_filter"] = args.edge_removal_filter
         self.hyperparams["k_eval"] = args.k_eval
@@ -176,10 +191,16 @@ class Tracker:
         self.model_registrar = ModelRegistrar(args.model_dir, self.device)
         self.model_registrar.load_models(args.model_iteration)
 
-        self.trajectron = OnlineTrajectron(
-            model_registrar=self.model_registrar, hyperparams=self.hyperparams, device=self.device
+        self.trajectron = Trajectron(
+            model_registrar=self.model_registrar,
+            hyperparams=self.hyperparams,
+            log_writer=None,
+            device=self.device,
         )
-        self.trajectron.set_environment(self.env, initial_timestep)
+        # self.trajectron = OnlineTrajectron(
+        #     model_registrar=self.model_registrar, hyperparams=self.hyperparams, device=self.device
+        # )
+        self.trajectron.set_environment(self.env)
 
         self.agent_tracks = {}
 
@@ -200,48 +221,96 @@ class Tracker:
                 elif agent["type"] == "PEDESTRIAN":
                     agent_type = self.env.NodeType.PEDESTRIAN
                 self.agent_tracks[agent_id] = AgentTrack(
-                    id=agent_id, agent_type=agent_type, history_length=self.history_len, dt=self.dt
+                    id=agent_id,
+                    agent_type=agent_type,
+                    history_length=self.history_len,
+                    dt=self.dt,
                 )
             x, y = agent["pos"][:2]
             if self.agent_tracks[agent_id].update(
                 [
-                    [x - self.map_origin[0], y - self.map_origin[1], agent["heading"], self.timestep],
+                    [
+                        x - self.map_origin[0],
+                        y - self.map_origin[1],
+                        agent["heading"],
+                        self.timestep,
+                    ],
                 ]
             ):
                 update_agents.append(agent_id)
 
         start = time.time()
-        if self.incremental:
-            input_dict = {}
-            for agent_id in update_agents:
-                track = self.agent_tracks[agent_id]
-                input_dict[track.node] = track.get(timestep=self.timestep, state=self.hyperparams["state"])
+        input_dict = {}
+        nodes = [self.agent_tracks[agent_id].get_node() for agent_id in update_agents]
 
-            input_maps = self.get_maps_for_input(input_dict)
+        tic = time.time()
 
-            dists, preds = self.trajectron.incremental_forward(
-                input_dict,
-                maps=input_maps,
-                prediction_horizon=horizon,
+        # update the scene to the current timestep
+        self.scene.nodes = nodes
+        self.scene.timesteps = self.timestep
+        self.scene.calculate_scene_graph(
+            attention_radius=self.env.attention_radius,
+            edge_addition_filter=self.hyperparams["edge_addition_filter"],
+            edge_removal_filter=self.hyperparams["edge_removal_filter"],
+        )
+        toc = time.time()
+        print(f"t={self.timestep}: took {toc - tic:0.2}s to calculate scene graph")
+
+        # for agent_id in update_agents:
+        #     track = self.agent_tracks[agent_id]
+        #     input_dict[track.node] = track.get(timestep=self.timestep, state=self.hyperparams["state"])
+
+        # input_maps = self.get_maps_for_input(input_dict)
+
+        # dists, preds = self.trajectron.incremental_forward(
+        #     input_dict,
+        #     maps=input_maps,
+        #     prediction_horizon=horizon,
+        #     num_samples=self.samples,
+        #     robot_present_and_future=None,
+        #     full_dist=True,
+        # )
+
+        with torch.no_grad():
+            # timesteps = np.arange(np.max([0, self.timestep - self.history_len]), self.timestep)
+            timesteps = np.array([self.timestep])
+            preds = self.trajectron.predict(
+                scene=self.scene,
+                timesteps=timesteps,
+                ph=horizon,
                 num_samples=self.samples,
-                robot_present_and_future=None,
+                min_future_timesteps=0,
+                min_history_timesteps=3,
+                z_mode=False,
+                gmm_mode=False,
                 full_dist=True,
+                all_z_sep=False,
             )
-        else:
-            # create new nodes for all agents and build the scene from scratch -- should be the
-            # same as the incremental version, but slower
-            pass
 
         end = time.time()
         print(
-            f"t={self.timestep}: took {end - start:0.2}s ({1.0/(end - start):0.2} Hz) w/ {len(self.trajectron.nodes)} nodes and {self.trajectron.scene_graph.get_num_edges()} edges"
+            f"t={self.timestep}: took {end - start:0.2}s ({1.0/(end - start):0.2} Hz) w/ {len(self.trajectron.nodes)} nodes and {self.scene.temporal_scene_graph.get_num_edges()} edges"
         )
 
         agent_predictions = {}
-        for agent_node, agent_prediction in preds.items():
-            self.agent_tracks[agent_node.id].set_prediction(self.timestep, agent_prediction)
-            agent_predictions[agent_node.id] = self.agent_tracks[agent_node.id].get_prediction(self.timestep)
+        if len(preds):
+            preds = preds[self.timestep]
+            for agent_node, agent_prediction in preds.items():
+                self.agent_tracks[agent_node.id].set_prediction(
+                    self.timestep, agent_prediction
+                )
+                agent_predictions[agent_node.id] = self.agent_tracks[
+                    agent_node.id
+                ].get_prediction(self.timestep, self.map_origin)
 
+        return agent_predictions
+
+    def get_predictions(self):
+        agent_predictions = {}
+        for id, agent_track in self.agent_tracks.items():
+            pred = agent_track.get_prediction(self.timestep, self.map_origin)
+            if pred is not None:
+                agent_predictions[id] = pred
         return agent_predictions
 
     # borrowed from trajectron-plus-plus/trajectron/test_online.py
@@ -258,9 +327,16 @@ class Tracker:
                 if "heading_state_index" in me_hyp:
                     heading_state_index = me_hyp["heading_state_index"]
                     # We have to rotate the map in the opposit direction of the agent to match them
-                    if type(heading_state_index) is list:  # infer from velocity or heading vector
+                    if (
+                        type(heading_state_index) is list
+                    ):  # infer from velocity or heading vector
                         heading_angle = (
-                            -np.arctan2(x[-1, heading_state_index[1]], x[-1, heading_state_index[0]]) * 180 / np.pi
+                            -np.arctan2(
+                                x[-1, heading_state_index[1]],
+                                x[-1, heading_state_index[0]],
+                            )
+                            * 180
+                            / np.pi
                         )
                     else:
                         heading_angle = -x[-1, heading_state_index] * 180 / np.pi
@@ -293,6 +369,14 @@ class Tracker:
             rotation=heading_angles,
             device=self.device,
         )
+
+        def dump_maps(maps):
+            import matplotlib.pyplot as plt
+
+            for i, map in enumerate(maps):
+                plt.figure(num=i + 1, figsize=(8, 8))
+                plt.imshow(map.detach().cpu().numpy().transpose([2, 1, 0]))
+            plt.show(block=False)
 
         maps_dict = {node: maps[[i]] for i, node in enumerate(nodes_with_maps)}
         return maps_dict

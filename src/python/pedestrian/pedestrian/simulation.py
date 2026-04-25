@@ -15,7 +15,7 @@ from util.xkcdColour import XKCD_ColourPicker
 # local functions/imports
 from Actor import DeliveryBot, Pedestrian, Vehicle, STATE
 from config import *
-from polygpu import faux_scan, visibility_from_region
+from polycheck import faux_scan, visibility_from_region
 
 
 DEBUG = 0
@@ -40,7 +40,15 @@ def get_location(origin, location):
 
 
 class Window:
-    def __init__(self, screen, screen_width, screen_height, margin, display_origin=(0, 0), display_size=10.0):
+    def __init__(
+        self,
+        screen,
+        screen_width,
+        screen_height,
+        margin,
+        display_origin=(0, 0),
+        display_size=10.0,
+    ):
         self.screen = screen
 
         self.sim_time_text = pygame.font.SysFont("dejavuserif", 15)
@@ -57,7 +65,9 @@ class Window:
         self._border_offset = 10
         self._origin = display_origin
 
-        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+        self.tmp_screen = pygame.Surface(
+            (self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA
+        )
 
     # def _get_location_on_screen(self, origin, location):
     #     return [
@@ -83,7 +93,9 @@ class Window:
         ex = self._xmargin + int((end[0] - self._origin[0]) * self._scale)
         ey = self._ymargin + int((end[1] - self._origin[1]) * self._scale)
 
-        pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
+        pygame.draw.line(
+            self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width
+        )
 
     def draw_circle(self, center, colour, radius=2):
         cx = self._xmargin + int((center[0] - self._origin[0]) * self._scale)
@@ -100,8 +112,10 @@ class Window:
             self.screen,
             colour,
             (
-                self._xmargin + int((center[0] - width / 2.0 - self._origin[0]) * self._scale),
-                self._ymargin + int((center[1] - height / 2.0 - self._origin[1]) * self._scale),
+                self._xmargin
+                + int((center[0] - width / 2.0 - self._origin[0]) * self._scale),
+                self._ymargin
+                + int((center[1] - height / 2.0 - self._origin[1]) * self._scale),
                 int(width * self._scale),
                 int(height * self._scale),
             ),
@@ -206,7 +220,9 @@ class Window:
         )
 
         text = self.status_font.render(time_str, False, STATUS_FONT_COLOUR)
-        self.screen.blit(text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN))
+        self.screen.blit(
+            text, (self._xmargin + STATUS_XMARGIN, self._ymargin + STATUS_YMARGIN)
+        )
 
     def save_screen(self, path):
         pygame.image.save(self.screen, path)
@@ -220,6 +236,7 @@ class Simulation:
         num_actors=1,
         tracks=None,
         ego_start=None,
+        ego_heading=0,
         ego_goal=None,
         pois_lambda=0.01,
         screen=None,
@@ -234,7 +251,9 @@ class Simulation:
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
         if tracks is not None:
-            self.track_data, self.display_offset, self.display_diff = self.load_tracks(tracks)
+            self.track_data, self.display_offset, self.display_diff = self.load_tracks(
+                tracks
+            )
         else:
             self.track_data = None
             self.tracks = None
@@ -259,7 +278,9 @@ class Simulation:
             self.image_scale = 1.0
 
         # load the draw method
-        self.load_generator(generator_name=generator_name, generator_args=generator_args)
+        self.load_generator(
+            generator_name=generator_name, generator_args=generator_args
+        )
 
         self.observation_shape = [
             int(GRID_HEIGHT / GRID_RESOLUTION),
@@ -279,6 +300,7 @@ class Simulation:
 
         self.ego_start = ego_start
         self.ego_goal = ego_goal
+        self.ego_heading = ego_heading
 
         colours = XKCD_ColourPicker()
         self.colours = colours.values(30, "red")
@@ -344,7 +366,13 @@ class Simulation:
                 step_x = (x - objects[id][-1][0]) / (frame - last_frame)
                 step_y = (y - objects[id][-1][1]) / (frame - last_frame)
                 for i in range(1, int(frame - last_frame) + 1):
-                    objects[id].append([objects[id][-1][0] + step_x, objects[id][-1][1] + step_y, last_frame + i])
+                    objects[id].append(
+                        [
+                            objects[id][-1][0] + step_x,
+                            objects[id][-1][1] + step_y,
+                            last_frame + i,
+                        ]
+                    )
 
         return objects, display_offset, max_diff
 
@@ -353,40 +381,60 @@ class Simulation:
         self.generator.reset()
 
         if self.ego_start is None:
-            sx, sy = self.generator.random(n=2) * self.display_diff + self.display_offset
+            sx, sy = (
+                self.generator.random(n=2) * self.display_diff + self.display_offset
+            )
         else:
             sx = self.ego_start[0]
             if type(sx) is float:
                 sx = self.display_diff * sx + self.display_offset[0]
             else:
                 r = sx[1] - sx[0]
-                sx = self.display_offset[0] + (r * float(self.generator.random(n=1)) + sx[0]) * self.display_diff
+                sx = (
+                    self.display_offset[0]
+                    + (r * float(self.generator.random(n=1)) + sx[0])
+                    * self.display_diff
+                )
             sy = self.ego_start[1]
             if type(sy) is float:
                 sy = self.display_diff * sy + self.display_offset[1]
             else:
                 r = sy[1] - sy[0]
-                sy = self.display_offset[1] + (r * float(self.generator.random(n=1)) + sy[0]) * self.display_diff
+                sy = (
+                    self.display_offset[1]
+                    + (r * float(self.generator.random(n=1)) + sy[0])
+                    * self.display_diff
+                )
 
         if self.ego_goal is None:
-            gx, gy = self.generator.random(n=2) * self.display_diff + self.display_offset
+            gx, gy = (
+                self.generator.random(n=2) * self.display_diff + self.display_offset
+            )
         else:
             gx = self.ego_goal[0]
             if type(gx) is float:
                 gx = self.display_diff * gx + self.display_offset[0]
             else:
                 r = gx[1] - gx[0]
-                gx = self.display_offset[0] + (r * float(self.generator.random(n=1)) + gx[0]) * self.display_diff
+                gx = (
+                    self.display_offset[0]
+                    + (r * float(self.generator.random(n=1)) + gx[0])
+                    * self.display_diff
+                )
             gy = self.ego_goal[1]
             if type(gy) is float:
                 gy = self.display_diff * gy + self.display_offset[1]
             else:
                 r = gy[1] - gy[0]
-                gy = self.display_offset[1] + (r * float(self.generator.random(n=1)) + gy[0]) * self.display_diff
+                gy = (
+                    self.display_offset[1]
+                    + (r * float(self.generator.random(n=1)) + gy[0])
+                    * self.display_diff
+                )
 
         self.ego = DeliveryBot(
             id=0,
-            x=np.array([sx, sy, 0, 0, 0]),
+            x=np.array([sx, sy, 0, self.ego_heading, 0]),
             goal=[gx, gy],
             colour="red",
             outline_colour="darkred",
@@ -419,7 +467,10 @@ class Simulation:
         """
         Translate the x, y coordinates from the percentage of the sim ( range 0.0-1.0) to world coordinates
         """
-        return [x * self.display_diff + self.display_offset[0], y * self.display_diff + self.display_offset[1]]
+        return [
+            x * self.display_diff + self.display_offset[0],
+            y * self.display_diff + self.display_offset[1],
+        ]
 
     def load_generator(self, generator_name, generator_args):
         # load the generator
@@ -435,10 +486,16 @@ class Simulation:
 
     def _draw_actor(self, actor):
         actor_image = actor.get_image()
+        # draw collision radius
+        self.window.draw_circle(
+            actor.x[:2], colour=actor.colour, radius=actor.get_extent() + MIN_SEPARATION
+        )
         if actor_image is not None:
             actor_pos = actor.get_pos()
             # drawing with y inverted reverse the rotation to correct the display
-            self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
+            self.window.draw_image(
+                image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA]
+            )
         else:
             actor_poly = actor.get_poly()
             self.window.draw_polygon(
@@ -455,7 +512,9 @@ class Simulation:
         if type(path) == list:
             for i, p in enumerate(path):
                 for pos in zip(p.x, p.y):
-                    self.window.draw_circle(pos[:2], colour=colours[i % len(colours)], radius=0.05)
+                    self.window.draw_circle(
+                        pos[:2], colour=colours[i % len(colours)], radius=0.05
+                    )
         else:
             for pos in zip(path.x, path.y):
                 self.window.draw_circle(pos[:2], colour=colours[0], radius=0.05)
@@ -496,7 +555,9 @@ class Simulation:
                 [
                     vis.Point(ox, oy),
                     vis.Point(ox - self.display_diff * 2.0, oy),
-                    vis.Point(ox - self.display_diff * 2.0, oy - self.display_diff * 2.0),
+                    vis.Point(
+                        ox - self.display_diff * 2.0, oy - self.display_diff * 2.0
+                    ),
                     vis.Point(ox, oy - self.display_diff * 2.0),
                 ]
             )
@@ -522,7 +583,11 @@ class Simulation:
                 if self.sim_time >= track[0][2] * self.tick_time:
                     self.actor_list.append(
                         Pedestrian(
-                            id=str(int(id)) if type(id) is int or type(id) is float else id,
+                            id=(
+                                str(int(id))
+                                if type(id) is int or type(id) is float
+                                else id
+                            ),
                             track=track.copy(),
                             image_name="pedestrian",
                             image_scale=self.image_scale,
@@ -537,7 +602,9 @@ class Simulation:
                 rnd = self.generator.uniform()
 
                 x = self.generator.random(n=2) * self.display_diff + self.display_offset
-                goal = self.generator.random(n=2) * self.display_diff + self.display_offset
+                goal = (
+                    self.generator.random(n=2) * self.display_diff + self.display_offset
+                )
                 heading = np.arctan2(goal[1] - x[1], goal[0] - x[0])
                 v = float(0.2 + self.generator.random() * 1.0)
 
@@ -578,7 +645,9 @@ class Simulation:
                 min_angle = np.pi / 2
                 min_pt = None
                 for pt in poly:
-                    angle = abs(np.arctan((pt[1] - self.ego.x[1]) / (pt[0] - self.ego.x[0])))
+                    angle = abs(
+                        np.arctan((pt[1] - self.ego.x[1]) / (pt[0] - self.ego.x[0]))
+                    )
                     if angle < min_angle:
                         min_angle = angle
                         min_pt = pt
@@ -611,7 +680,9 @@ class Simulation:
 
         # TODO: change this from binary visiblity to a count of the number of rays
         #       that hit each actor
-        visible_actors = [self.actor_list[i] for i in list(set(indices)) if i < len(self.actor_list)]
+        visible_actors = [
+            self.actor_list[i] for i in list(set(indices)) if i < len(self.actor_list)
+        ]
         for actor in self.actor_list:
             if actor in visible_actors:
                 actor.set_visible(True)
@@ -656,6 +727,37 @@ class Simulation:
             if actor.at_goal():
                 finished_actors.append(actor)
 
+            # Check for collision with ego vehicle
+            # Use bounding box intersection as a fast first check
+            ego_bbox = self.ego.get_bounding_box()
+            actor_bbox = actor.get_bounding_box()
+
+            # Check if bounding boxes overlap
+            bbox_overlap = not (
+                ego_bbox[2] < actor_bbox[0]  # ego right < actor left
+                or ego_bbox[0] > actor_bbox[2]  # ego left > actor right
+                or ego_bbox[3] < actor_bbox[1]  # ego top < actor bottom
+                or ego_bbox[1] > actor_bbox[3]  # ego bottom > actor top
+            )
+
+            if bbox_overlap:
+                # More precise collision check using distance to center
+                center_distance = self.ego.distance_to(actor.x)
+                collision_threshold = max(
+                    (ego_bbox[2] - ego_bbox[0] + ego_bbox[3] - ego_bbox[1])
+                    / 4,  # ego "radius"
+                    (actor_bbox[2] - actor_bbox[0] + actor_bbox[3] - actor_bbox[1])
+                    / 4,  # actor "radius"
+                )
+
+                if center_distance < collision_threshold:
+                    print(
+                        f"COLLISION DETECTED: Robot collided with {type(actor).__name__} at distance {center_distance:.3f}"
+                    )
+                    # collisions += 1
+                    actor.set_collided("red")
+                    self.ego.set_collided("red")
+
         # clean up
         for actor in finished_actors:
             self.actor_list.remove(actor)
@@ -676,13 +778,21 @@ class Simulation:
 
         return observation, reward, done, info
 
-    def render(self, actors=None, trajectories=None, trajectory_weights=None, horizon=1, path=None, prefix_str=None):
+    def render(
+        self,
+        actors=None,
+        trajectories=None,
+        trajectory_weights=None,
+        horizon=1,
+        path=None,
+        prefix_str=None,
+    ):
         if self.window is not None:
             self.window.clear()
 
             for actor in self.actor_list:
                 try:
-                    prediction = actors[actor.id][0]
+                    prediction = actors[actor.id]
                     for traj in prediction:
                         colour = self.colours[actor.serial % len(self.colours)]
                         self.draw_polyline(traj, colour=colour)
@@ -700,10 +810,21 @@ class Simulation:
                 min_weight = np.min(trajectory_weights)
                 range_weight = np.max(trajectory_weights) - min_weight
                 if range_weight:
-                    trajectory_weights = (trajectory_weights - min_weight) / range_weight
+                    trajectory_weights = (
+                        trajectory_weights - min_weight
+                    ) / range_weight
 
                 for weight, trajectory in zip(trajectory_weights, trajectories):
-                    self.draw_polyline(trajectory, colour=[*EGO_TRAJECTORY_COLOUR, int(50 + weight * 205.0)])
+                    self.draw_polyline(
+                        trajectory,
+                        colour=[*EGO_TRAJECTORY_COLOUR, int(200 + weight * 55.0)],
+                    )
+                    # for pos in trajectory:
+                    #     self.window.draw_circle(
+                    #         pos[:2],
+                    #         colour=[*EGO_TRAJECTORY_COLOUR, int(200 + weight * 55.0)],
+                    #         radius=self.ego.get_extent(),
+                    #     )
             self._draw_visibility()
             self._draw_status()
 
