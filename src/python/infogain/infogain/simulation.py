@@ -13,7 +13,7 @@ from policies.flow.flow import flow
 
 # from polycheck import Vertex, VertexList, PolygonList
 # from polycheck import visibility_from_region, faux_scan
-from polygpu import faux_scan, visibility_from_region
+from polycheck import faux_scan, visibility_from_region, visibility_from_real_region
 
 # from dogm_py import LaserMeasurementGridParams
 # from dogm_py import LaserMeasurementGrid
@@ -96,7 +96,9 @@ class Window:
         self._scale = scale
         self._border_offset = 10
 
-        self.tmp_screen = pygame.Surface((self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA)
+        self.tmp_screen = pygame.Surface(
+            (self.screen.get_width(), self.screen.get_height()), flags=pygame.SRCALPHA
+        )
 
     # def _get_location_on_screen(self, origin, location):
     #     return [
@@ -116,7 +118,9 @@ class Window:
         ex = self._xmargin + end[0] * self._env_size / self._scale
         ey = self._ymargin + end[1] * self._env_size / self._scale
 
-        pygame.draw.line(self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width)
+        pygame.draw.line(
+            self.screen, color=colour, start_pos=(sx, sy), end_pos=(ex, ey), width=width
+        )
 
     def draw_circle(self, centre, colour, radius=2):
         cx = self._xmargin + centre[0] * self._env_size / self._scale
@@ -440,7 +444,9 @@ class Simulation:
         if actor_image is not None:
             actor_pos = get_location(origin=self.ego.x[0:2], location=actor.x[0:2])
             # drawing with y inverted reverse the rotation to correct the display
-            self.window.draw_image(image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA])
+            self.window.draw_image(
+                image=actor_image, center=actor_pos, orientation=-actor.x[STATE.THETA]
+            )
         else:
             actor_poly = actor.get_poly()
             if actor_poly is not None:
@@ -509,7 +515,10 @@ class Simulation:
             if type(actor) is Blank:
                 continue
 
-            if actor.x[0] > self.ego.x[0] + EGO_X_OFFSET and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5:
+            if (
+                actor.x[0] > self.ego.x[0] + EGO_X_OFFSET
+                and actor.x[0] < self.ego.x[0] + EGO_X_OFFSET + 1.5
+            ):
                 pts = actor.get_poly()
                 poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[-1:0:-1]]
                 shapes.append(vis.Polygon(poly_pts))
@@ -784,51 +793,81 @@ class Simulation:
         scan_data[scan_data == -1] = SCAN_RANGE + 1
         return scan_data.astype(np.float32)
 
-    # def calculate_information_gain(self, occupancy_grid):
-    #     obs_pts = [
-    #         [
-    #             [self.ego.x[0] + 0.04, self.ego.x[1] - 0.04],
-    #             [self.ego.x[0] + 0.08, self.ego.x[1] - 0.04],
-    #             [self.ego.x[0] + 0.12, self.ego.x[1] - 0.04],
-    #         ],
-    #         [
-    #             [self.ego.x[0] + 0.04, self.ego.x[1]],
-    #             [self.ego.x[0] + 0.08, self.ego.x[1]],
-    #             [self.ego.x[0] + 0.12, self.ego.x[1]],
-    #         ],
-    #         [
-    #             [self.ego.x[0] + 0.04, self.ego.x[1] + 0.04],
-    #             [self.ego.x[0] + 0.08, self.ego.x[1] + 0.04],
-    #             [self.ego.x[0] + 0.12, self.ego.x[1] + 0.04],
-    #         ],
-    #     ]
+    def calculate_information_gain(self, occupancy_grid):
+        obs_pts = [
+            [
+                [self.ego.x[0] + 0.04, self.ego.x[1] - 0.04],
+                [self.ego.x[0] + 0.08, self.ego.x[1] - 0.04],
+                [self.ego.x[0] + 0.12, self.ego.x[1] - 0.04],
+            ],
+            [
+                [self.ego.x[0] + 0.04, self.ego.x[1]],
+                [self.ego.x[0] + 0.08, self.ego.x[1]],
+                [self.ego.x[0] + 0.12, self.ego.x[1]],
+            ],
+            [
+                [self.ego.x[0] + 0.04, self.ego.x[1] + 0.04],
+                [self.ego.x[0] + 0.08, self.ego.x[1] + 0.04],
+                [self.ego.x[0] + 0.12, self.ego.x[1] + 0.04],
+            ],
+        ]
 
-    #     if DEBUG_INFORMATION_GAIN:
-    #         self.obs_pts = []
-    #         for row in obs_pts:
-    #             grid_pts = []
-    #             for pt in row:
-    #                 x = int((pt[0] - self.ego.x[0]) / GRID_RESOLUTION + GRID_SIZE // 2)
-    #                 y = int((pt[1] - self.ego.x[1]) / GRID_RESOLUTION + GRID_SIZE // 2)
-    #                 grid_pts.append([x, y])
-    #             self.obs_pts.append(grid_pts)
+        if DEBUG_INFORMATION_GAIN:
+            self.obs_pts = []
+            for row in obs_pts:
+                grid_pts = []
+                for pt in row:
+                    x = int((pt[0] - self.ego.x[0]) / GRID_RESOLUTION + GRID_SIZE // 2)
+                    y = int((pt[1] - self.ego.x[1]) / GRID_RESOLUTION + GRID_SIZE // 2)
+                    grid_pts.append([x, y])
+                self.obs_pts.append(grid_pts)
 
-    #     ig_results = []
-    #     for row in obs_pts:
-    #         total_ig = 0
-    #         for pt in row:
-    #             total_ig += self._calculate_information_gain_from(
-    #                 pt, occupancy_grid=occupancy_grid
-    #             )
-    #         ig_results.append(total_ig)
+        ig_results = []
+        for row in obs_pts:
+            total_ig = 0
+            for pt in row:
+                total_ig += self._calculate_information_gain_from(pt, occupancy_grid=occupancy_grid)
+            ig_results.append(total_ig)
 
-    #     return ig_results
+        return ig_results
 
-    # def _calculate_information_gain_from(self, location, occupancy_grid):
-    #     # only one position to sample from, map it to the grid, relative to the AV
-    #     obs_x = ((location[0] - self.ego.x[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
-    #     obs_y = ((location[1] - self.ego.x[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
-    #     obs_pts = np.array([obs_x, obs_y]).reshape(1, 2)
+    def _calculate_information_gain_from(self, location, occupancy_grid):
+        #     # only one position to sample from, map it to the grid, relative to the AV
+        #     obs_x = ((location[0] - self.ego.x[0]) / GRID_RESOLUTION) + GRID_SIZE // 2
+        #     obs_y = ((location[1] - self.ego.x[1]) / GRID_RESOLUTION) + GRID_SIZE // 2
+        #     obs_pts = np.array([obs_x, obs_y]).reshape(1, 2)
+        obs_x = location[0]
+        obs_y = location[1]
+
+        obs_pts = [
+            [obs_x, obs_y],
+        ]
+        resolution = GRID_RESOLUTION
+        origin = [
+            location[0] - GRID_SIZE // 2 * resolution,
+            location[1] - GRID_SIZE // 2 * resolution,
+        ]
+
+        roi = []
+        roi_size = GRID_SIZE - 1
+        for i in range(roi_size):
+            for j in range(roi_size):
+                roi.append(
+                    [
+                        location[0] + (i - GRID_SIZE // 2) * resolution,
+                        location[1] + (j - GRID_SIZE // 2) * resolution,
+                    ]
+                )
+
+        result = visibility_from_real_region(
+            data=occupancy_grid, origin=origin, resolution=GRID_RESOLUTION, starts=obs_pts, ends=roi
+        ).reshape(roi_size, roi_size)
+
+        import matplotlib.pyplot as plt
+
+        print("one ")
+
+        return 0
 
     #     values = occupancy_grid[self.roi[:, 1], self.roi[:, 0]]
 
@@ -861,10 +900,14 @@ class Simulation:
             if self.ig_images is None:
                 num_maps = 1
                 num_rows = 1
-                self.ig_fig, self.ig_ax = plt.subplots(num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15))
+                self.ig_fig, self.ig_ax = plt.subplots(
+                    num_rows, num_maps, num=FIG_IG_MAPS, figsize=(15, 15)
+                )
 
                 self.ig_images = []
-                self.ig_images.append(self.ig_ax.imshow(np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8)))
+                self.ig_images.append(
+                    self.ig_ax.imshow(np.zeros([GRID_SIZE, GRID_SIZE, 3], dtype=np.uint8))
+                )
 
             map_img = Image.fromarray(obs).convert("RGB")
             self.ig_images[0].set_data(map_img)
@@ -984,7 +1027,8 @@ class Simulation:
                 #     actor.set_collided()
 
             if actor.at_goal() or (
-                actor.x[0] < self.ego.x[0] and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
+                actor.x[0] < self.ego.x[0]
+                and actor.distance_to(self.ego.x[0:2]) > WINDOW_SIZE * 2 / 3
             ):
                 finished_actors.append(actor)
 
@@ -1000,7 +1044,7 @@ class Simulation:
         self.obs.decay(0.95)
         self.scan_data = self._calculate_future_visibility()
         observation = self._get_next_observation(self.scan_data, self.tick_time)
-        # self.information_gain = self.calculate_information_gain(observation)
+        self.information_gain = self.calculate_information_gain(observation)
 
         # calculate the reward
         # y_reward = ((self.ego.x[1] - DESIRED_LANE_POSITION)**2)*REWARD_DEVIATION_Y
@@ -1075,7 +1119,9 @@ class Simulation:
                 self.maps = self.map_ax.imshow(np.ones((GRID_SIZE, GRID_SIZE, 3), dtype=np.uint8))
                 plt.show(block=False)
 
-            map_img = Image.fromarray((self.probability_map * 255.0).astype(np.uint8)).convert("RGB")
+            map_img = Image.fromarray((self.probability_map * 255.0).astype(np.uint8)).convert(
+                "RGB"
+            )
             self.maps.set_data(map_img)
 
             self.map_fig.canvas.draw()

@@ -1,6 +1,20 @@
 from numpy import pi as PI
 
 # --------------------------------------------------------------------------------
+# ROBOT parameters
+# --------------------------------------------------------------------------------
+ROBOT_SPEED = 0.5
+ROBOT_ACCELERATION = 0.5
+ROBOT_RADIUS = 0.35
+ROBOT_MAX_STEER = PI / 3.0
+CONTROL_LIMITS = [2.0, ROBOT_MAX_STEER]
+CONTROL_VARIATION_LIMITS = [
+    0.5,
+    ROBOT_MAX_STEER / 2.0,
+]
+MPPI_SAMPLES = 1000
+
+# --------------------------------------------------------------------------------
 # DEBUG flags
 # --------------------------------------------------------------------------------
 DEBUG_INFORMATION_GAIN = False
@@ -51,11 +65,9 @@ MAX_SIMULATION_TIME = 1000
 NUM_ACTORS = 1
 BETA = 0.712  # constant for TSP length
 ACTOR_SPEED = 1.0
+LAMBDA_TASKS = 0.1
+MIN_SEPARATION = 0.10  # minimum separation between agents and robot (m)
 
-ROBOT_SPEED = 0.5
-ROBOT_ACCELERATION = 0.5
-CONTROL_LIMITS = [2.0, PI / 3.0]
-CONTROL_VARIATION_LIMITS = [2.0, PI / 2.0]
 
 OCC_PROB = 0.65  # default occupancy probability
 
@@ -86,14 +98,17 @@ ACTOR_PATH_COLOUR = (40, 40, 40, 255)
 ACTOR_PATH_WIDTH = 3
 STATUS_FONT_COLOUR = (0, 0, 0, 255)
 STATUS_FONT_SIZE = 32
-EGO_TRAJECTORY_COLOUR = [100, 100, 255]  # list to allow unpack and combination with alpha
+EGO_TRAJECTORY_COLOUR = [
+    100,
+    100,
+    255,
+]  # list to allow unpack and combination with alpha
 
 
 STATUS_Y_SIZE = 100
 STATUS_YMARGIN = 8
 STATUS_X_SIZE = 300
 STATUS_XMARGIN = 16
-
 
 # Fake scanner parameters
 SCAN_RANGE = 30

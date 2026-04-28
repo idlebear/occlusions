@@ -3,11 +3,21 @@ from math import sqrt, atan2, cos, sin
 import numpy as np
 import pygame
 from enum import IntEnum
+from pathlib import Path
 
 import controller.ModelParameters.Ackermann as Ackermann
 
 from util.gaussian import create_gaussian
 from util.uniform import create_uniform
+
+ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+TRACK_HEADING_LOOKAHEAD_STEPS = 15
+TRACK_HEADING_MIN_DISPLACEMENT = 0.05
+
+
+def scaled_poly_points(points, size_scale):
+    points = np.asarray(points, dtype=float) * size_scale
+    return np.column_stack([points, np.ones(points.shape[0])]).T
 
 
 class STATE(IntEnum):
@@ -34,25 +44,28 @@ class Actor:
         dt=0.1,
         actor_image=None,
         hidden_actor_image=None,
+        size_scale=1.0,
     ):
         self.id = id
         self.x = x
         self.u = None
         self.serial = Actor.serial
         Actor.serial += 1
+        self.size_scale = size_scale
+        self.length = getattr(self, "LENGTH", 0.0) * self.size_scale
+        self.width = getattr(self, "WIDTH", 0.0) * self.size_scale
 
         self.track = track
         self.goal = goal
         if self.track is not None:
             x, y, frame = self.track.pop(0)
-            if len(self.track) > 0:
-                goal_x, goal_y, _ = self.track[-1]
-                orientation = np.arctan2(goal_y - y, goal_x - x)
-                v = np.linalg.norm([self.track[0][0] - x, self.track[0][1] - y]) / dt
-            else:
-                orientation = 0
-                v = 0
-            self.x = np.array([x, y, orientation, v, 0])
+            self.x = np.array([x, y, 0, 0, 0], dtype=float)
+            v, orientation = self._estimate_track_motion(
+                current_xy=np.asarray([x, y], dtype=float),
+                dt=dt,
+                previous_theta=0.0,
+            )
+            self.x = np.array([x, y, v, orientation, 0], dtype=float)
 
         self.reached_goal = False
         self.collided = False
@@ -68,16 +81,17 @@ class Actor:
         self.outline_colour = outline_colour
         self.radius = radius
 
-        self.poly_def = np.array(
+        self.poly_def = scaled_poly_points(
             [
-                [2.2, 0.8, 1],
-                [2.45, 0, 1],
-                [2.2, -0.8, 1],
-                [-2.2, -0.8, 1],
-                [-2.2, 0.8, 1],
-                [2.2, 0.8, 1],
-            ]
-        ).T
+                [2.2, 0.8],
+                [2.45, 0],
+                [2.2, -0.8],
+                [-2.2, -0.8],
+                [-2.2, 0.8],
+                [2.2, 0.8],
+            ],
+            self.size_scale,
+        )
 
         self.actor_image = actor_image
         self.hidden_actor_image = hidden_actor_image
@@ -88,6 +102,38 @@ class Actor:
     def distance_to(self, pos):
         return np.linalg.norm(self.x[:2] - pos[:2])
 
+    def _estimate_track_motion(self, current_xy, dt, previous_theta, fallback_xy=None):
+        if len(self.track) == 0:
+            if fallback_xy is None:
+                return 0.0, previous_theta
+            delta = current_xy - np.asarray(fallback_xy, dtype=float)
+            distance = float(np.linalg.norm(delta))
+            if distance <= EPSILON:
+                return 0.0, previous_theta
+            return distance / dt, atan2(delta[1], delta[0])
+
+        max_steps = min(TRACK_HEADING_LOOKAHEAD_STEPS, len(self.track))
+        for index in range(max_steps):
+            future_xy = np.asarray(self.track[index][:2], dtype=float)
+            delta = future_xy - current_xy
+            distance = float(np.linalg.norm(delta))
+            if distance >= TRACK_HEADING_MIN_DISPLACEMENT:
+                steps = index + 1
+                return distance / (steps * dt), atan2(delta[1], delta[0])
+
+        next_xy = np.asarray(self.track[0][:2], dtype=float)
+        delta = next_xy - current_xy
+        distance = float(np.linalg.norm(delta))
+        if distance <= EPSILON:
+            if fallback_xy is None:
+                return 0.0, previous_theta
+            fallback_delta = current_xy - np.asarray(fallback_xy, dtype=float)
+            fallback_distance = float(np.linalg.norm(fallback_delta))
+            if fallback_distance <= EPSILON:
+                return 0.0, previous_theta
+            return fallback_distance / dt, previous_theta
+        return distance / dt, previous_theta
+
     def __move(self, dt):
         """move towards the goal"""
         if not self.reached_goal:
@@ -95,20 +141,40 @@ class Actor:
                 # move along the track
                 try:
                     next_pos = self.track.pop(0)
-                    orientation = np.arctan2(next_pos[STATE.Y] - self.x[STATE.Y], next_pos[STATE.X] - self.x[STATE.X])
-                    speed = (
-                        np.sqrt((next_pos[STATE.X] - self.x[STATE.X]) ** 2 + (next_pos[STATE.Y] - self.x[STATE.Y]) ** 2)
-                        / dt
+                    current_xy = np.asarray(
+                        [next_pos[STATE.X], next_pos[STATE.Y]],
+                        dtype=float,
                     )
-                    self.x = [next_pos[STATE.X], next_pos[STATE.Y], speed, orientation, 0]
+                    speed, orientation = self._estimate_track_motion(
+                        current_xy=current_xy,
+                        dt=dt,
+                        previous_theta=self.x[STATE.THETA],
+                        fallback_xy=self.x[:2],
+                    )
+                    self.x = [
+                        next_pos[STATE.X],
+                        next_pos[STATE.Y],
+                        speed,
+                        orientation,
+                        0,
+                    ]
                 except IndexError:
                     self.reached_goal = True
             else:
                 if self.u is not None:
-                    dx = self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
-                    dy = self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
-                    dtheta = self.x[STATE.VELOCITY] * np.tan(self.u[1]) / (self.LENGTH) * dt
-                    dv = self.x[STATE.VELOCITY] + self.u[0] * dt
+                    velocity_midpoint = np.clip(
+                        self.x[STATE.VELOCITY] + 0.5 * self.u[0] * dt,
+                        a_min=self.min_v,
+                        a_max=self.max_v,
+                    )
+                    effective_length = max(self.length, EPSILON)
+                    dtheta = (
+                        velocity_midpoint * np.tan(self.u[1]) / effective_length * dt
+                    )
+                    theta_midpoint = self.x[STATE.THETA] + 0.5 * dtheta
+                    dx = velocity_midpoint * np.cos(theta_midpoint) * dt
+                    dy = velocity_midpoint * np.sin(theta_midpoint) * dt
+                    dv = self.u[0] * dt
                 else:
                     dx = self.x[STATE.VELOCITY] * np.cos(self.x[STATE.THETA]) * dt
                     dy = self.x[STATE.VELOCITY] * np.sin(self.x[STATE.THETA]) * dt
@@ -148,12 +214,28 @@ class Actor:
         if u is None:
             self.u = None
         else:
-            self.u = np.array(
-                [np.clip(u[0], -self.max_brake, self.max_accel), np.clip(u[1], -self.max_delta, self.max_delta)]
+            # Debug: print control values before and after clipping
+            u_raw = np.array(u)
+            u_clipped = np.array(
+                [
+                    np.clip(u[0], -self.max_brake, self.max_accel),
+                    np.clip(u[1], -self.max_delta, self.max_delta),
+                ]
             )
 
+            # Only print if there's significant clipping
+            if abs(u_raw[1] - u_clipped[1]) > 0.01:  # Only for steering
+                print(
+                    f"STEERING CLIPPED: raw={np.degrees(u_raw[1]):.1f}°, applied={np.degrees(u_clipped[1]):.1f}°, limit={np.degrees(self.max_delta):.1f}°"
+                )
+
+            self.u = u_clipped
+
     def get_v(self):
-        return np.array([np.cos(self.x[STATE.THETA]), np.sin(self.x[STATE.THETA])]) * self.x[STATE.VELOCITY]
+        return (
+            np.array([np.cos(self.x[STATE.THETA]), np.sin(self.x[STATE.THETA])])
+            * self.x[STATE.VELOCITY]
+        )
 
     def tick(self, dt=TICK_TIME):
         """a time step"""
@@ -231,7 +313,9 @@ class Actor:
         min_d = np.min(poly, axis=0)
         max_d = np.max(poly, axis=0)
         self.bounding_box = np.array([*min_d, *max_d])
-        self.extent = max(np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2]))
+        self.extent = max(
+            np.linalg.norm(min_d - self.x[0:2]), np.linalg.norm(max_d - self.x[0:2])
+        )
 
         # self.update_footprint()
 
@@ -251,7 +335,7 @@ class Actor:
         state = {
             "id": self.id,
             "pos": self.x,
-            "size": [self.LENGTH, self.WIDTH],
+            "size": [self.length, self.width],
             "heading": self.x[STATE.THETA],
             "goal": self.goal,
             "type": type(self).__name__.upper(),
@@ -281,21 +365,26 @@ class Vehicle(Actor):
         resolution=0.1,
         image_name=None,
         image_scale=1.0,
+        size_scale=1.0,
     ):
+        length = Vehicle.LENGTH * size_scale
+        width = Vehicle.WIDTH * size_scale
         if image_name is None:
             actor_image = None
             hidden_actor_image = None
         else:
-            actor_image = pygame.image.load(f"assets/{image_name}.svg")
+            actor_image = pygame.image.load(str(ASSET_ROOT / f"{image_name}.svg"))
             actor_image = pygame.transform.scale(
                 actor_image,
-                (Vehicle.LENGTH * image_scale, Vehicle.WIDTH * image_scale),
+                (length * image_scale, width * image_scale),
             )
             try:
-                hidden_actor_image = pygame.image.load(f"assets/hidden_{image_name}.svg")
+                hidden_actor_image = pygame.image.load(
+                    str(ASSET_ROOT / f"hidden_{image_name}.svg")
+                )
                 hidden_actor_image = pygame.transform.scale(
                     hidden_actor_image,
-                    (Vehicle.LENGTH * image_scale, Vehicle.WIDTH * image_scale),
+                    (length * image_scale, width * image_scale),
                 )
             except FileNotFoundError:
                 hidden_actor_image = actor_image
@@ -309,6 +398,7 @@ class Vehicle(Actor):
             resolution=resolution,
             actor_image=actor_image,
             hidden_actor_image=hidden_actor_image,
+            size_scale=size_scale,
         )
 
         self.max_v = Ackermann.MAX_V
@@ -318,16 +408,17 @@ class Vehicle(Actor):
         self.max_omega = Ackermann.MAX_W
         self.max_delta = Ackermann.MAX_DELTA
 
-        self.poly_def = np.array(
+        self.poly_def = scaled_poly_points(
             [
-                [2.5, 1.0, 1],
-                [2.75, 0, 1],
-                [2.5, -1.0, 1],
-                [-2.5, -1.0, 1],
-                [-2.5, 1.0, 1],
-                [2.5, 1.0, 1],
-            ]
-        ).T
+                [2.5, 1.0],
+                [2.75, 0],
+                [2.5, -1.0],
+                [-2.5, -1.0],
+                [-2.5, 1.0],
+                [2.5, 1.0],
+            ],
+            self.size_scale,
+        )
 
         self.update_position_properties()
 
@@ -346,21 +437,26 @@ class DeliveryBot(Actor):
         resolution=0.1,
         image_name=None,
         image_scale=1.0,
+        size_scale=1.0,
     ):
+        length = DeliveryBot.LENGTH * size_scale
+        width = DeliveryBot.WIDTH * size_scale
         if image_name is None:
             actor_image = None
             hidden_actor_image = None
         else:
-            actor_image = pygame.image.load(f"assets/{image_name}.svg")
+            actor_image = pygame.image.load(str(ASSET_ROOT / f"{image_name}.svg"))
             actor_image = pygame.transform.scale(
                 actor_image,
-                (DeliveryBot.LENGTH * image_scale, DeliveryBot.WIDTH * image_scale),
+                (length * image_scale, width * image_scale),
             )
             try:
-                hidden_actor_image = pygame.image.load(f"assets/hidden_{image_name}.svg")
+                hidden_actor_image = pygame.image.load(
+                    str(ASSET_ROOT / f"hidden_{image_name}.svg")
+                )
                 hidden_actor_image = pygame.transform.scale(
                     hidden_actor_image,
-                    (DeliveryBot.LENGTH * image_scale, DeliveryBot.WIDTH * image_scale),
+                    (length * image_scale, width * image_scale),
                 )
             except FileNotFoundError:
                 hidden_actor_image = actor_image
@@ -374,24 +470,26 @@ class DeliveryBot(Actor):
             resolution=resolution,
             actor_image=actor_image,
             hidden_actor_image=hidden_actor_image,
+            size_scale=size_scale,
         )
 
         self.max_v = 1.2
         self.min_v = -1.0
-        self.max_brake = -CONTROL_LIMITS[0]
+        self.max_brake = CONTROL_LIMITS[0]
         self.max_accel = CONTROL_LIMITS[0]
         self.max_omega = np.pi / 4.0
         self.max_delta = CONTROL_LIMITS[1]
 
-        self.poly_def = np.array(
+        self.poly_def = scaled_poly_points(
             [
-                [DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0, 1],
-                [DeliveryBot.LENGTH / 2.0, -DeliveryBot.WIDTH / 2.0, 1],
-                [-DeliveryBot.LENGTH / 2.0, -DeliveryBot.WIDTH / 2.0, 1],
-                [-DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0, 1],
-                [DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0, 1],
-            ]
-        ).T
+                [DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0],
+                [DeliveryBot.LENGTH / 2.0, -DeliveryBot.WIDTH / 2.0],
+                [-DeliveryBot.LENGTH / 2.0, -DeliveryBot.WIDTH / 2.0],
+                [-DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0],
+                [DeliveryBot.LENGTH / 2.0, DeliveryBot.WIDTH / 2.0],
+            ],
+            self.size_scale,
+        )
 
         self.update_position_properties()
 
@@ -411,22 +509,28 @@ class Pedestrian(Actor):
         outline_colour="dodgerblue",
         image_name=None,
         image_scale=1.0,
+        size_scale=1.0,
+        dt=TICK_TIME,
     ):
+        length = Pedestrian.LENGTH * size_scale
+        width = Pedestrian.WIDTH * size_scale
 
         if image_name is None:
             actor_image = None
             hidden_actor_image = None
         else:
-            actor_image = pygame.image.load(f"assets/{image_name}.svg")
+            actor_image = pygame.image.load(str(ASSET_ROOT / f"{image_name}.svg"))
             actor_image = pygame.transform.scale(
                 actor_image,
-                (Pedestrian.LENGTH * image_scale, Pedestrian.WIDTH * image_scale),
+                (length * image_scale, width * image_scale),
             )
             try:
-                hidden_actor_image = pygame.image.load(f"assets/hidden_{image_name}.svg")
+                hidden_actor_image = pygame.image.load(
+                    str(ASSET_ROOT / f"hidden_{image_name}.svg")
+                )
                 hidden_actor_image = pygame.transform.scale(
                     hidden_actor_image,
-                    (Pedestrian.LENGTH * image_scale, Pedestrian.WIDTH * image_scale),
+                    (length * image_scale, width * image_scale),
                 )
             except FileNotFoundError:
                 hidden_actor_image = actor_image
@@ -441,6 +545,8 @@ class Pedestrian(Actor):
             outline_colour=outline_colour,
             actor_image=actor_image,
             hidden_actor_image=hidden_actor_image,
+            size_scale=size_scale,
+            dt=dt,
         )
 
         self.max_v = 2.0
@@ -448,20 +554,16 @@ class Pedestrian(Actor):
         self.max_brake = 0.75
         self.max_accel = 0.75
 
-        self.poly_def = np.array(
+        self.poly_def = scaled_poly_points(
             [
-                [Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0, 1],
-                [Pedestrian.LENGTH / 2.0, -Pedestrian.WIDTH / 2.0, 1],
-                [-Pedestrian.LENGTH / 2.0, -Pedestrian.WIDTH / 2.0, 1],
-                [-Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0, 1],
-                [Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0, 1],
-                # [Pedestrian.LENGTH / 2.0, 0.0, 1],
-                # [0.0, Pedestrian.WIDTH / 2.0, 1],
-                # [-Pedestrian.LENGTH / 2.0, 0.0, 1],
-                # [0.0, -Pedestrian.WIDTH / 2.0, 1],
-                # [Pedestrian.LENGTH / 2.0, 0.0, 1],
-            ]
-        ).T
+                [Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0],
+                [Pedestrian.LENGTH / 2.0, -Pedestrian.WIDTH / 2.0],
+                [-Pedestrian.LENGTH / 2.0, -Pedestrian.WIDTH / 2.0],
+                [-Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0],
+                [Pedestrian.LENGTH / 2.0, Pedestrian.WIDTH / 2.0],
+            ],
+            self.size_scale,
+        )
 
         self.update_position_properties()
 

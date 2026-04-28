@@ -24,13 +24,13 @@ class Ackermann4:
     CONTROL_LEN = 2  # a, delta
     STATE_LEN = 4  # x, y, v, theta
 
-    def __init__(self, length=None, width=None) -> None:
+    def __init__(self, length=None, width=None, max_delta=None) -> None:
         if length is None:
             self.L = LENGTH
         else:
             self.L = length
 
-        if WIDTH is None:
+        if width is None:
             self.W = WIDTH
         else:
             self.W = width
@@ -40,8 +40,8 @@ class Ackermann4:
         self.max_v = MAX_V
         self.min_a = MIN_A
         self.max_a = MAX_A
-        self.max_delta = MAX_DELTA
-        self.min_delta = MIN_DELTA
+        self.max_delta = MAX_DELTA if max_delta is None else float(max_delta)
+        self.min_delta = -self.max_delta
 
     #   Step Function
     def ode(self, state, control):

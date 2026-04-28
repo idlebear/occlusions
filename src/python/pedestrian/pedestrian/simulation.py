@@ -1,21 +1,43 @@
 from copy import deepcopy
+from dataclasses import replace
 from importlib import import_module
 from math import sqrt, exp
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import pygame
+import random as random_module
 from random import random, expovariate, seed
 
 import visilibity as vis
+from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.ops import unary_union
 
 from Grid.OccupancyGrid import OccupancyGrid
 from util.xkcdColour import XKCD_ColourPicker
+from datasources import load_eth_scenario, load_scenario
 
 # local functions/imports
 from Actor import DeliveryBot, Pedestrian, Vehicle, STATE
 from config import *
-from polycheck import faux_scan, visibility_from_region
+
+faux_scan = None
+visibility_from_region = None
+POLYCHECK_IMPORT_ERROR = None
+
+
+def load_polycheck():
+    global faux_scan, visibility_from_region, POLYCHECK_IMPORT_ERROR
+    if faux_scan is not None or POLYCHECK_IMPORT_ERROR is not None:
+        return
+    try:
+        from polycheck import faux_scan as imported_faux_scan
+        from polycheck import visibility_from_region as imported_visibility_from_region
+    except Exception as exc:
+        POLYCHECK_IMPORT_ERROR = exc
+        return
+    faux_scan = imported_faux_scan
+    visibility_from_region = imported_visibility_from_region
 
 
 DEBUG = 0
@@ -235,6 +257,12 @@ class Simulation:
         generator_args=None,
         num_actors=1,
         tracks=None,
+        data_source=None,
+        scenario=None,
+        sdd_processed_root="outputs/sdd_processed",
+        sdd_scene_id=None,
+        sdd_actor_scale_percentile=75.0,
+        limit_tracks=None,
         ego_start=None,
         ego_heading=0,
         ego_goal=None,
@@ -246,22 +274,49 @@ class Simulation:
         screen_height=SCREEN_HEIGHT,
         tick_time=TICK_TIME,
         record_data=False,
+        enable_scan=True,
     ):
         self.num_actors = num_actors
         self.actor_target_speed = speed
         self.pois_lambda = pois_lambda
-        if tracks is not None:
-            self.track_data, self.display_offset, self.display_diff = self.load_tracks(
-                tracks
+        self.scenario = scenario
+        if self.scenario is None and data_source is not None:
+            self.scenario = load_scenario(
+                data_source,
+                tracks=tracks,
+                sdd_processed_root=sdd_processed_root,
+                sdd_scene_id=sdd_scene_id,
+                sdd_actor_scale_percentile=sdd_actor_scale_percentile,
+            )
+        elif self.scenario is None and tracks is not None:
+            self.scenario = load_eth_scenario(tracks)
+
+        if self.scenario is not None:
+            self.scenario = self._limited_scenario_tracks(
+                self.scenario,
+                limit_tracks,
+                seed=generator_args.get("seed") if generator_args else None,
+            )
+
+        if self.scenario is not None:
+            self.track_data = self.scenario.tracks
+            self.display_offset = self.scenario.display_offset
+            self.display_diff = self.scenario.display_diff
+            self.static_polygons = self.scenario.static_polygons
+            self.actor_dimension_multiplier = self.scenario.metadata.get(
+                "actor_dimension_multiplier", 1.0
             )
         else:
             self.track_data = None
             self.tracks = None
             self.display_diff = DEFAULT_DISPLAY_SIZE  # meters
             self.display_offset = [0, 0]
+            self.static_polygons = []
+            self.actor_dimension_multiplier = 1.0
 
         self.record_data = record_data
-        self.tick_time = tick_time
+        self.tick_time = self._resolve_tick_time(tick_time)
+        self.enable_scan = enable_scan
 
         if screen is not None or record_data:
             self.window = Window(
@@ -317,94 +372,147 @@ class Simulation:
 
         self.reset()
 
-    def load_tracks(self, tracks):
-        objects = {}
-        parsed_lines = []
+    def _limited_scenario_tracks(self, scenario, limit_tracks, seed=None):
+        if limit_tracks is None:
+            return scenario
 
-        min_x = np.inf
-        max_x = -np.inf
-        min_y = np.inf
-        max_y = -np.inf
+        limit_tracks = int(limit_tracks)
+        if limit_tracks < 0:
+            raise ValueError("--limit_tracks must be >= 0")
 
-        with open(tracks, "rb") as f:
-            # parse the file, separating each space separated line into a list of floats
-            lines = f.readlines()
-
-        for line in lines:
-            frame, id, x, y = [float(x) for x in line.split()]
-            if x < min_x:
-                min_x = x
-            if x > max_x:
-                max_x = x
-            if y < min_y:
-                min_y = y
-            if y > max_y:
-                max_y = y
-            parsed_lines.append([frame, id, x, y])
-
-        diff_y = max_y - min_y
-        diff_x = max_x - min_x
-
-        if diff_x > diff_y:
-            max_diff = diff_x
-            min_y = min_y - (diff_x - diff_y) / 2
+        track_items = list(scenario.tracks.items())
+        raw_track_count = len(track_items)
+        if limit_tracks >= raw_track_count:
+            selected_items = track_items
+        elif limit_tracks == 0:
+            selected_items = []
         else:
-            max_diff = diff_y
-            min_x = min_x - (diff_y - diff_x) / 2
+            rng = random_module.Random(seed) if seed is not None else random_module
+            selected_items = rng.sample(track_items, limit_tracks)
 
-        display_scale = 1.0 / max_diff
-        display_offset = [min_x, min_y]
+        selected_items = sorted(selected_items, key=lambda item: str(item[0]))
+        metadata = dict(scenario.metadata)
+        metadata["track_limit"] = limit_tracks
+        metadata["track_limit_raw_count"] = raw_track_count
+        metadata["track_limit_selected_count"] = len(selected_items)
+        metadata["track_limit_selected_ids"] = [
+            track_id for track_id, _ in selected_items
+        ]
 
-        for line in parsed_lines:
-            frame, id, x, y = line
+        print(
+            "Loaded "
+            f"{len(selected_items)} / {raw_track_count} tracks"
+            f" for scenario {scenario.name}"
+        )
+        return replace(
+            scenario,
+            tracks=dict(selected_items),
+            metadata=metadata,
+        )
 
-            if id not in objects:
-                objects[id] = [[x, y, frame]]
-            else:
-                # interpolate between the last frame and the current frame
-                last_frame = objects[id][-1][2]
-                step_x = (x - objects[id][-1][0]) / (frame - last_frame)
-                step_y = (y - objects[id][-1][1]) / (frame - last_frame)
-                for i in range(1, int(frame - last_frame) + 1):
-                    objects[id].append(
-                        [
-                            objects[id][-1][0] + step_x,
-                            objects[id][-1][1] + step_y,
-                            last_frame + i,
-                        ]
-                    )
+    def _resolve_tick_time(self, requested_tick_time):
+        if self.scenario is None or self.scenario.data_source != "sdd":
+            return requested_tick_time
 
-        return objects, display_offset, max_diff
+        dt = self.scenario.metadata.get("dt")
+        if dt is None:
+            return requested_tick_time
+
+        dt = float(dt)
+        if dt <= 0:
+            raise ValueError(f"Invalid SDD scene dt: {dt}")
+        return dt
+
+    def load_tracks(self, tracks):
+        scenario = load_eth_scenario(tracks)
+        return scenario.tracks, scenario.display_offset, scenario.display_diff
+
+    def _random_unit(self):
+        return float(np.asarray(self.generator.random(n=1)).reshape(-1)[0])
+
+    def _sample_axis_value(self, spec, offset):
+        if isinstance(spec, (float, int, np.floating, np.integer)):
+            return self.display_diff * float(spec) + offset, False
+
+        lo, hi = spec[0], spec[1]
+        value = (
+            offset
+            + (float(lo) + (float(hi) - float(lo)) * self._random_unit())
+            * self.display_diff
+        )
+        return value, True
+
+    def _sample_location(self, spec):
+        if spec is None:
+            return (
+                np.asarray(self.generator.random(n=2), dtype=float) * self.display_diff
+                + self.display_offset
+            ), True
+
+        x, x_random = self._sample_axis_value(spec[0], self.display_offset[0])
+        y, y_random = self._sample_axis_value(spec[1], self.display_offset[1])
+        return np.asarray([x, y], dtype=float), bool(x_random or y_random)
+
+    def _blocking_polygon_union(self):
+        polygons = []
+        for points in self.blocking_static_polygon_points():
+            polygon = Polygon(points)
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            if not polygon.is_empty:
+                polygons.append(polygon)
+        if not polygons:
+            return None
+        return unary_union(polygons)
+
+    def _is_free_start_location(self, point, blocking_union):
+        if blocking_union is None:
+            return True
+        radius = ROBOT_RADIUS * self.actor_dimension_multiplier + MIN_SEPARATION
+        return not blocking_union.buffer(radius).covers(
+            Point(float(point[0]), float(point[1]))
+        )
+
+    def _ego_static_collision(self):
+        if not self.static_polygons:
+            return None
+
+        ego_polygon = Polygon(self.ego.get_poly())
+        if not ego_polygon.is_valid:
+            ego_polygon = ego_polygon.buffer(0)
+        if ego_polygon.is_empty:
+            return None
+
+        for static_polygon in self.static_polygons:
+            if not static_polygon.blocking or len(static_polygon.points) < 3:
+                continue
+            polygon = Polygon(static_polygon.points)
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            if not polygon.is_empty and ego_polygon.intersects(polygon):
+                return static_polygon
+        return None
+
+    def _sample_free_location(self, spec, label, max_attempts=250):
+        blocking_union = self._blocking_polygon_union()
+        candidate, is_random = self._sample_location(spec)
+        if not is_random or self._is_free_start_location(candidate, blocking_union):
+            return candidate
+
+        for _ in range(max_attempts - 1):
+            candidate, _ = self._sample_location(spec)
+            if self._is_free_start_location(candidate, blocking_union):
+                return candidate
+
+        raise RuntimeError(
+            f"Unable to sample a collision-free random {label} after {max_attempts} attempts."
+        )
 
     def reset(self):
         # reset the random number generator
         self.generator.reset()
 
-        if self.ego_start is None:
-            sx, sy = (
-                self.generator.random(n=2) * self.display_diff + self.display_offset
-            )
-        else:
-            sx = self.ego_start[0]
-            if type(sx) is float:
-                sx = self.display_diff * sx + self.display_offset[0]
-            else:
-                r = sx[1] - sx[0]
-                sx = (
-                    self.display_offset[0]
-                    + (r * float(self.generator.random(n=1)) + sx[0])
-                    * self.display_diff
-                )
-            sy = self.ego_start[1]
-            if type(sy) is float:
-                sy = self.display_diff * sy + self.display_offset[1]
-            else:
-                r = sy[1] - sy[0]
-                sy = (
-                    self.display_offset[1]
-                    + (r * float(self.generator.random(n=1)) + sy[0])
-                    * self.display_diff
-                )
+        sx, sy = self._sample_free_location(self.ego_start, "ego start")
 
         if self.ego_goal is None:
             gx, gy = (
@@ -441,6 +549,7 @@ class Simulation:
             resolution=GRID_RESOLUTION,
             image_name="robot",
             image_scale=self.image_scale,
+            size_scale=self.actor_dimension_multiplier,
         )
         self.ego.set_visible(True)
 
@@ -508,7 +617,32 @@ class Simulation:
         self.window.draw_circle(self.ego.goal[:2], colour="red", radius=0.2)
         self._draw_actor(self.ego)
 
+    def _draw_static_polygons(self):
+        colours = {
+            "Building": ((44, 62, 80, 255), (44, 62, 80, 95)),
+            "Obstacle": ((146, 43, 33, 255), (146, 43, 33, 95)),
+            "Object": ((175, 96, 26, 255), (175, 96, 26, 85)),
+            "Offroad": ((88, 120, 92, 255), (88, 120, 92, 70)),
+            "Entrance": ((41, 128, 185, 255), None),
+        }
+        for polygon in self.static_polygons:
+            if len(polygon.points) < 3:
+                continue
+            outline_colour, fill_colour = colours.get(
+                polygon.polygon_class,
+                ((90, 90, 90, 255), (90, 90, 90, 65)),
+            )
+            self.window.draw_polygon(
+                outline_colour=outline_colour,
+                fill_colour=fill_colour,
+                points=polygon.points,
+                width=2,
+                use_transparency=fill_colour is not None,
+            )
+
     def _draw_path(self, path, colours=["red"]):
+        if path is None:
+            return
         if type(path) == list:
             for i, p in enumerate(path):
                 for pos in zip(p.x, p.y):
@@ -518,6 +652,14 @@ class Simulation:
         else:
             for pos in zip(path.x, path.y):
                 self.window.draw_circle(pos[:2], colour=colours[0], radius=0.05)
+
+    def _draw_nominal_path(self, path):
+        if path is None or len(path) < 2:
+            return
+        colour = (33, 102, 172, 255)
+        self.window.draw_polyline(path, colour=colour, width=4)
+        for point in path:
+            self.window.draw_circle(point[:2], colour=colour, radius=0.07)
 
     def _draw_status(self):
         self.window.draw_status(self.collisions, self.sim_time)
@@ -538,6 +680,57 @@ class Simulation:
 
     def draw_polyline(self, points, colour, width=2):
         self.window.draw_polyline(points, colour, width)
+
+    def blocking_static_polygon_points(self):
+        return [
+            polygon.points
+            for polygon in self.static_polygons
+            if polygon.blocking and len(polygon.points) >= 3
+        ]
+
+    def sensor_blocking_polygons(self):
+        polygons = [actor.get_poly() for actor in self.actor_list]
+        polygons.extend(self.blocking_static_polygon_points())
+        return polygons
+
+    def visibility_polygon_from_points(self, points):
+        points = np.asarray(points, dtype=float)
+        if len(points) > 1 and np.allclose(points[0], points[-1]):
+            points = points[:-1]
+        if len(points) < 3:
+            return None
+        if polygon_signed_area(points) > 0:
+            points = points[::-1]
+        return vis.Polygon([vis.Point(point[0], point[1]) for point in points])
+
+    def visibility_blocking_polygons(self):
+        polygons = []
+        for points in self.sensor_blocking_polygons():
+            points = np.asarray(points, dtype=float)
+            if len(points) > 1 and np.allclose(points[0], points[-1]):
+                points = points[:-1]
+            if len(points) < 3:
+                continue
+            polygon = Polygon(points)
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            if not polygon.is_empty:
+                polygons.append(polygon)
+
+        if not polygons:
+            return []
+
+        merged = unary_union(polygons)
+        if isinstance(merged, Polygon):
+            merged_polygons = [merged]
+        elif isinstance(merged, MultiPolygon):
+            merged_polygons = list(merged.geoms)
+        else:
+            merged_polygons = [
+                geom for geom in getattr(merged, "geoms", []) if isinstance(geom, Polygon)
+            ]
+
+        return [np.asarray(polygon.exterior.coords, dtype=float) for polygon in merged_polygons]
 
     ##################################################################################
     # Simulator step functions
@@ -563,10 +756,10 @@ class Simulation:
             )
         )
 
-        for actor in self.actor_list:
-            pts = actor.get_poly()
-            poly_pts = [vis.Point(pt[0], pt[1]) for pt in pts[0:-1]]
-            shapes.append(vis.Polygon(poly_pts))
+        for points in self.visibility_blocking_polygons():
+            polygon = self.visibility_polygon_from_points(points)
+            if polygon is not None:
+                shapes.append(polygon)
 
         vis_poly = None
         env = vis.Environment(shapes)
@@ -591,6 +784,8 @@ class Simulation:
                             track=track.copy(),
                             image_name="pedestrian",
                             image_scale=self.image_scale,
+                            size_scale=self.actor_dimension_multiplier,
+                            dt=self.tick_time,
                         )
                     )
                     activated.append(id)
@@ -614,6 +809,7 @@ class Simulation:
                     goal=goal,
                     image_name="pedestrian",
                     image_scale=self.image_scale,
+                    size_scale=self.actor_dimension_multiplier,
                 )
 
                 self.actor_list.append(actor)
@@ -661,12 +857,17 @@ class Simulation:
 
     def _calculate_scan(self):
         # create the scan of the environment
+        if not self.enable_scan:
+            return np.full(SCAN_RAYS, SCAN_RANGE + 1, dtype=np.float32)
 
-        # build a list of polygons in the environment
-        polygons = []
-        for actor in self.actor_list:
-            polygons.append(actor.get_poly())
-        polygons = np.array(polygons)
+        load_polycheck()
+        if faux_scan is None:
+            for actor in self.actor_list:
+                actor.set_visible(False)
+            return np.full(SCAN_RAYS, SCAN_RANGE + 1, dtype=np.float32)
+
+        # build a list of sensor-blocking polygons in the environment
+        polygons = self.sensor_blocking_polygons()
 
         scan_data, indices = faux_scan(
             polygons,
@@ -721,6 +922,15 @@ class Simulation:
         # move everyone
         finished_actors = []
         collisions = 0
+        static_collision = self._ego_static_collision()
+        if static_collision is not None:
+            print(
+                "COLLISION DETECTED: Robot collided with static "
+                f"{static_collision.polygon_class}"
+            )
+            collisions += 1
+            self.ego.set_collided("red")
+
         for i, actor in enumerate(self.actor_list[::-1]):
             actor.tick(self.tick_time)
 
@@ -785,10 +995,12 @@ class Simulation:
         trajectory_weights=None,
         horizon=1,
         path=None,
+        nominal_path=None,
         prefix_str=None,
     ):
         if self.window is not None:
             self.window.clear()
+            self._draw_static_polygons()
 
             for actor in self.actor_list:
                 try:
@@ -803,6 +1015,7 @@ class Simulation:
                     pass
                 self._draw_actor(actor)
 
+            self._draw_nominal_path(nominal_path)
             self._draw_path(path)
 
             self._draw_ego()
@@ -850,3 +1063,24 @@ class Simulation:
             if future is not None:
                 futures.append(future)
         return futures
+
+    def render_display_only(self, path, show_visibility=True):
+        if self.window is None:
+            raise RuntimeError("Simulation must be constructed with a screen to render")
+
+        self._generate_new_agents()
+        self.window.clear()
+        self._draw_static_polygons()
+        for actor in self.actor_list:
+            self._draw_actor(actor)
+        self._draw_ego()
+        if show_visibility:
+            self._draw_visibility()
+        self._draw_status()
+        self.window.save_screen(path)
+
+
+def polygon_signed_area(points):
+    x = points[:, 0]
+    y = points[:, 1]
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))

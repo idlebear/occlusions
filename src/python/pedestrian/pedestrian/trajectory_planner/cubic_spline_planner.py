@@ -148,9 +148,31 @@ class Spline2D:
     """
 
     def __init__(self, x, y):
+        x, y = self.__filter_duplicate_points(x, y)
         self.s = self.__calc_s(x, y)
         self.sx = Spline(self.s, x)
         self.sy = Spline(self.s, y)
+
+    def __filter_duplicate_points(self, x, y, tolerance=1.0e-6):
+        points = np.column_stack(
+            [
+                np.asarray(x, dtype=float).reshape(-1),
+                np.asarray(y, dtype=float).reshape(-1),
+            ]
+        )
+        if points.shape[0] < 2:
+            raise ValueError("Spline2D requires at least two points")
+
+        filtered = [points[0]]
+        for point in points[1:]:
+            if np.linalg.norm(point - filtered[-1]) > tolerance:
+                filtered.append(point)
+
+        if len(filtered) < 2:
+            raise ValueError("Spline2D requires at least two distinct points")
+
+        filtered = np.asarray(filtered, dtype=float)
+        return filtered[:, 0].tolist(), filtered[:, 1].tolist()
 
     def __calc_s(self, x, y):
         dx = np.diff(x)
