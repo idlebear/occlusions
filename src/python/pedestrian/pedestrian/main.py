@@ -243,13 +243,13 @@ def _agent_prediction_sequence(agent, agent_predictions, horizon):
     return normalized[:horizon].astype(np.float32), "prediction"
 
 
-def actor_dimension_scale(robot_model=None):
+def scene_scale(robot_model=None):
     if robot_model is None:
         return 1.0
     return float(
         getattr(
             robot_model,
-            "actor_dimension_multiplier",
+            "scene_scale",
             getattr(robot_model, "size_scale", getattr(robot_model, "scale", 1.0)),
         )
     )
@@ -259,15 +259,15 @@ def mppi_dynamic_collision_buffer(robot_model=None, hard_clearance_margin=0.0):
     # CUDA checks the ego footprint separately using vehicle_width/vehicle_length,
     # so this buffer is only for hard collision inflation. Desired social
     # clearance is handled separately by the soft dynamic clearance cost.
-    return float(hard_clearance_margin) * actor_dimension_scale(robot_model)
+    return float(hard_clearance_margin) * scene_scale(robot_model)
 
 
 def mppi_dynamic_clearance_margin(robot_model, clearance_margin):
-    return float(clearance_margin) * actor_dimension_scale(robot_model)
+    return float(clearance_margin) * scene_scale(robot_model)
 
 
 def mppi_static_clearance_margin(robot_model, clearance_margin):
-    return float(clearance_margin) * actor_dimension_scale(robot_model)
+    return float(clearance_margin) * scene_scale(robot_model)
 
 
 def build_dynamic_obstacles_for_mppi(
@@ -415,7 +415,7 @@ def filter_dynamic_collision_samples(
     clearance=None,
 ):
     if clearance is None:
-        clearance = MIN_SEPARATION * actor_dimension_scale(robot_model)
+        clearance = MIN_SEPARATION * scene_scale(robot_model)
     input_weights = np.asarray(weights, dtype=np.float32).copy()
     filtered_weights = input_weights.copy()
     sampled_controls = np.asarray(u_nom, dtype=np.float32)[
@@ -4543,7 +4543,7 @@ def get_control(
             agent_predictions=agent_predictions,
             horizon=args.horizon,
             dt=args.tick_time,
-            clearance=MIN_SEPARATION * actor_dimension_scale(robot_model),
+            clearance=MIN_SEPARATION * scene_scale(robot_model),
         )
         control_timing["dynamic_sample_filter"] = perf_counter() - section_start
         dynamic_safe_weight = float(np.sum(u_weights))
@@ -4912,12 +4912,8 @@ def simulate(args, delivery_log=None):
             model_root=args.sdd_model_root,
             scene_id=args.sdd_scene_id,
         )
-        grid_resolution = sdd_models["state_space_metadata"].get(
-            "cell_size", GRID_RESOLUTION
-        )
     else:
         sdd_models = None
-        grid_resolution = GRID_RESOLUTION
 
     sim = Simulation(
         generator_name=args.generator,
@@ -4927,7 +4923,6 @@ def simulate(args, delivery_log=None):
         data_source=args.data_source,
         sdd_processed_root=args.sdd_processed_root,
         sdd_scene_id=args.sdd_scene_id,
-        sdd_actor_scale_percentile=args.sdd_actor_scale_percentile,
         limit_tracks=args.limit_tracks,
         pois_lambda=args.lambd,
         screen=surface if args.show_sim or args.record_data else None,
@@ -4963,8 +4958,8 @@ def simulate(args, delivery_log=None):
 
     action = None
 
-    # Match the planner model to the scene-scaled ego actor.  SDD scenes use a
-    # per-scene actor scale, so an unscaled wheelbase makes the model understeer.
+    # Match the planner model to the scene-scaled ego actor. SDD scenes use a
+    # per-scene scene_scale, so an unscaled wheelbase makes the model understeer.
     robot = Ackermann4(
         length=sim.ego.length,
         width=sim.ego.width,
@@ -4996,7 +4991,7 @@ def simulate(args, delivery_log=None):
     if args.debug_mppi:
         print(
             "[MPPI dynamic scale] "
-            f"actor_dimension_scale={actor_dimension_scale(robot):.6f} "
+            f"scene_scale={scene_scale(robot):.6f} "
             f"dynamic_collision_buffer={mppi_dynamic_collision_buffer(robot, args.dynamic_hard_clearance_margin):.6f} "
             f"clearance_margin={dynamic_clearance_margin:.6f} "
             f"raw_clearance_margin={args.dynamic_clearance_margin:.6f} "
@@ -5043,8 +5038,10 @@ def simulate(args, delivery_log=None):
 
     # for now, assume an empty map -- we can add objects later
     grid_origin = sim.display_offset
-    grid_size = int(sim.display_diff / grid_resolution)
-    local_map = np.zeros((grid_size, grid_size))
+    grid_resolution = sim.grid_resolution
+    grid_rows = int(np.ceil(sim.grid_height / grid_resolution))
+    grid_cols = int(np.ceil(sim.grid_width / grid_resolution))
+    local_map = np.zeros((grid_rows, grid_cols))
     discrete_oce_tracker = None
     if args.oce_eval_method == "discrete":
         if sdd_models is None:
@@ -5455,15 +5452,6 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Processed scene id for --data-source sdd.",
-    )
-    argparser.add_argument(
-        "--sdd-actor-scale-percentile",
-        type=float,
-        default=75.0,
-        help=(
-            "Dataset percentile used as the shared SDD actor dimension scale. "
-            "Use -1 to keep each scene's local scale."
-        ),
     )
     argparser.add_argument(
         "--max-time", default=None, type=float, help="Maximum Length of Simulation"

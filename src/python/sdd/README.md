@@ -58,7 +58,7 @@ PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_s
 
 Each scene directory contains:
 
-- `metadata.json`: origin, axes, source-to-scene transform, scene bounds, `dt`, display factor, short-track filtering, scene-units-per-meter calibration, validation metrics
+- `metadata.json`: origin, axes, source-to-scene transform, scene bounds, `dt`, display factor, short-track filtering, top-level `scene_scale` in scene-units per meter, validation metrics
 - `trajectories_scene.npz`: scene-frame trajectory arrays keyed by `track_<id>`
 - `polygons_scene.json`: scene-frame semantic polygons
 - `alignment_overlay.png`: image-space round-trip overlay for alignment checks
@@ -77,7 +77,7 @@ PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_s
   --endpoint-snap-distance 0.25
 ```
 
-`--grid-size` and `--endpoint-snap-distance` use normalized scene units. Destination classes use complete-link clustering over walkable shortest-path distances, so `--destination-radius-meters` is the maximum within-class endpoint diameter in meters. Use `--destination-radius` only if you want to pass the radius directly in normalized scene units.
+`--grid-size` and `--destination-radius-meters` use meters and are converted per scene with `metadata.json`'s `scene_scale`. `--endpoint-snap-distance` uses normalized scene units. Destination classes use complete-link clustering over walkable shortest-path distances, so `--destination-radius-meters` is the maximum within-class endpoint diameter in meters. Use `--destination-radius` only if you want to pass the radius directly in normalized scene units.
 Endpoints that fall just outside the walkable grid can be snapped to a nearby walkable state with `--endpoint-snap-distance`; by default this is the grid cell size.
 
 Each model scene directory contains:

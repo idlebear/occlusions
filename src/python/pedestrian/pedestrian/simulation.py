@@ -57,6 +57,46 @@ MAX_V = 10.0  # define a max v for scaling the observation output to keep it in 
 # range [0,1]
 
 
+def scenario_grid_metadata(scenario):
+    if scenario is None:
+        return {}
+    metadata = getattr(scenario, "metadata", {}) or {}
+    grid = metadata.get("grid") or metadata.get("simulation_grid") or {}
+    return grid if isinstance(grid, dict) else {}
+
+
+def finite_positive(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) and value > 0 else None
+
+
+def resolve_scenario_grid(scenario):
+    grid = scenario_grid_metadata(scenario)
+    width = finite_positive(grid.get("width"))
+    height = finite_positive(grid.get("height"))
+    resolution = finite_positive(grid.get("resolution"))
+
+    if scenario is not None:
+        display_diff = finite_positive(getattr(scenario, "display_diff", None))
+        metadata = getattr(scenario, "metadata", {}) or {}
+        scale = finite_positive(metadata.get("scene_scale"))
+        if width is None and display_diff is not None and scale is not None:
+            width = display_diff
+        if height is None and display_diff is not None and scale is not None:
+            height = display_diff
+        if resolution is None and scale is not None:
+            resolution = GRID_RESOLUTION * scale
+
+    return {
+        "width": width or GRID_WIDTH,
+        "height": height or GRID_HEIGHT,
+        "resolution": resolution or GRID_RESOLUTION,
+    }
+
+
 def get_location(origin, location):
     return [location[0] - origin[0], 1 - (location[1] - origin[1])]
 
@@ -261,7 +301,6 @@ class Simulation:
         scenario=None,
         sdd_processed_root="outputs/sdd_processed",
         sdd_scene_id=None,
-        sdd_actor_scale_percentile=75.0,
         limit_tracks=None,
         ego_start=None,
         ego_heading=0,
@@ -286,7 +325,6 @@ class Simulation:
                 tracks=tracks,
                 sdd_processed_root=sdd_processed_root,
                 sdd_scene_id=sdd_scene_id,
-                sdd_actor_scale_percentile=sdd_actor_scale_percentile,
             )
         elif self.scenario is None and tracks is not None:
             self.scenario = load_eth_scenario(tracks)
@@ -303,20 +341,22 @@ class Simulation:
             self.display_offset = self.scenario.display_offset
             self.display_diff = self.scenario.display_diff
             self.static_polygons = self.scenario.static_polygons
-            self.actor_dimension_multiplier = self.scenario.metadata.get(
-                "actor_dimension_multiplier", 1.0
-            )
+            self.scene_scale = self.scenario.metadata.get("scene_scale", 1.0)
         else:
             self.track_data = None
             self.tracks = None
             self.display_diff = DEFAULT_DISPLAY_SIZE  # meters
             self.display_offset = [0, 0]
             self.static_polygons = []
-            self.actor_dimension_multiplier = 1.0
+            self.scene_scale = 1.0
 
         self.record_data = record_data
         self.tick_time = self._resolve_tick_time(tick_time)
         self.enable_scan = enable_scan
+        grid = resolve_scenario_grid(self.scenario)
+        self.grid_width = grid["width"]
+        self.grid_height = grid["height"]
+        self.grid_resolution = grid["resolution"]
 
         if screen is not None or record_data:
             self.window = Window(
@@ -338,8 +378,8 @@ class Simulation:
         )
 
         self.observation_shape = [
-            int(GRID_HEIGHT / GRID_RESOLUTION),
-            int(GRID_WIDTH / GRID_RESOLUTION),
+            int(np.ceil(self.grid_height / self.grid_resolution)),
+            int(np.ceil(self.grid_width / self.grid_resolution)),
         ]
 
         self.maps = None
@@ -348,8 +388,8 @@ class Simulation:
 
         # Construct the occupancy grid
         self.obs = OccupancyGrid(
-            dim=GRID_WIDTH,
-            resolution=GRID_RESOLUTION,
+            dim=max(self.grid_width, self.grid_height),
+            resolution=self.grid_resolution,
             origin=(0, 0),
         )
 
@@ -469,8 +509,8 @@ class Simulation:
         if blocking_union is None:
             return True
         radius = (
-            ROBOT_RADIUS * self.actor_dimension_multiplier
-            + MIN_SEPARATION * self.actor_dimension_multiplier
+            ROBOT_RADIUS * self.scene_scale
+            + MIN_SEPARATION * self.scene_scale
         )
         return not blocking_union.buffer(radius).covers(
             Point(float(point[0]), float(point[1]))
@@ -524,10 +564,10 @@ class Simulation:
             goal=[gx, gy],
             colour="red",
             outline_colour="darkred",
-            resolution=GRID_RESOLUTION,
+            resolution=self.grid_resolution,
             image_name="robot",
             image_scale=self.image_scale,
-            size_scale=self.actor_dimension_multiplier,
+            size_scale=self.scene_scale,
         )
         self.ego.set_visible(True)
 
@@ -579,7 +619,7 @@ class Simulation:
                 actor.x[:2],
                 colour=actor.colour,
                 radius=actor.get_extent()
-                + MIN_SEPARATION * self.actor_dimension_multiplier,
+                + MIN_SEPARATION * self.scene_scale,
             )
         if actor_image is not None:
             actor_pos = actor.get_pos()
@@ -831,7 +871,7 @@ class Simulation:
                             track=track.copy(),
                             image_name="pedestrian",
                             image_scale=self.image_scale,
-                            size_scale=self.actor_dimension_multiplier,
+                            size_scale=self.scene_scale,
                             dt=self.tick_time,
                         )
                     )
@@ -856,7 +896,7 @@ class Simulation:
                     goal=goal,
                     image_name="pedestrian",
                     image_scale=self.image_scale,
-                    size_scale=self.actor_dimension_multiplier,
+                    size_scale=self.scene_scale,
                 )
 
                 self.actor_list.append(actor)

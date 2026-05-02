@@ -9,7 +9,6 @@ def load_scenario(
     tracks=None,
     sdd_processed_root="outputs/sdd_processed",
     sdd_scene_id=None,
-    sdd_actor_scale_percentile=75.0,
 ):
     if data_source in (None, "random"):
         return None
@@ -20,11 +19,5 @@ def load_scenario(
     if data_source == "sdd":
         if sdd_scene_id is None:
             raise ValueError("SDD data source requires --sdd-scene-id")
-        if sdd_actor_scale_percentile is not None and sdd_actor_scale_percentile < 0:
-            sdd_actor_scale_percentile = None
-        return load_sdd_scenario(
-            sdd_processed_root,
-            sdd_scene_id,
-            actor_scale_percentile=sdd_actor_scale_percentile,
-        )
+        return load_sdd_scenario(sdd_processed_root, sdd_scene_id)
     raise ValueError(f"Unknown data source: {data_source}")

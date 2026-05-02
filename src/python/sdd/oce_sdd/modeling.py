@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 from scipy import sparse
-from scipy.sparse.csgraph import shortest_path
+from scipy.sparse.csgraph import dijkstra
 from sklearn.cluster import AgglomerativeClustering
 from shapely.geometry import MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
@@ -38,6 +38,8 @@ class ProcessedSceneRecord:
 class GridStateSpace:
     scene_id: int
     cell_size: float
+    cell_size_meters: float
+    scene_scale: float
     bounds: dict[str, float]
     rows: int
     cols: int
@@ -71,14 +73,32 @@ def main() -> None:
         scene = load_processed_scene(processed_root, scene_id)
         scene_out = output_root / f"scene_{scene_id:03d}"
         scene_out.mkdir(parents=True, exist_ok=True)
+        scale = scene_scale(scene)
+        cell_size = meters_to_scene_units(args.grid_size, scale)
+        warn_if_grid_too_large(
+            scene,
+            cell_size=cell_size,
+            cell_size_meters=args.grid_size,
+            max_cells=args.max_grid_cells_warning,
+        )
+        destination_radius = destination_radius_scene_units(scene, args, scale)
+        rows, cols = grid_shape_for_cell_size(scene, cell_size=cell_size)
+        print(
+            f"Building scene {scene_id:03d}: "
+            f"scene_scale={scale:.6g}, grid_size_meters={args.grid_size:.6g}, "
+            f"cell_size={cell_size:.6g}, rows={rows}, cols={cols}, "
+            f"destination_radius={destination_radius:.6g}",
+            flush=True,
+        )
 
         state_space = build_grid_state_space(
             scene,
-            cell_size=args.grid_size,
+            cell_size=cell_size,
+            cell_size_meters=args.grid_size,
+            scene_scale=scale,
             non_walkable_classes=tuple(args.non_walkable_class or NON_WALKABLE_CLASSES),
         )
         trajectory_states = map_trajectories_to_states(scene, state_space)
-        destination_radius = destination_radius_scene_units(scene, args)
         splits = split_tracks(
             sorted(scene.trajectories),
             train_fraction=args.train_fraction,
@@ -136,7 +156,10 @@ def main() -> None:
         summary_rows.append(
             {
                 "scene_id": scene_id,
-                "cell_size": args.grid_size,
+                "scene_scale": scale,
+                "grid_size_meters": args.grid_size,
+                "cell_size": cell_size,
+                "destination_radius_meters": args.destination_radius_meters,
                 "destination_radius": destination_radius,
                 "state_count": len(state_space.state_ids),
                 "rows": state_space.rows,
@@ -170,7 +193,7 @@ def parse_args() -> argparse.Namespace:
         "--grid-size",
         type=float,
         default=0.25,
-        help="Uniform grid cell size in normalized scene units.",
+        help="Uniform grid cell size in meters.",
     )
     radius_group = parser.add_mutually_exclusive_group()
     radius_group.add_argument(
@@ -182,7 +205,7 @@ def parse_args() -> argparse.Namespace:
     radius_group.add_argument(
         "--destination-radius-meters",
         type=float,
-        default=2.0,
+        default=None,
         help="Maximum destination-cluster complete-link diameter in meters.",
     )
     parser.add_argument(
@@ -197,8 +220,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Maximum distance for snapping destination endpoints that land just outside "
-            "the walkable grid. Defaults to the grid cell size."
+            "the walkable grid, in scene units. Defaults to the grid cell size."
         ),
+    )
+    parser.add_argument(
+        "--max-grid-cells-warning",
+        type=int,
+        default=1_000_000,
+        help="Warn when a scene's resolved grid rows*cols exceeds this value.",
     )
     parser.add_argument(
         "--non-walkable-class",
@@ -215,33 +244,82 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Use every Nth state sample when counting transitions.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.destination_radius is None and args.destination_radius_meters is None:
+        args.destination_radius_meters = 2.0
+    return args
+
+
+def scene_scale(scene: ProcessedSceneRecord) -> float:
+    scale = float(scene.metadata.get("scene_scale", 0.0))
+    if np.isfinite(scale) and scale > 0:
+        return scale
+    if not scene.trajectories:
+        print(
+            f"WARNING: scene {scene.scene_id:03d} has no trajectories and invalid "
+            f"scene_scale={scale}; using 1.0 for empty-scene model artifacts."
+        )
+        return 1.0
+    raise ValueError(
+        f"Scene {scene.scene_id} metadata is missing a finite positive scene_scale. "
+        "Regenerate processed SDD data with oce_sdd.preprocess."
+    )
+
+
+def meters_to_scene_units(value_meters: float, scale: float) -> float:
+    value_meters = float(value_meters)
+    scale = float(scale)
+    if not np.isfinite(value_meters) or value_meters <= 0:
+        raise ValueError("meter value must be finite and positive")
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("scene scale must be finite and positive")
+    return value_meters * scale
 
 
 def destination_radius_scene_units(
     scene: ProcessedSceneRecord,
     args: argparse.Namespace,
+    scale: float,
 ) -> float:
     if args.destination_radius is not None:
         radius = float(args.destination_radius)
     else:
-        meters = float(args.destination_radius_meters)
-        try:
-            scene_units_per_meter = float(
-                scene.metadata["metric_calibration"]["scene_units_per_meter"]
-            )
-        except KeyError as exc:
-            raise KeyError(
-                "Processed metadata is missing metric_calibration.scene_units_per_meter; "
-                "use --destination-radius with normalized scene units instead."
-            ) from exc
-        radius = meters * scene_units_per_meter
-        if radius <= 0 and not scene.trajectories:
-            radius = meters
+        radius = meters_to_scene_units(args.destination_radius_meters, scale)
 
     if not np.isfinite(radius) or radius <= 0:
         raise ValueError("destination radius must be finite and positive")
     return radius
+
+
+def grid_shape_for_cell_size(
+    scene: ProcessedSceneRecord,
+    *,
+    cell_size: float,
+) -> tuple[int, int]:
+    bounds = scene.bounds
+    width = bounds["max_x"] - bounds["min_x"]
+    height = bounds["max_y"] - bounds["min_y"]
+    return int(np.ceil(height / cell_size)), int(np.ceil(width / cell_size))
+
+
+def warn_if_grid_too_large(
+    scene: ProcessedSceneRecord,
+    *,
+    cell_size: float,
+    cell_size_meters: float,
+    max_cells: int,
+) -> None:
+    if max_cells <= 0:
+        return
+    rows, cols = grid_shape_for_cell_size(scene, cell_size=cell_size)
+    total = rows * cols
+    if total > max_cells:
+        print(
+            "WARNING: "
+            f"scene {scene.scene_id:03d} grid has {rows} rows x {cols} cols "
+            f"= {total} cells, exceeding --max-grid-cells-warning={max_cells}; "
+            f"grid_size_meters={cell_size_meters:.6g}, cell_size={cell_size:.6g}"
+        )
 
 
 def available_scene_ids(processed_root: Path) -> list[int]:
@@ -289,16 +367,15 @@ def build_grid_state_space(
     scene: ProcessedSceneRecord,
     *,
     cell_size: float,
+    cell_size_meters: float,
+    scene_scale: float,
     non_walkable_classes: tuple[str, ...] = NON_WALKABLE_CLASSES,
 ) -> GridStateSpace:
     if cell_size <= 0:
         raise ValueError("cell_size must be positive")
 
     bounds = scene.bounds
-    width = bounds["max_x"] - bounds["min_x"]
-    height = bounds["max_y"] - bounds["min_y"]
-    cols = int(np.ceil(width / cell_size))
-    rows = int(np.ceil(height / cell_size))
+    rows, cols = grid_shape_for_cell_size(scene, cell_size=cell_size)
     if rows <= 0 or cols <= 0:
         raise ValueError(f"Invalid scene bounds for scene {scene.scene_id}: {bounds}")
 
@@ -328,6 +405,8 @@ def build_grid_state_space(
     return GridStateSpace(
         scene_id=scene.scene_id,
         cell_size=float(cell_size),
+        cell_size_meters=float(cell_size_meters),
+        scene_scale=float(scene_scale),
         bounds=bounds,
         rows=rows,
         cols=cols,
@@ -537,10 +616,11 @@ def fit_destination_classes(
 
     graph = build_8way_distance_graph(state_space)
 
-    distances_from_endpoints = shortest_path(
+    distances_from_endpoints = dijkstra(
         csgraph=graph,
         directed=False,
         indices=valid_endpoint_states,
+        limit=radius,
     )
     pairwise_distances = distances_from_endpoints[:, valid_endpoint_states]
     if not np.all(np.isfinite(pairwise_distances)):
@@ -679,10 +759,11 @@ def assign_destination_classes(
         return track_to_class
 
     graph = build_8way_distance_graph(state_space)
-    distances_from_endpoints = shortest_path(
+    distances_from_endpoints = dijkstra(
         csgraph=graph,
         directed=False,
         indices=valid_endpoint_states,
+        limit=max_distance,
     )
 
     working_member_endpoints = [points.copy() for points in destination_classes.member_endpoints]
@@ -807,6 +888,8 @@ def write_state_space(state_space: GridStateSpace, output_root: Path) -> None:
     metadata = {
         "scene_id": state_space.scene_id,
         "cell_size": state_space.cell_size,
+        "grid_size_meters": state_space.cell_size_meters,
+        "scene_scale": state_space.scene_scale,
         "bounds": state_space.bounds,
         "rows": state_space.rows,
         "cols": state_space.cols,
@@ -873,7 +956,9 @@ def write_model_metadata(
     metadata = {
         "scene_id": scene.scene_id,
         "scene_units": scene.units,
+        "scene_scale": state_space.scene_scale,
         "grid": {
+            "grid_size_meters": state_space.cell_size_meters,
             "cell_size": state_space.cell_size,
             "rows": state_space.rows,
             "cols": state_space.cols,
@@ -881,6 +966,11 @@ def write_model_metadata(
             "non_walkable_classes": list(state_space.non_walkable_classes),
         },
         "destination_classes": {
+            "radius_meters": (
+                destination_classes.radius / state_space.scene_scale
+                if state_space.scene_scale > 0
+                else None
+            ),
             "radius": destination_classes.radius,
             "class_count": int(len(destination_classes.centers)),
             "unassigned_track_count": int(
@@ -910,7 +1000,10 @@ def write_model_metadata(
 def write_summary(rows: list[dict[str, Any]], path: Path) -> None:
     fieldnames = [
         "scene_id",
+        "scene_scale",
+        "grid_size_meters",
         "cell_size",
+        "destination_radius_meters",
         "destination_radius",
         "state_count",
         "rows",

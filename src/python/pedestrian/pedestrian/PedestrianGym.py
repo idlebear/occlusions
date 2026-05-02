@@ -25,7 +25,6 @@ class PedestrianEnv(gym.Env):
         data_source = None
         sdd_processed_root = "outputs/sdd_processed"
         sdd_scene_id = None
-        sdd_actor_scale_percentile = 75.0
         limit_tracks = None
         self.show_sim = False
         if kwargs is not None:
@@ -54,10 +53,6 @@ class PedestrianEnv(gym.Env):
             except KeyError:
                 pass
             try:
-                sdd_actor_scale_percentile = kwargs["sdd_actor_scale_percentile"]
-            except KeyError:
-                pass
-            try:
                 limit_tracks = kwargs["limit_tracks"]
             except KeyError:
                 pass
@@ -80,7 +75,6 @@ class PedestrianEnv(gym.Env):
             data_source=data_source,
             sdd_processed_root=sdd_processed_root,
             sdd_scene_id=sdd_scene_id,
-            sdd_actor_scale_percentile=sdd_actor_scale_percentile,
             limit_tracks=limit_tracks,
             generator_name="uniform",
             generator_args=generator_args,

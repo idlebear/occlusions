@@ -344,7 +344,7 @@ def validate_scene_transform(
 
     point_mean_speed = float(np.mean(speeds)) if speeds else 0.0
     calibration_speed = float(np.mean(track_median_speeds)) if track_median_speeds else 0.0
-    scene_units_per_meter = calibration_speed / assumed_walking_speed
+    scene_scale = calibration_speed / assumed_walking_speed
 
     return {
         "max_trajectory_round_trip_error_source_units": max(trajectory_errors, default=0.0),
@@ -372,11 +372,11 @@ def validate_scene_transform(
             "average_scene_speed": calibration_speed,
             "average_scene_speed_units": f"{transform.scene_units}/s",
             "assumed_walking_speed_mps": assumed_walking_speed,
-            "scene_units_per_meter": scene_units_per_meter,
+            "scene_scale": scene_scale,
+            "scene_units_per_meter": scene_scale,
             "meters_per_scene_unit": (
-                1.0 / scene_units_per_meter if scene_units_per_meter > 0 else None
+                1.0 / scene_scale if scene_scale > 0 else None
             ),
-            "actor_dimension_multiplier": scene_units_per_meter,
         },
     }
 
@@ -389,8 +389,10 @@ def write_scene_metadata(
     fps: float,
 ) -> None:
     dt = 1.0 / fps
+    scene_scale = scene.validation["metric_calibration"]["scene_scale"]
     metadata = {
         "scene_id": scene.scene_id,
+        "scene_scale": scene_scale,
         "source": {
             "dataset": "constrained_stanford_drone_dataset",
             "data_root": str(data_root),
@@ -543,6 +545,7 @@ def scene_summary_row(scene: ProcessedScene) -> dict[str, Any]:
         "assumed_walking_speed_mps": validation["metric_calibration"][
             "assumed_walking_speed_mps"
         ],
+        "scene_scale": validation["metric_calibration"]["scene_scale"],
         "scene_units_per_meter": validation["metric_calibration"]["scene_units_per_meter"],
         "polygon_count": sum(len(items) for items in scene.polygons.values()),
         "max_trajectory_round_trip_error_source_units": validation[
@@ -574,6 +577,7 @@ def write_processing_summary(rows: list[dict[str, Any]], path: Path) -> None:
         "removed_trajectory_count",
         "min_endpoint_displacement_source_units",
         "assumed_walking_speed_mps",
+        "scene_scale",
         "scene_units_per_meter",
         "polygon_count",
         "max_trajectory_round_trip_error_source_units",
