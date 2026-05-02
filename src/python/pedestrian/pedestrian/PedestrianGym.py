@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import pygame
 import cv2
 
@@ -22,6 +22,11 @@ class PedestrianEnv(gym.Env):
         num_actors = 5
         seed = 42
         tracks = None
+        data_source = None
+        sdd_processed_root = "outputs/sdd_processed"
+        sdd_scene_id = None
+        sdd_actor_scale_percentile = 75.0
+        limit_tracks = None
         self.show_sim = False
         if kwargs is not None:
             try:
@@ -34,6 +39,26 @@ class PedestrianEnv(gym.Env):
                 pass
             try:
                 tracks = kwargs["tracks"]
+            except KeyError:
+                pass
+            try:
+                data_source = kwargs["data_source"]
+            except KeyError:
+                pass
+            try:
+                sdd_processed_root = kwargs["sdd_processed_root"]
+            except KeyError:
+                pass
+            try:
+                sdd_scene_id = kwargs["sdd_scene_id"]
+            except KeyError:
+                pass
+            try:
+                sdd_actor_scale_percentile = kwargs["sdd_actor_scale_percentile"]
+            except KeyError:
+                pass
+            try:
+                limit_tracks = kwargs["limit_tracks"]
             except KeyError:
                 pass
 
@@ -52,20 +77,29 @@ class PedestrianEnv(gym.Env):
             screen=self.surface,
             num_actors=num_actors,
             tracks=tracks,
+            data_source=data_source,
+            sdd_processed_root=sdd_processed_root,
+            sdd_scene_id=sdd_scene_id,
+            sdd_actor_scale_percentile=sdd_actor_scale_percentile,
+            limit_tracks=limit_tracks,
             generator_name="uniform",
             generator_args=generator_args,
             tick_time=TICK_TIME,
-            ego_start=[0.05,[0.25,0.75]],
-            ego_goal=[0.95,[0.25,0.75]],
+            ego_start=[0.05, [0.25, 0.75]],
+            ego_goal=[0.95, [0.25, 0.75]],
         )
 
         # define the action space -- the car can go from full acceleration (100%/1) to full brake (-100%/-1) and can steer +/- 100%
         self.action_space = spaces.Box(
-            low=np.array([-1, -1]).astype(np.float32), high=np.array([1, 1]).astype(np.float32), dtype=np.float32
+            low=np.array([-1, -1]).astype(np.float32),
+            high=np.array([1, 1]).astype(np.float32),
+            dtype=np.float32,
         )
 
         # similarly the observation space is the current observation rendered as an array
-        self.observation_space = spaces.Box(low=np.float32(0.0), high=np.float32(1.0), shape=self.sim.observation_shape)
+        self.observation_space = spaces.Box(
+            low=np.float32(0.0), high=np.float32(1.0), shape=self.sim.observation_shape
+        )
 
     def step(self, action):
         """

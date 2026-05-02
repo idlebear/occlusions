@@ -2,7 +2,6 @@ import argparse
 import cProfile
 import csv
 from heapq import heappop, heappush
-from importlib.metadata import distribution
 from pathlib import Path
 from random import seed
 from simulation import Simulation
@@ -11,13 +10,11 @@ import pygame
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
-from pathlib import Path
 from scipy import sparse
 import json
 
-from importlib import import_module
-from os import path, mkdir
-from time import time, sleep, perf_counter
+from os import mkdir
+from time import time, perf_counter
 from pickle import load, dump
 from math import floor, sqrt
 import numpy as np
@@ -26,11 +23,8 @@ from PIL import Image, ImageDraw
 from controller.ModelParameters.Ackermann import Ackermann4
 from warp_mppi.legacy import PyCudaMPPI as MPPI
 from warp_mppi.legacy import evaluate_trajectories_by_entropy_gpu
+from warp_mppi.legacy import evaluate_discrete_oce_gpu
 
-try:
-    from warp_mppi.legacy import evaluate_discrete_oce_gpu
-except ImportError:
-    evaluate_discrete_oce_gpu = None
 from controller.validate import (
     visualize_variations,
     run_trajectory,
@@ -54,6 +48,7 @@ from trajectory_planner.trajectory_eval import evaluate
 from Actor import STATE as ActorStateEnum
 from entropy import evaluate_method
 from hmm import HMM
+from specialk import generate_specialk_trajectories
 
 
 def blocking_static_polygon_union(static_polygons):
@@ -118,6 +113,7 @@ def filter_static_collision_samples(
     weights,
     static_polygons,
     dt,
+    clearance=0.0,
 ):
     static_union = blocking_static_polygon_union(static_polygons)
     if static_union is None or static_union.is_empty:
@@ -144,7 +140,7 @@ def filter_static_collision_samples(
             static_union,
             vehicle_length=robot_model.L,
             vehicle_width=robot_model.W,
-            clearance=MIN_SEPARATION,
+            clearance=clearance,
         )
 
     filtered_weights[~collision_free] = 0.0
@@ -206,6 +202,380 @@ def bounded_weighted_control_average(u_nom, sampled_controls, weights, limits):
         axis=0,
     )
     return limits * np.tanh(z_nom + weighted_delta_z)
+
+
+def _agent_prediction_sequence(agent, agent_predictions, horizon):
+    """Return horizon future states for an agent in MPPI state layout."""
+    horizon = int(horizon)
+    current = np.asarray(agent.get("pos", np.zeros(4)), dtype=float).reshape(-1)
+    if current.size < 4:
+        current = np.pad(current, (0, 4 - current.size), mode="constant")
+
+    agent_id = agent.get("id")
+    prediction = None
+    if agent_predictions is not None and agent_id in agent_predictions:
+        prediction = agent_predictions[agent_id]
+    elif agent.get("future") is not None:
+        prediction = agent.get("future")
+
+    if prediction is None:
+        states = np.repeat(current[:4][np.newaxis, :], horizon, axis=0)
+        return states.astype(np.float32), "current"
+
+    states = np.asarray(prediction, dtype=float)
+    if states.ndim == 3:
+        states = np.nanmean(states, axis=0)
+    if states.ndim == 1:
+        states = states.reshape(1, -1)
+    if states.ndim != 2 or states.shape[0] == 0 or states.shape[1] < 2:
+        states = np.repeat(current[:4][np.newaxis, :], horizon, axis=0)
+        return states.astype(np.float32), "current"
+
+    if states.shape[0] > 1 and np.linalg.norm(states[0, :2] - current[:2]) < 1.0e-4:
+        states = states[1:]
+
+    normalized = np.repeat(current[:4][np.newaxis, :], max(horizon, 1), axis=0)
+    valid_steps = min(horizon, states.shape[0])
+    state_cols = min(4, states.shape[1])
+    normalized[:valid_steps, :state_cols] = states[:valid_steps, :state_cols]
+    if valid_steps > 0 and valid_steps < horizon:
+        normalized[valid_steps:, :] = normalized[valid_steps - 1, :]
+    return normalized[:horizon].astype(np.float32), "prediction"
+
+
+def actor_dimension_scale(robot_model=None):
+    if robot_model is None:
+        return 1.0
+    return float(
+        getattr(
+            robot_model,
+            "actor_dimension_multiplier",
+            getattr(robot_model, "size_scale", getattr(robot_model, "scale", 1.0)),
+        )
+    )
+
+
+def mppi_dynamic_collision_buffer(robot_model=None, hard_clearance_margin=0.0):
+    # CUDA checks the ego footprint separately using vehicle_width/vehicle_length,
+    # so this buffer is only for hard collision inflation. Desired social
+    # clearance is handled separately by the soft dynamic clearance cost.
+    return float(hard_clearance_margin) * actor_dimension_scale(robot_model)
+
+
+def mppi_dynamic_clearance_margin(robot_model, clearance_margin):
+    return float(clearance_margin) * actor_dimension_scale(robot_model)
+
+
+def mppi_static_clearance_margin(robot_model, clearance_margin):
+    return float(clearance_margin) * actor_dimension_scale(robot_model)
+
+
+def build_dynamic_obstacles_for_mppi(
+    agents, agent_predictions, horizon, robot_model=None, hard_clearance_margin=0.0
+):
+    obstacles = []
+    debug = []
+    collision_buffer = mppi_dynamic_collision_buffer(
+        robot_model,
+        hard_clearance_margin,
+    )
+    for agent in agents:
+        states, source = _agent_prediction_sequence(agent, agent_predictions, horizon)
+        extent = float(agent.get("extent", 0.0))
+        obstacles.append(
+            {
+                "id": agent.get("id"),
+                "states": states,
+                "extent": [extent, extent],
+                "collision_buffer": collision_buffer,
+            }
+        )
+        debug.append(
+            {
+                "id": agent.get("id"),
+                "source": source,
+                "extent": extent,
+                "collision_buffer": collision_buffer,
+                "steps": int(states.shape[0]),
+                "start": states[0, :2].astype(float).tolist() if len(states) else None,
+                "end": states[-1, :2].astype(float).tolist() if len(states) else None,
+            }
+        )
+    return obstacles, debug
+
+
+def dynamic_agent_collision_threshold(agent, robot_model, clearance):
+    robot_radius = float(max(robot_model.W, robot_model.L) / 2.0)
+    return float(agent.get("extent", 0.0)) + max(0.0, float(clearance)) + robot_radius
+
+
+def collision_geometry_from_extent(extent, buffer=0.0):
+    extent_arr = np.asarray(extent, dtype=float).reshape(-1)
+    if extent_arr.size <= 0:
+        return np.asarray([0.0, 0.0, 0.0], dtype=float)
+    half_length = abs(float(extent_arr[0]))
+    half_width = abs(float(extent_arr[1])) if extent_arr.size > 1 else half_length
+    margin = max(0.0, float(buffer))
+    half_length += margin
+    half_width += margin
+    radius = max(min(half_length, half_width), 1.0e-3)
+    if half_length >= half_width:
+        return np.asarray([radius, max(half_length - radius, 0.0), 0.0], dtype=float)
+    return np.asarray([radius, 0.0, max(half_width - radius, 0.0)], dtype=float)
+
+
+def collision_circle_centers(state, geometry):
+    x, y, _v, theta = np.asarray(state, dtype=float).reshape(-1)[:4]
+    radius, offset_x, offset_y = np.asarray(geometry, dtype=float).reshape(3)
+    c = np.cos(theta)
+    s = np.sin(theta)
+    centers = []
+    for local_x, local_y in (
+        (-offset_x, -offset_y),
+        (0.0, 0.0),
+        (offset_x, offset_y),
+    ):
+        centers.append([x + local_x * c - local_y * s, y + local_x * s + local_y * c])
+    return radius, np.asarray(centers, dtype=float)
+
+
+def three_circle_min_clearance_host(ego_state, ego_geometry, actor_state, actor_geometry):
+    ego_radius, ego_centers = collision_circle_centers(ego_state, ego_geometry)
+    actor_radius, actor_centers = collision_circle_centers(actor_state, actor_geometry)
+    deltas = ego_centers[:, np.newaxis, :] - actor_centers[np.newaxis, :, :]
+    distances = np.linalg.norm(deltas, axis=2)
+    min_distance = float(np.min(distances))
+    min_clearance = min_distance - float(ego_radius + actor_radius)
+    return min_clearance, min_distance, float(ego_radius + actor_radius)
+
+
+def trajectory_dynamic_collision_summary(
+    trajectory,
+    agents,
+    agent_predictions,
+    horizon,
+    robot_model,
+    clearance,
+):
+    min_distance = float("inf")
+    min_clearance = float("inf")
+    closest = None
+    collision = False
+    ego_geometry = collision_geometry_from_extent(
+        (float(robot_model.L) / 2.0, float(robot_model.W) / 2.0)
+    )
+    for agent in agents:
+        states, source = _agent_prediction_sequence(agent, agent_predictions, horizon)
+        extent = float(agent.get("extent", 0.0))
+        actor_geometry = collision_geometry_from_extent(
+            (extent, extent),
+            buffer=clearance,
+        )
+        steps = min(states.shape[0], max(0, trajectory.shape[0] - 1))
+        for step_idx in range(steps):
+            clearance_value, dist, threshold = three_circle_min_clearance_host(
+                trajectory[step_idx + 1, :4],
+                ego_geometry,
+                states[step_idx, :4],
+                actor_geometry,
+            )
+            if clearance_value < min_clearance:
+                min_clearance = clearance_value
+            if dist < min_distance:
+                min_distance = dist
+                closest = {
+                    "agent_id": agent.get("id"),
+                    "step": step_idx,
+                    "time": None,
+                    "threshold": threshold,
+                    "clearance": clearance_value,
+                    "source": source,
+                }
+            if clearance_value < 0.0:
+                collision = True
+    return {
+        "collision": collision,
+        "min_distance": min_distance,
+        "min_clearance": min_clearance,
+        "closest": closest,
+    }
+
+
+def filter_dynamic_collision_samples(
+    *,
+    robot_model,
+    initial_state,
+    u_nom,
+    u_variations,
+    weights,
+    agents,
+    agent_predictions,
+    horizon,
+    dt,
+    clearance=None,
+):
+    if clearance is None:
+        clearance = MIN_SEPARATION * actor_dimension_scale(robot_model)
+    input_weights = np.asarray(weights, dtype=np.float32).copy()
+    filtered_weights = input_weights.copy()
+    sampled_controls = np.asarray(u_nom, dtype=np.float32)[
+        np.newaxis, :, :
+    ] + np.asarray(u_variations, dtype=np.float32)
+
+    collision_free = np.ones(sampled_controls.shape[0], dtype=bool)
+    min_distances = np.full(sampled_controls.shape[0], np.inf, dtype=np.float32)
+    for sample_idx, controls in enumerate(sampled_controls):
+        trajectory = run_trajectory(
+            vehicle=robot_model,
+            initial_state=initial_state,
+            controls=controls,
+            dt=dt,
+        )
+        summary = trajectory_dynamic_collision_summary(
+            trajectory=trajectory,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=horizon,
+            robot_model=robot_model,
+            clearance=clearance,
+        )
+        collision_free[sample_idx] = not summary["collision"]
+        min_distances[sample_idx] = summary["min_distance"]
+
+    if np.any(collision_free):
+        filtered_weights[~collision_free] = 0.0
+    else:
+        # If every sample violates desired clearance, preserving MPPI's relative
+        # weights avoids deadlocking into a zero-weight emergency stop. The final
+        # hard-overlap check below still catches true selected-trajectory collisions.
+        filtered_weights = input_weights.copy()
+
+    if np.any(collision_free) and float(np.sum(filtered_weights)) <= 0.0:
+        filtered_weights[collision_free] = 1.0
+
+    debug = {
+        "sampled_controls": sampled_controls,
+        "collision_free": collision_free,
+        "input_weights": input_weights,
+        "filtered_weights": filtered_weights,
+        "min_distances": min_distances,
+        "all_samples_violate_clearance": not bool(np.any(collision_free)),
+        "clearance": float(clearance),
+    }
+    return filtered_weights, debug
+
+
+def control_sequence_collision_summary(
+    *,
+    robot_model,
+    initial_state,
+    controls,
+    dt,
+    static_union=None,
+    static_clearance=0.0,
+    agents=None,
+    agent_predictions=None,
+    horizon=None,
+    dynamic_clearance=0.0,
+):
+    trajectory = run_trajectory(
+        vehicle=robot_model,
+        initial_state=initial_state,
+        controls=controls,
+        dt=dt,
+    )
+    static_collision = False
+    if static_union is not None:
+        static_collision = trajectory_collides_with_static(
+            trajectory,
+            static_union,
+            vehicle_length=robot_model.L,
+            vehicle_width=robot_model.W,
+            clearance=static_clearance,
+        )
+
+    dynamic_summary = {"collision": False, "min_distance": float("inf"), "closest": None}
+    if agents:
+        dynamic_summary = trajectory_dynamic_collision_summary(
+            trajectory=trajectory,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=horizon if horizon is not None else len(controls),
+            robot_model=robot_model,
+            clearance=dynamic_clearance,
+        )
+
+    return {
+        "trajectory": trajectory,
+        "static_collision": static_collision,
+        "dynamic_collision": bool(dynamic_summary["collision"]),
+        "dynamic_summary": dynamic_summary,
+        "safe": not static_collision and not bool(dynamic_summary["collision"]),
+    }
+
+
+def find_safe_control_candidate(
+    *,
+    robot_model,
+    initial_state,
+    u_nom,
+    u_variations,
+    weights,
+    dt,
+    static_union=None,
+    static_clearance=0.0,
+    agents=None,
+    agent_predictions=None,
+    horizon=None,
+    dynamic_clearance=0.0,
+    max_candidates=200,
+):
+    candidates = [("nominal", None, np.asarray(u_nom, dtype=float))]
+    if u_variations is not None and len(u_variations):
+        sampled_controls = np.asarray(u_nom, dtype=float)[np.newaxis, :, :] + np.asarray(
+            u_variations,
+            dtype=float,
+        )
+        weights_arr = np.asarray(weights, dtype=float).reshape(-1)
+        if weights_arr.shape[0] == sampled_controls.shape[0]:
+            order = np.argsort(weights_arr)[::-1]
+        else:
+            order = np.arange(sampled_controls.shape[0])
+        for sample_idx in order[: min(int(max_candidates), sampled_controls.shape[0])]:
+            candidates.append(
+                (
+                    "sample",
+                    int(sample_idx),
+                    sampled_controls[int(sample_idx)],
+                )
+            )
+
+    best_collision = None
+    for source, sample_idx, controls in candidates:
+        summary = control_sequence_collision_summary(
+            robot_model=robot_model,
+            initial_state=initial_state,
+            controls=controls,
+            dt=dt,
+            static_union=static_union,
+            static_clearance=static_clearance,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=horizon,
+            dynamic_clearance=dynamic_clearance,
+        )
+        if summary["safe"]:
+            summary.update(
+                {
+                    "source": source,
+                    "sample_idx": sample_idx,
+                    "controls": controls,
+                }
+            )
+            return summary
+        if best_collision is None:
+            best_collision = summary
+    return best_collision
 
 
 def path_state(path, index):
@@ -1939,6 +2309,9 @@ def astar_grid_penalized(
     cell_penalty=None,
     edge_penalty=None,
     turn_penalty=0.0,
+    start_heading=None,
+    resolution=1.0,
+    min_turn_radius=None,
 ):
     rows, cols = is_blocked.shape
     cell_penalty = cell_penalty or {}
@@ -1962,6 +2335,14 @@ def astar_grid_penalized(
     def heuristic(cell):
         return np.hypot(cell[0] - goal_cell[0], cell[1] - goal_cell[1])
 
+    def heading_for_current_cell(cell):
+        previous = came_from.get(cell)
+        if previous is not None:
+            return float(np.arctan2(cell[1] - previous[1], cell[0] - previous[0]))
+        if start_heading is not None:
+            return float(start_heading)
+        return None
+
     while frontier:
         _priority, current_cost, current = heappop(frontier)
         if current_cost > cost_so_far.get(current, float("inf")) + 1.0e-9:
@@ -1969,7 +2350,20 @@ def astar_grid_penalized(
         if current == goal_cell:
             return reconstruct_grid_path(came_from, current)
 
+        current_heading = heading_for_current_cell(current)
         for dx, dy, move_cost in neighbors:
+            move_heading = float(np.arctan2(dy, dx))
+            if current_heading is not None:
+                heading_delta = abs(wrap_angle(move_heading - current_heading))
+                if heading_delta > np.pi / 2.0 + 1.0e-9:
+                    continue
+                if min_turn_radius is not None and float(min_turn_radius) > 1.0e-9:
+                    move_distance = float(move_cost) * float(resolution)
+                    max_heading_delta = move_distance / float(min_turn_radius)
+                    max_heading_delta += np.deg2rad(5.0)
+                    if heading_delta > max_heading_delta:
+                        continue
+
             nx = current[0] + dx
             ny = current[1] + dy
             if nx < 0 or ny < 0 or nx >= cols or ny >= rows or is_blocked[ny, nx]:
@@ -1990,7 +2384,6 @@ def astar_grid_penalized(
                     current[1] - previous[1],
                     current[0] - previous[0],
                 )
-                move_heading = np.arctan2(dy, dx)
                 turn_cost = float(turn_penalty) * abs(
                     wrap_angle(move_heading - previous_heading)
                 )
@@ -1998,7 +2391,9 @@ def astar_grid_penalized(
             if new_cost < cost_so_far.get(next_cell, float("inf")):
                 cost_so_far[next_cell] = new_cost
                 came_from[next_cell] = current
-                heappush(frontier, (new_cost + heuristic(next_cell), new_cost, next_cell))
+                heappush(
+                    frontier, (new_cost + heuristic(next_cell), new_cost, next_cell)
+                )
 
     return None
 
@@ -2047,7 +2442,8 @@ def arc_points_for_turn(
         2,
         int(
             np.ceil(
-                abs(float(turn_angle)) * float(turn_radius)
+                abs(float(turn_angle))
+                * float(turn_radius)
                 / max(float(sample_distance), 1.0e-3)
             )
         ),
@@ -2110,7 +2506,7 @@ def ackermann_smooth_route(
             continue
 
         tangent_distance = min_turn_radius * np.tan(abs(turn_angle) / 2.0)
-        max_tangent = 0.45 * min(incoming_len, outgoing_len)
+        max_tangent = 0.8 * min(incoming_len, outgoing_len)
         if tangent_distance > max_tangent:
             return None, "turn_radius"
 
@@ -2184,9 +2580,6 @@ def points_to_frenet_path(points, *, start_heading, speed, dt, max_points):
 
     yaws = []
     for idx in range(sampled.shape[0]):
-        if idx == 0:
-            yaws.append(float(start_heading))
-            continue
         if idx < sampled.shape[0] - 1:
             delta = sampled[idx + 1] - sampled[idx]
             if np.linalg.norm(delta) > 1.0e-9:
@@ -2194,22 +2587,29 @@ def points_to_frenet_path(points, *, start_heading, speed, dt, max_points):
                 continue
         yaws.append(yaws[-1] if yaws else float(start_heading))
 
+    if sampled.shape[0] >= 2:
+        deltas = np.linalg.norm(np.diff(sampled[:, :2], axis=0), axis=1)
+        curvatures = [
+            0.0 if ds <= 1.0e-9 else wrap_angle(yaws[idx + 1] - yaws[idx]) / float(ds)
+            for idx, ds in enumerate(deltas)
+        ]
+    else:
+        deltas = np.asarray([], dtype=float)
+        curvatures = []
+
+    if yaws:
+        yaws[0] = float(start_heading)
+
     path.x = sampled[:, 0].astype(float).tolist()
     path.y = sampled[:, 1].astype(float).tolist()
     path.yaw = yaws
     path.s_d = [float(speed)] * sampled.shape[0]
     path.t = [idx * float(dt) for idx in range(sampled.shape[0])]
     if sampled.shape[0] >= 2:
-        deltas = np.linalg.norm(np.diff(sampled[:, :2], axis=0), axis=1)
         path.ds = deltas.astype(float).tolist()
         path.s = [0.0]
         path.s.extend(np.cumsum(deltas).astype(float).tolist())
-        path.c = [
-            0.0
-            if ds <= 1.0e-9
-            else wrap_angle(yaws[idx + 1] - yaws[idx]) / float(ds)
-            for idx, ds in enumerate(deltas)
-        ]
+        path.c = curvatures
     else:
         path.ds = []
         path.s = [0.0]
@@ -2240,204 +2640,172 @@ def frenet_path_static_collision_free(
     return True
 
 
-def k_shortest_ackermann_grid_paths(
-    start_state,
-    goal_xy,
-    static_polygons,
-    *,
-    display_offset,
-    display_diff,
-    vehicle_length,
-    vehicle_width,
-    max_steer,
-    speed,
-    dt,
-    horizon,
-    resolution=None,
-    search_resolution=None,
-    k=3,
-    heading_bins=16,
-    near_shortest_factor=1.8,
-    max_overlap=0.65,
-    max_attempts=30,
-    diversity_penalty=1.0,
-    turn_penalty=0.15,
-    debug=False,
-):
-    base_resolution = float(resolution or GRID_RESOLUTION)
-    min_turn_radius = float(vehicle_length) / max(np.tan(float(max_steer)), 1.0e-6)
-    search_resolution = float(
-        search_resolution or max(0.75, min_turn_radius, 2.5 * base_resolution)
-    )
-    grid = build_static_planning_grid(
-        static_polygons,
-        display_offset=display_offset,
-        display_diff=display_diff,
-        vehicle_length=vehicle_length,
-        vehicle_width=vehicle_width,
-        resolution=search_resolution,
-    )
-    static_union = blocking_static_polygon_union(static_polygons)
-    collision_region = (
-        static_union.buffer(MIN_SEPARATION)
-        if static_union is not None and not static_union.is_empty
-        else None
-    )
-    if not goal_position_collision_free(
-        goal_xy,
-        collision_region,
-        display_offset=display_offset,
-        display_diff=display_diff,
-        vehicle_length=vehicle_length,
-        vehicle_width=vehicle_width,
-        heading_bins=heading_bins,
-    ):
-        if debug:
-            print("[kpaths] rejected goal: no collision-free vehicle orientation")
+def select_best_kpath_candidates(candidates, *, k, max_overlap):
+    if not candidates:
         return []
 
-    start_cell = find_nearest_free_cell(
-        grid["point_to_cell"](start_state[:2]),
-        grid["is_blocked"],
-        grid["cols"],
-        grid["rows"],
-    )
-    goal_cell = find_nearest_free_cell(
-        grid["point_to_cell"](goal_xy),
-        grid["is_blocked"],
-        grid["cols"],
-        grid["rows"],
-    )
-    if start_cell is None or goal_cell is None:
-        if debug:
-            print("[kpaths] no free start or goal cell in coarse search grid")
-        return []
-
-    accepted = []
-    accepted_cells = []
-    cell_penalty = {}
-    edge_penalty = {}
-    best_length = None
-    reject_counts = {
-        "missing": 0,
-        "duplicate": 0,
-        "loop": 0,
-        "long": 0,
-        "overlap": 0,
-        "initial": 0,
-        "turn_radius": 0,
-        "collision": 0,
+    cell_counts = {}
+    for candidate in candidates:
+        for cell in set(candidate["cells"]):
+            cell_counts[cell] = cell_counts.get(cell, 0) + 1
+    common_threshold = max(2, int(np.ceil(0.5 * len(candidates))))
+    common_cells = {
+        cell for cell, count in cell_counts.items() if count >= common_threshold
     }
 
-    for attempt in range(max(int(max_attempts), int(k))):
-        cells = astar_grid_penalized(
+    def diversity_cells(candidate):
+        cells = [cell for cell in candidate["cells"] if cell not in common_cells]
+        return cells or candidate["cells"]
+
+    def candidate_overlap(candidate, selected):
+        if not selected:
+            return 0.0
+        cells = set(diversity_cells(candidate))
+        if not cells:
+            return 0.0
+        overlaps = []
+        for selected_candidate in selected:
+            selected_cells = set(diversity_cells(selected_candidate))
+            denom = max(1, min(len(cells), len(selected_cells)))
+            overlaps.append(len(cells & selected_cells) / float(denom))
+        return float(max(overlaps)) if overlaps else 0.0
+
+    ordered = sorted(candidates, key=lambda item: item["length"])
+    selected = []
+    for candidate in ordered:
+        overlap = candidate_overlap(candidate, selected)
+        if overlap <= float(max_overlap) or not selected:
+            selected.append(candidate)
+            if len(selected) >= int(k):
+                return selected
+
+    selected_ids = {id(candidate) for candidate in selected}
+    for candidate in ordered:
+        if id(candidate) in selected_ids:
+            continue
+        selected.append(candidate)
+        selected_ids.add(id(candidate))
+        if len(selected) >= int(k):
+            break
+    return selected
+
+
+def grid_path_terminal_heading(cells, fallback_heading):
+    if len(cells) < 2:
+        return float(fallback_heading)
+    start = cells[-2]
+    end = cells[-1]
+    return float(np.arctan2(end[1] - start[1], end[0] - start[0]))
+
+
+def point_to_segment_distance_cells(cell, start_cell, goal_cell):
+    point = np.asarray(cell, dtype=float)
+    start = np.asarray(start_cell, dtype=float)
+    goal = np.asarray(goal_cell, dtype=float)
+    segment = goal - start
+    length2 = float(segment @ segment)
+    if length2 <= 1.0e-9:
+        return float(np.linalg.norm(point - start)), 0.0
+    t = float(np.clip(((point - start) @ segment) / length2, 0.0, 1.0))
+    projection = start + t * segment
+    return float(np.linalg.norm(point - projection)), t
+
+
+def build_kpath_anchor_cells(grid, start_cell, goal_cell, *, max_anchors):
+    is_blocked = grid["is_blocked"]
+    rows = int(grid["rows"])
+    cols = int(grid["cols"])
+    candidates = []
+    min_endpoint_distance = 2.0
+    for row in range(rows):
+        for col in range(cols):
+            if is_blocked[row, col]:
+                continue
+            cell = (col, row)
+            if cell == start_cell or cell == goal_cell:
+                continue
+            start_distance = np.hypot(col - start_cell[0], row - start_cell[1])
+            goal_distance = np.hypot(col - goal_cell[0], row - goal_cell[1])
+            if min(start_distance, goal_distance) < min_endpoint_distance:
+                continue
+            perpendicular, progress = point_to_segment_distance_cells(
+                cell,
+                start_cell,
+                goal_cell,
+            )
+            if progress <= 0.05 or progress >= 0.95:
+                continue
+            score = perpendicular + 0.15 * min(start_distance, goal_distance)
+            candidates.append((score, cell))
+
+    candidates.sort(reverse=True)
+    selected = []
+    spacing = max(3.0, 0.12 * max(rows, cols))
+    for _score, cell in candidates:
+        if all(
+            np.hypot(cell[0] - other[0], cell[1] - other[1]) >= spacing
+            for other in selected
+        ):
+            selected.append(cell)
+            if len(selected) >= int(max_anchors):
+                break
+    return selected
+
+
+def astar_grid_penalized_via(
+    start_cell,
+    goal_cell,
+    anchor_cell,
+    is_blocked,
+    *,
+    start_heading,
+    resolution,
+    min_turn_radius,
+    cell_penalty=None,
+    edge_penalty=None,
+    turn_penalty=0.0,
+):
+    if anchor_cell is None:
+        return astar_grid_penalized(
             start_cell,
             goal_cell,
-            grid["is_blocked"],
+            is_blocked,
             cell_penalty=cell_penalty,
             edge_penalty=edge_penalty,
             turn_penalty=turn_penalty,
-        )
-        if not cells:
-            reject_counts["missing"] += 1
-            break
-
-        length = grid_path_length(cells, search_resolution)
-        if best_length is None:
-            best_length = max(length, search_resolution)
-        duplicate = cells in accepted_cells
-        loop = grid_path_has_loop(cells)
-        overlap = grid_path_overlap(cells, accepted_cells)
-        near_shortest = length <= best_length * float(near_shortest_factor)
-        diverse = overlap <= float(max_overlap) or len(accepted_cells) == 0
-
-        route = [list(start_state[:2])]
-        route.extend(grid["cell_to_point"](cell) for cell in cells[1:-1])
-        route.append(list(goal_xy))
-        route = simplify_route_collinear(route)
-        initial_ok, initial_reason = route_respects_initial_kinematics(
-            route,
-            start_state,
-            vehicle_length=vehicle_length,
-            max_steer=max_steer,
-            heading_bins=heading_bins,
-        )
-        smoothed_route, smooth_reason = ackermann_smooth_route(
-            route,
-            start_heading=start_state[ActorStateEnum.THETA],
-            vehicle_length=vehicle_length,
-            max_steer=max_steer,
-            sample_distance=max(search_resolution * 0.2, 0.05),
+            start_heading=start_heading,
+            resolution=resolution,
+            min_turn_radius=min_turn_radius,
         )
 
-        path = None
-        collision_free = False
-        if smoothed_route is not None:
-            path = points_to_frenet_path(
-                smoothed_route,
-                start_heading=start_state[ActorStateEnum.THETA],
-                speed=speed,
-                dt=dt,
-                max_points=max(int(horizon) + 1, 2),
-            )
-            collision_free = frenet_path_static_collision_free(
-                path,
-                collision_region,
-                vehicle_length=vehicle_length,
-                vehicle_width=vehicle_width,
-            )
-
-        if (
-            not duplicate
-            and not loop
-            and near_shortest
-            and diverse
-            and initial_ok
-            and smoothed_route is not None
-            and collision_free
-        ):
-            accepted.append({"path": path, "route": smoothed_route, "cells": cells})
-            accepted_cells.append(cells)
-            if len(accepted) >= int(k):
-                break
-        else:
-            if duplicate:
-                reject_counts["duplicate"] += 1
-            if loop:
-                reject_counts["loop"] += 1
-            if not near_shortest:
-                reject_counts["long"] += 1
-            if not diverse:
-                reject_counts["overlap"] += 1
-            if not initial_ok:
-                reject_counts["initial"] += 1
-            if smoothed_route is None:
-                reject_counts["turn_radius"] += 1
-            if smoothed_route is not None and not collision_free:
-                reject_counts["collision"] += 1
-            if debug:
-                print(
-                    "[kpaths] rejected grid route "
-                    f"attempt={attempt} len={length:.3f} overlap={overlap:.2f} "
-                    f"reason={smooth_reason or initial_reason or 'constraints'}"
-                )
-
-        penalty_scale = float(diversity_penalty) * (1.0 + 0.25 * attempt)
-        for cell in cells:
-            cell_penalty[cell] = cell_penalty.get(cell, 0.0) + penalty_scale
-        for a, b in zip(cells[:-1], cells[1:]):
-            edge = tuple(sorted((a, b)))
-            edge_penalty[edge] = edge_penalty.get(edge, 0.0) + 2.0 * penalty_scale
-
-    if debug:
-        lengths = [round(waypoint_route_length(item["route"]), 3) for item in accepted]
-        print(
-            "[kpaths] grid accepted "
-            f"{len(accepted)}/{int(k)} routes lengths={lengths} "
-            f"search_resolution={search_resolution:.3f} "
-            f"rejects={reject_counts}"
-        )
-    return accepted
+    first = astar_grid_penalized(
+        start_cell,
+        anchor_cell,
+        is_blocked,
+        cell_penalty=cell_penalty,
+        edge_penalty=edge_penalty,
+        turn_penalty=turn_penalty,
+        start_heading=start_heading,
+        resolution=resolution,
+        min_turn_radius=min_turn_radius,
+    )
+    if not first:
+        return None
+    second_heading = grid_path_terminal_heading(first, start_heading)
+    second = astar_grid_penalized(
+        anchor_cell,
+        goal_cell,
+        is_blocked,
+        cell_penalty=cell_penalty,
+        edge_penalty=edge_penalty,
+        turn_penalty=turn_penalty,
+        start_heading=second_heading,
+        resolution=resolution,
+        min_turn_radius=min_turn_radius,
+    )
+    if not second:
+        return None
+    return first + second[1:]
 
 
 def hybrid_astar_search(
@@ -3482,17 +3850,16 @@ def choose_control_path_index(
     selected_index,
     *,
     start_heading,
-    follow_selected_path=False,
     max_heading_error=np.deg2rad(90.0),
     debug=False,
 ):
     if not paths:
         return 0
-    if not follow_selected_path:
-        return 0
 
     selected_index = int(np.clip(selected_index, 0, len(paths) - 1))
-    heading_error = path_initial_heading_error(paths[selected_index], start_heading)
+    heading_error = path_initial_heading_error(
+        paths[selected_index]["path"], start_heading
+    )
     if heading_error <= float(max_heading_error):
         return selected_index
 
@@ -3722,113 +4089,289 @@ def generate_trajectory_for_waypoints(
     return trajectories
 
 
-def generate_trajectories(
+def generate_k_path_trajectories(
     start,
     end,
     args,
     *,
-    nominal_waypoints=None,
     static_polygons=None,
     display_offset=None,
     display_diff=None,
     vehicle_length=0.7,
     vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
     resolution=None,
-    return_debug=False,
 ):
-    start_xy = list(start[:2])
-    end_xy = list(end[:2])
-    generator = str(getattr(args, "trajectory_generator", "kpaths")).lower()
 
-    if generator == "kpaths":
-        candidate_paths = k_shortest_ackermann_grid_paths(
-            start,
-            end_xy,
-            static_polygons,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            vehicle_width=vehicle_width,
-            max_steer=CONTROL_LIMITS[1],
-            speed=args.robot_speed,
-            dt=args.tick_time,
-            horizon=args.horizon,
-            resolution=resolution,
-            search_resolution=args.kpaths_search_resolution,
-            k=max(1, int(args.planner_trajectory_count)),
-            heading_bins=args.kpaths_heading_bins,
-            near_shortest_factor=args.kpaths_near_shortest_factor,
-            max_overlap=args.kpaths_max_overlap,
-            max_attempts=args.kpaths_max_attempts,
-            diversity_penalty=args.kpaths_diversity_penalty,
-            turn_penalty=args.kpaths_turn_penalty,
-            debug=getattr(args, "debug_kpaths", False)
-            or getattr(args, "debug_steering", False),
-        )
-        trajectories = []
-        accepted_routes = []
-        for item in candidate_paths:
-            path = item["path"]
-            route = item["route"]
-            if trajectory_respects_kinematic_model(
-                path,
-                vehicle_length=vehicle_length,
-                max_steer=CONTROL_LIMITS[1],
-                curvature_tolerance=args.kpaths_curvature_tolerance,
-            ):
-                trajectories.append(path)
-                accepted_routes.append(route)
-        if trajectories:
-            if return_debug:
-                return trajectories, {"routes": accepted_routes, "generator": "kpaths"}
-            return trajectories
-        if return_debug:
-            return [], {
-                "routes": [item["route"] for item in candidate_paths],
-                "generator": "kpaths_no_valid_ackermann_grid_trajectories",
-            }
-        return []
+    speed = args.robot_speed
+    dt = args.tick_time
+    horizon = args.horizon
+    k = max(1, int(args.trajectory_count))
+    heading_bins = args.kpaths_heading_bins
+    near_shortest_factor = args.kpaths_near_shortest_factor
+    max_overlap = args.kpaths_max_overlap
+    max_attempts = args.kpaths_max_attempts
+    diversity_penalty = args.kpaths_diversity_penalty
+    turn_penalty = args.kpaths_turn_penalty
+    debug = (
+        getattr(args, "debug_paths", False)
+        or getattr(args, "debug_kpaths", False)
+        or getattr(args, "debug_steering", False)
+    )
+    base_resolution = float(resolution or GRID_RESOLUTION)
+    min_turn_radius = float(vehicle_length) / max(np.tan(float(max_steer)), 1.0e-6)
+    search_resolution = float(
+        args.kpaths_search_resolution or max(min_turn_radius, base_resolution)
+    )
 
-    waypoints = nominal_waypoints or [start_xy, end_xy]
-    if (
-        nominal_waypoints is None
-        and static_polygons
-        and display_offset is not None
-        and display_diff is not None
-    ):
-        waypoints = plan_static_route(
-            start_xy,
-            end_xy,
-            static_polygons,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            vehicle_width=vehicle_width,
-            resolution=resolution,
-            start_heading=start[3],
-            heading_lookahead=getattr(args, "route_heading_lookahead", None),
-            max_heading_error=np.deg2rad(
-                getattr(args, "max_initial_route_heading_error_deg", 35.0)
-            ),
-        )
-    trajectories = generate_trajectory_for_waypoints(
-        start,
-        waypoints,
-        args,
-        static_polygons=static_polygons,
+    grid = build_static_planning_grid(
+        static_polygons,
         display_offset=display_offset,
         display_diff=display_diff,
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
-        resolution=resolution,
-        trajectories_requested=max(1, int(args.planner_trajectory_count)),
+        resolution=search_resolution,
     )
-    if return_debug:
-        return trajectories, {
-            "routes": [dedupe_waypoints(waypoints)],
-            "generator": "frenet",
-        }
-    return trajectories
+    static_union = blocking_static_polygon_union(static_polygons)
+    collision_region = (
+        static_union.buffer(MIN_SEPARATION * float(vehicle_scale))
+        if static_union is not None and not static_union.is_empty
+        else None
+    )
+
+    start_cell = find_nearest_free_cell(
+        grid["point_to_cell"](start[:2]),
+        grid["is_blocked"],
+        grid["cols"],
+        grid["rows"],
+    )
+    goal_cell = find_nearest_free_cell(
+        grid["point_to_cell"](end[:2]),
+        grid["is_blocked"],
+        grid["cols"],
+        grid["rows"],
+    )
+    if start_cell is None or goal_cell is None:
+        if debug:
+            print("[kpaths] no free start or goal cell in coarse search grid")
+        return []
+
+    anchor_cells = build_kpath_anchor_cells(
+        grid,
+        start_cell,
+        goal_cell,
+        max_anchors=max(int(max_attempts), int(k)),
+    )
+    candidates = []
+    candidate_cells = []
+    cell_penalty = {}
+    edge_penalty = {}
+    best_length = None
+    reject_counts = {
+        "missing": 0,
+        "duplicate": 0,
+        "loop": 0,
+        "long": 0,
+        "overlap": 0,
+        "initial": 0,
+        "turn_radius": 0,
+        "collision": 0,
+        "kinematics": 0,
+    }
+
+    for attempt in range(max(int(max_attempts), int(k))):
+        anchor_cell = None
+        if anchor_cells and attempt > 0:
+            anchor_cell = anchor_cells[(attempt - 1) % len(anchor_cells)]
+
+        cells = astar_grid_penalized_via(
+            start_cell,
+            goal_cell,
+            anchor_cell,
+            grid["is_blocked"],
+            cell_penalty=cell_penalty,
+            edge_penalty=edge_penalty,
+            turn_penalty=turn_penalty,
+            start_heading=start[ActorStateEnum.THETA],
+            resolution=search_resolution,
+            min_turn_radius=min_turn_radius,
+        )
+        if not cells:
+            reject_counts["missing"] += 1
+            continue
+
+        length = grid_path_length(cells, search_resolution)
+        if best_length is None:
+            best_length = max(length, search_resolution)
+        duplicate = cells in candidate_cells
+        loop = grid_path_has_loop(cells)
+        overlap = grid_path_overlap(cells, candidate_cells)
+        near_shortest = length <= best_length * float(near_shortest_factor)
+
+        route = [list(start[:2])]
+        route.extend(grid["cell_to_point"](cell) for cell in cells[1:-1])
+        route.append(list(end[:2]))
+        route = simplify_route_collinear(route)
+        initial_ok, initial_reason = route_respects_initial_kinematics(
+            route,
+            start,
+            vehicle_length=vehicle_length,
+            max_steer=max_steer,
+            heading_bins=heading_bins,
+        )
+        smoothed_route, smooth_reason = ackermann_smooth_route(
+            route,
+            start_heading=start[ActorStateEnum.THETA],
+            vehicle_length=vehicle_length,
+            max_steer=max_steer,
+            sample_distance=max(search_resolution * 0.2, 0.05),
+        )
+
+        path = None
+        collision_free = False
+        if smoothed_route is not None:
+            path = points_to_frenet_path(
+                smoothed_route,
+                start_heading=start[ActorStateEnum.THETA],
+                speed=speed,
+                dt=dt,
+                max_points=max(int(horizon) + 1, 2),
+            )
+            collision_free = frenet_path_static_collision_free(
+                path,
+                collision_region,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+            )
+
+        kinematics_ok = (
+            smoothed_route is not None
+            and trajectory_respects_kinematic_model(
+                path,
+                vehicle_length=vehicle_length,
+                max_steer=max_steer,
+                curvature_tolerance=args.kpaths_curvature_tolerance,
+            )
+        )
+
+        if (
+            not duplicate
+            and not loop
+            and near_shortest
+            and initial_ok
+            and smoothed_route is not None
+            and collision_free
+            and kinematics_ok
+        ):
+            candidates.append(
+                {
+                    "path": path,
+                    "route": smoothed_route,
+                    "cells": cells,
+                    "length": length,
+                    "anchor": anchor_cell,
+                    "generator": "kpaths",
+                }
+            )
+            candidate_cells.append(cells)
+        else:
+            if duplicate:
+                reject_counts["duplicate"] += 1
+            if loop:
+                reject_counts["loop"] += 1
+            if not near_shortest:
+                reject_counts["long"] += 1
+            if not initial_ok:
+                reject_counts["initial"] += 1
+            if smoothed_route is None:
+                reject_counts["turn_radius"] += 1
+            if smoothed_route is not None and not collision_free:
+                reject_counts["collision"] += 1
+            if not kinematics_ok:
+                reject_counts["kinematics"] += 1
+            if debug:
+                print(
+                    "[kpaths] rejected grid route "
+                    f"attempt={attempt} anchor={anchor_cell} "
+                    f"len={length:.3f} overlap={overlap:.2f} "
+                    f"reason={smooth_reason or initial_reason or 'constraints'}"
+                )
+
+        penalty_scale = float(diversity_penalty) * (1.0 + 0.25 * attempt)
+        for cell in cells:
+            cell_penalty[cell] = cell_penalty.get(cell, 0.0) + penalty_scale
+        for a, b in zip(cells[:-1], cells[1:]):
+            edge = tuple(sorted((a, b)))
+            edge_penalty[edge] = edge_penalty.get(edge, 0.0) + 2.0 * penalty_scale
+
+    accepted = select_best_kpath_candidates(
+        candidates,
+        k=k,
+        max_overlap=max_overlap,
+    )
+
+    if debug:
+        lengths = [round(waypoint_route_length(item["route"]), 3) for item in accepted]
+        print(
+            "[kpaths] grid accepted "
+            f"{len(accepted)}/{int(k)} routes "
+            f"candidates={len(candidates)}/{int(max_attempts)} "
+            f"anchors={len(anchor_cells)} "
+            f"lengths={lengths} "
+            f"search_resolution={search_resolution:.3f} "
+            f"rejects={reject_counts}"
+        )
+
+    return accepted
+
+
+def generate_trajectories(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+):
+    generator = str(getattr(args, "trajectory_generator", "kpaths")).lower()
+
+    if generator == "kpaths":
+        return generate_k_path_trajectories(
+            start,
+            end,
+            args,
+            static_polygons=static_polygons,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            vehicle_scale=vehicle_scale,
+            max_steer=max_steer,
+            resolution=resolution,
+        )
+    elif generator == "specialk":
+        return generate_specialk_trajectories(
+            start,
+            end,
+            args,
+            static_polygons=static_polygons,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            vehicle_scale=vehicle_scale,
+            max_steer=max_steer,
+            resolution=resolution,
+        )
+    else:
+        raise ValueError(f"Unsupported trajectory generator: {generator}")
 
 
 def get_control(
@@ -3842,6 +4385,7 @@ def get_control(
     goal,
     path,
     agents,
+    agent_predictions,
     args,
     static_polygons=None,
     u_prev=None,
@@ -3900,22 +4444,20 @@ def get_control(
                 }
             )
 
-    for agent in agents:
-        # for each agent, collect the center, bounding box, radius, closest point, and distance from the ego vehicle
-        # BUGBUG -- this is a bit of a hack -- we're assuming the bounding box is a circle based on the width of the vehicle
-        #           and not the worst case length.  We need to represent agents as a series circles, but for now this should
-        #           be good enough.
-        actors.append(
-            {
-                # BUGBUG - need to implement the agent prediction motion
-                "states": np.array(
-                    [agent["pos"][0], agent["pos"][1], 0, agent["pos"][2]]
-                    * pts_to_update
-                ).reshape(
-                    -1, 4
-                ),  # x, y, v, theta
-                "extent": [agent["extent"], agent["extent"]],
-            }
+    dynamic_actor_obstacles, dynamic_actor_debug = build_dynamic_obstacles_for_mppi(
+        agents,
+        agent_predictions,
+        args.horizon,
+        robot_model=robot_model,
+        hard_clearance_margin=args.dynamic_hard_clearance_margin,
+    )
+    actors.extend(dynamic_actor_obstacles)
+    if getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
+        print(
+            "[dynamic-obstacles] "
+            f"tick={debug_tick} visible={len(agents)} horizon={args.horizon} "
+            f"lookahead={args.horizon * args.tick_time:.2f}s "
+            f"agents={dynamic_actor_debug}"
         )
 
     section_start = perf_counter()
@@ -3944,8 +4486,15 @@ def get_control(
     total_weight = np.sum(u_weights)
     static_union = None
     static_debug = None
+    dynamic_debug = None
     control_timing["static_sample_filter"] = 0.0
     control_timing["static_final_check"] = 0.0
+    control_timing["dynamic_sample_filter"] = 0.0
+    control_timing["dynamic_final_check"] = 0.0
+    static_hard_clearance = mppi_static_clearance_margin(
+        robot_model,
+        args.static_hard_clearance_margin,
+    )
     if static_polygons and args.host_static_sample_filter:
         section_start = perf_counter()
         u_weights, static_union, static_debug = filter_static_collision_samples(
@@ -3956,6 +4505,7 @@ def get_control(
             weights=u_weights,
             static_polygons=static_polygons,
             dt=args.tick_time,
+            clearance=static_hard_clearance,
         )
         control_timing["static_sample_filter"] = perf_counter() - section_start
         static_safe_weight = float(np.sum(u_weights))
@@ -3981,11 +4531,51 @@ def get_control(
     elif static_polygons:
         static_union = blocking_static_polygon_union(static_polygons)
 
+    if agents and args.host_dynamic_sample_filter:
+        section_start = perf_counter()
+        u_weights, dynamic_debug = filter_dynamic_collision_samples(
+            robot_model=robot_model,
+            initial_state=initial_state,
+            u_nom=u_nom,
+            u_variations=u_var,
+            weights=u_weights,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=args.horizon,
+            dt=args.tick_time,
+            clearance=MIN_SEPARATION * actor_dimension_scale(robot_model),
+        )
+        control_timing["dynamic_sample_filter"] = perf_counter() - section_start
+        dynamic_safe_weight = float(np.sum(u_weights))
+        if dynamic_safe_weight > 0.0:
+            sampled_controls = u_nom[np.newaxis, :, :] + u_var
+            u = bounded_weighted_control_average(
+                u_nom=u_nom,
+                sampled_controls=sampled_controls,
+                weights=u_weights,
+                limits=CONTROL_LIMITS,
+            )
+            u[:, 0] = np.clip(
+                u[:, 0],
+                a_min=-CONTROL_LIMITS[0],
+                a_max=CONTROL_LIMITS[0],
+            )
+            u[:, 1] = np.clip(
+                u[:, 1],
+                a_min=-CONTROL_LIMITS[1],
+                a_max=CONTROL_LIMITS[1],
+            )
+        total_weight = np.sum(u_weights)
+
     # Enhanced emergency stop logic
     WEIGHT_THRESHOLD = 1e-10  # Threshold for extremely small weights
     MAX_EFFECTIVE_COST = 1e6  # Threshold for extremely high costs
 
     emergency_stop = False
+    dynamic_hard_clearance = mppi_dynamic_collision_buffer(
+        robot_model,
+        args.dynamic_hard_clearance_margin,
+    )
 
     if total_weight == 0:
         print("EMERGENCY STOP: No valid control found (zero weights)")
@@ -4002,6 +4592,29 @@ def get_control(
             print(f"EMERGENCY STOP: Poor quality control solution (ESS={ess:.3f})")
             emergency_stop = True
 
+    if emergency_stop:
+        recovery = find_safe_control_candidate(
+            robot_model=robot_model,
+            initial_state=initial_state,
+            u_nom=u_nom,
+            u_variations=u_var,
+            weights=u_weights,
+            dt=args.tick_time,
+            static_union=static_union,
+            static_clearance=static_hard_clearance,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=args.horizon,
+            dynamic_clearance=dynamic_hard_clearance,
+        )
+        if recovery is not None and recovery.get("safe", False):
+            u = np.asarray(recovery["controls"], dtype=float).copy()
+            emergency_stop = False
+            print(
+                "RECOVERY: using safe control after invalid MPPI weights "
+                f"source={recovery.get('source')} sample={recovery.get('sample_idx')}"
+            )
+
     if not emergency_stop and static_union is not None:
         section_start = perf_counter()
         selected_trajectory = run_trajectory(
@@ -4015,11 +4628,84 @@ def get_control(
             static_union,
             vehicle_length=robot_model.L,
             vehicle_width=robot_model.W,
-            clearance=robot_model.W * 0.05,  # Add a small clearance
+            clearance=static_hard_clearance,
         ):
-            print("EMERGENCY STOP: Selected MPPI control intersects a static obstacle")
-            emergency_stop = True
+            recovery = find_safe_control_candidate(
+                robot_model=robot_model,
+                initial_state=initial_state,
+                u_nom=u_nom,
+                u_variations=u_var,
+                weights=u_weights,
+                dt=args.tick_time,
+                static_union=static_union,
+                static_clearance=static_hard_clearance,
+                agents=agents,
+                agent_predictions=agent_predictions,
+                horizon=args.horizon,
+                dynamic_clearance=dynamic_hard_clearance,
+            )
+            if recovery is not None and recovery.get("safe", False):
+                u = np.asarray(recovery["controls"], dtype=float).copy()
+                print(
+                    "RECOVERY: selected MPPI average intersects a static obstacle; "
+                    f"using {recovery.get('source')} control "
+                    f"sample={recovery.get('sample_idx')}"
+                )
+            else:
+                print(
+                    "EMERGENCY STOP: Selected MPPI control intersects a static obstacle"
+                )
+                emergency_stop = True
         control_timing["static_final_check"] = perf_counter() - section_start
+
+    if not emergency_stop and agents:
+        section_start = perf_counter()
+        selected_trajectory = run_trajectory(
+            vehicle=robot_model,
+            initial_state=initial_state,
+            controls=u,
+            dt=args.tick_time,
+        )
+        dynamic_summary = trajectory_dynamic_collision_summary(
+            trajectory=selected_trajectory,
+            agents=agents,
+            agent_predictions=agent_predictions,
+            horizon=args.horizon,
+            robot_model=robot_model,
+            clearance=dynamic_hard_clearance,
+        )
+        if dynamic_summary["collision"]:
+            closest = dynamic_summary["closest"] or {}
+            recovery = find_safe_control_candidate(
+                robot_model=robot_model,
+                initial_state=initial_state,
+                u_nom=u_nom,
+                u_variations=u_var,
+                weights=u_weights,
+                dt=args.tick_time,
+                static_union=static_union,
+                static_clearance=static_hard_clearance,
+                agents=agents,
+                agent_predictions=agent_predictions,
+                horizon=args.horizon,
+                dynamic_clearance=dynamic_hard_clearance,
+            )
+            if recovery is not None and recovery.get("safe", False):
+                u = np.asarray(recovery["controls"], dtype=float).copy()
+                print(
+                    "RECOVERY: selected MPPI average intersects a dynamic agent; "
+                    f"using {recovery.get('source')} control "
+                    f"sample={recovery.get('sample_idx')}"
+                )
+            else:
+                print(
+                    "EMERGENCY STOP: Selected MPPI control intersects a dynamic agent "
+                    f"agent={closest.get('agent_id')} step={closest.get('step')} "
+                    f"dist={dynamic_summary['min_distance']:.3f} "
+                    f"threshold={closest.get('threshold'):.3f}"
+                )
+                emergency_stop = True
+        control_timing["dynamic_final_check"] = perf_counter() - section_start
 
     if emergency_stop:
         # Emergency stop: decelerate to zero velocity
@@ -4063,6 +4749,17 @@ def get_control(
             post_filter_weights=u_weights,
             static_debug=static_debug,
         )
+        if dynamic_debug is not None:
+            dynamic_free = np.asarray(dynamic_debug["collision_free"], dtype=bool)
+            all_violate = bool(
+                dynamic_debug.get("all_samples_violate_clearance", False)
+            )
+            print(
+                "[dynamic-filter] "
+                f"tick={debug_tick} safe={np.count_nonzero(dynamic_free)}/{dynamic_free.size} "
+                f"min_dist={np.nanmin(dynamic_debug['min_distances']):.3f} "
+                f"all_violate_clearance={all_violate}"
+            )
 
     if getattr(args, "debug_timing", False) or getattr(args, "debug_steering", False):
         print(f"Time to find control: {mppi_time}")
@@ -4073,32 +4770,50 @@ def get_control(
 
     # select a sample set of trajectories for review/visualization
     section_start = perf_counter()
-    trajectories = rollout_trajectories(
+    trajectories, trajectory_indices = rollout_trajectories(
         vehicle=robot_model,
         initial_state=initial_state,
         u_nom=u_nom,
         u_variations=u_var,
         weights=u_weights,
         dt=args.tick_time,
+        return_indices=True,
     )
+    trajectory_weights = np.asarray(u_weights, dtype=float)[trajectory_indices]
+    positive_display = trajectory_weights > 0.0
+    if np.any(positive_display):
+        static_display_collisions = 0
+        dynamic_display_collisions = 0
+        for trajectory in trajectories[positive_display]:
+            if static_union is not None and trajectory_collides_with_static(
+                trajectory,
+                static_union,
+                vehicle_length=robot_model.L,
+                vehicle_width=robot_model.W,
+                clearance=static_hard_clearance,
+            ):
+                static_display_collisions += 1
+            if agents:
+                dynamic_summary = trajectory_dynamic_collision_summary(
+                    trajectory=trajectory,
+                    agents=agents,
+                    agent_predictions=agent_predictions,
+                    horizon=args.horizon,
+                    robot_model=robot_model,
+                    clearance=dynamic_hard_clearance,
+                )
+                if dynamic_summary["collision"]:
+                    dynamic_display_collisions += 1
+        if static_display_collisions or dynamic_display_collisions:
+            print(
+                "[rollout-display-audit] "
+                f"tick={debug_tick} positive={int(np.count_nonzero(positive_display))} "
+                f"static_colliding={static_display_collisions} "
+                f"dynamic_colliding={dynamic_display_collisions}"
+            )
     control_timing["rollout_display"] = perf_counter() - section_start
 
-    # check the trajectories for collisions
-    section_start = perf_counter()
-    for i, traj in enumerate(trajectories):
-        for agent in agents:
-            for t in range(traj.shape[0]):
-                dist = sqrt(
-                    (traj[t, 0] - agent["pos"][0]) ** 2
-                    + (traj[t, 1] - agent["pos"][1]) ** 2
-                )
-                if dist < agent["extent"] + MIN_SEPARATION + ROBOT_RADIUS:
-                    print(
-                        f"Trajectory {i} collides with agent at time {t*args.tick_time:.2f}s"
-                    )
-                    u_weights[i] = 0
-                    break
-    control_timing["trajectory_agent_check"] = perf_counter() - section_start
+    control_timing["trajectory_agent_check"] = 0.0
     control_timing["total"] = perf_counter() - tic
     args._last_control_timing = dict(control_timing)
     if args.debug_timing:
@@ -4110,7 +4825,7 @@ def get_control(
             )
         )
 
-    return u, trajectories, u_weights
+    return u, trajectories, trajectory_weights
 
 
 def load_sdd_models(model_root, scene_id):
@@ -4253,6 +4968,7 @@ def simulate(args, delivery_log=None):
     robot = Ackermann4(
         length=sim.ego.length,
         width=sim.ego.width,
+        scale=sim.ego.size_scale,
         max_delta=CONTROL_LIMITS[1],
     )
 
@@ -4268,6 +4984,29 @@ def simulate(args, delivery_log=None):
     if R[1] / Q[3] > 1.0:
         print("WARNING: Steering control weight is higher than heading state weight!")
         print("         This will make MPPI avoid steering even when needed.")
+    dynamic_clearance_margin = mppi_dynamic_clearance_margin(
+        robot, args.dynamic_clearance_margin
+    )
+    static_clearance_margin = mppi_static_clearance_margin(
+        robot, args.static_clearance_margin
+    )
+    static_hard_clearance_margin = mppi_static_clearance_margin(
+        robot, args.static_hard_clearance_margin
+    )
+    if args.debug_mppi:
+        print(
+            "[MPPI dynamic scale] "
+            f"actor_dimension_scale={actor_dimension_scale(robot):.6f} "
+            f"dynamic_collision_buffer={mppi_dynamic_collision_buffer(robot, args.dynamic_hard_clearance_margin):.6f} "
+            f"clearance_margin={dynamic_clearance_margin:.6f} "
+            f"raw_clearance_margin={args.dynamic_clearance_margin:.6f} "
+            f"raw_hard_clearance_margin={args.dynamic_hard_clearance_margin:.6f} "
+            f"static_hard_clearance_margin={static_hard_clearance_margin:.6f} "
+            f"raw_static_hard_clearance_margin={args.static_hard_clearance_margin:.6f} "
+            f"static_clearance_margin={static_clearance_margin:.6f} "
+            f"raw_static_clearance_margin={args.static_clearance_margin:.6f}"
+        )
+
     mppi = MPPI(
         vehicle_length=robot.L,
         vehicle_width=robot.W,
@@ -4283,6 +5022,13 @@ def simulate(args, delivery_log=None):
         c_lambda=args.c_lambda,
         scan_range=SCAN_RANGE,
         debug=args.debug_mppi,
+        dynamic_clearance_margin=dynamic_clearance_margin,
+        dynamic_clearance_weight=args.dynamic_clearance_weight,
+        dynamic_collision_cost=args.dynamic_collision_cost,
+        static_clearance_margin=static_clearance_margin,
+        static_clearance_weight=args.static_clearance_weight,
+        static_collision_cost=args.static_collision_cost,
+        static_hard_clearance_margin=static_hard_clearance_margin,
     )
 
     # self.controlNN = ControlPredictor("./models/tesla_car.model")
@@ -4399,33 +5145,6 @@ def simulate(args, delivery_log=None):
         start = info["ego"]["pos"]
         end = info["goal"]
         section_start = perf_counter()
-        goal_xy = np.asarray(end[:2], dtype=float)
-        if (
-            stable_nominal_route is None
-            or stable_nominal_goal is None
-            or np.linalg.norm(goal_xy - stable_nominal_goal) > 1.0e-6
-        ):
-            stable_nominal_route = plan_static_route(
-                start[:2],
-                end[:2],
-                sim.static_polygons,
-                display_offset=sim.display_offset,
-                display_diff=sim.display_diff,
-                vehicle_length=robot.L,
-                vehicle_width=robot.W,
-                resolution=grid_resolution,
-                start_heading=start[ActorStateEnum.THETA],
-                heading_lookahead=args.route_heading_lookahead,
-                max_heading_error=np.deg2rad(args.max_initial_route_heading_error_deg),
-            )
-            stable_nominal_goal = goal_xy.copy()
-            cached_paths = None
-            cached_path_debug = None
-            cached_nominal_route = None
-            cached_best_trajectory = 0
-            cached_control_trajectory = 0
-            cached_oce_entropies = None
-            next_route_replan_tick = None
 
         replan_interval = max(1, int(args.replan_interval))
         should_replan_routes = (
@@ -4434,123 +5153,61 @@ def simulate(args, delivery_log=None):
             or sim.ticks >= next_route_replan_tick
         )
         if should_replan_routes:
-            nominal_route = build_route_rejoining_nominal(
-                start,
-                end[:2],
-                stable_nominal_route,
-                sim.static_polygons,
-                display_offset=sim.display_offset,
-                display_diff=sim.display_diff,
-                vehicle_length=robot.L,
-                vehicle_width=robot.W,
-                resolution=grid_resolution,
-                rejoin_lookahead=args.nominal_rejoin_lookahead,
-                rejoin_search_distance=args.nominal_rejoin_search_distance,
-                heading_lookahead=args.route_heading_lookahead,
-                recovery_lookahead=args.recovery_route_lookahead,
-                max_heading_error=np.deg2rad(args.max_initial_route_heading_error_deg),
-            )
-            cached_nominal_route = nominal_route
-            timing["route"] = perf_counter() - section_start
             section_start = perf_counter()
-            paths, cached_path_debug = generate_trajectories(
+            paths = generate_trajectories(
                 start,
                 end,
                 args,
-                nominal_waypoints=nominal_route,
                 static_polygons=sim.static_polygons,
                 display_offset=sim.display_offset,
                 display_diff=sim.display_diff,
                 vehicle_length=robot.L,
                 vehicle_width=robot.W,
+                vehicle_scale=robot.scale,
+                max_steer=robot.max_delta,
                 resolution=grid_resolution,
-                return_debug=True,
             )
             cached_paths = paths
+            cached_path_debug = (
+                getattr(args, "_last_specialk_debug", None)
+                if str(args.trajectory_generator).lower() == "specialk"
+                else None
+            )
             timing["trajectories"] = perf_counter() - section_start
-            # section_start = perf_counter()
-            # paths = filter_static_safe_paths(
-            #     paths,
-            #     sim.static_polygons,
-            #     vehicle_length=robot.L,
-            #     vehicle_width=robot.W,
-            # )
-            # cached_paths = paths
-            # timing["filter_paths"] = perf_counter() - section_start
+
             next_route_replan_tick = sim.ticks + replan_interval
-            if args.debug_kpaths or args.debug_steering:
-                debug_routes = (cached_path_debug or {}).get("routes", [])
+            if args.debug_paths or args.debug_steering:
+                debug_routes = [path["route"] for path in paths]
                 route_count = len(debug_routes)
                 route_lengths = [
                     round(waypoint_route_length(route), 3) for route in debug_routes
                 ]
                 route_points = [len(route) for route in debug_routes]
                 print(
-                    "[kpaths] "
+                    "[paths] "
                     f"tick={sim.ticks} replanned paths={len(paths)} "
                     f"routes={route_count} "
                     f"points={route_points} "
                     f"lengths={route_lengths} "
                     f"next_replan_tick={next_route_replan_tick} "
-                    f"generator={(cached_path_debug or {}).get('generator')}"
+                    f"generator={paths[0].get('generator')}"
                 )
+                if cached_path_debug:
+                    print(
+                        "[paths-roadmap] "
+                        f"nodes={len(cached_path_debug.get('nodes', []))} "
+                        f"edges={len(cached_path_debug.get('edges', []))} "
+                        f"skeletons={len(cached_path_debug.get('skeletons', []))} "
+                        f"local_anchors={len(cached_path_debug.get('local_anchors', []))} "
+                        f"global_anchors={len(cached_path_debug.get('global_anchors', []))} "
+                        f"connectivity={cached_path_debug.get('connectivity', {})} "
+                        f"reasons={cached_path_debug.get('reasons', [])}"
+                    )
         else:
             nominal_route = cached_nominal_route
             paths = cached_paths
-            timing["route"] = perf_counter() - section_start
             timing["trajectories"] = 0.0
             timing["filter_paths"] = 0.0
-        if not paths:
-            recovery_route = build_forward_recovery_route(
-                start,
-                sim.static_polygons,
-                display_offset=sim.display_offset,
-                display_diff=sim.display_diff,
-                vehicle_length=robot.L,
-                vehicle_width=robot.W,
-                resolution=grid_resolution,
-                recovery_lookahead=args.recovery_route_lookahead,
-                max_heading_error=np.deg2rad(args.max_initial_route_heading_error_deg),
-            )
-            paths = generate_trajectory_for_waypoints(
-                start,
-                recovery_route,
-                args,
-                static_polygons=sim.static_polygons,
-                display_offset=sim.display_offset,
-                display_diff=sim.display_diff,
-                vehicle_length=robot.L,
-                vehicle_width=robot.W,
-                resolution=grid_resolution,
-                trajectories_requested=1,
-            )
-            cached_paths = paths
-            cached_path_debug = {
-                "routes": [recovery_route],
-                "generator": "empty_recovery",
-                "previous_generator": (cached_path_debug or {}).get("generator"),
-                "previous_routes": (cached_path_debug or {}).get("routes", []),
-            }
-            cached_best_trajectory = 0
-            cached_control_trajectory = 0
-        # path_index, distance = project_position_to_path(info["ego"]["pos"], path=path)
-        # path_index = min(len(path) - 1, sim.ticks)
-
-        # if len(agent_predictions):
-        #     best_trajectory = evaluate(
-        #         grid=local_map,
-        #         origin=grid_origin,
-        #         resolution=grid_resolution,
-        #         av_size=[sim.ego.LENGTH, sim.ego.WIDTH],
-        #         trajectories=paths,
-        #         agents=visible_agents,
-        #         predictions=agent_predictions,
-        #         stopping_threshold=0.5,
-        #         prediction_interval=tracker_update_interval * args.tick_time,
-        #         dt=args.tick_time,
-        #     )
-        # else:
-        #     best_trajectory = 0
 
         best_trajectory = cached_best_trajectory
         control_trajectory = cached_control_trajectory
@@ -4562,7 +5219,7 @@ def simulate(args, delivery_log=None):
                 best_trajectory, oce_entropies, _oce_results = (
                     evaluate_candidate_paths_by_discrete_oce(
                         time_step=sim.ticks,
-                        paths=paths,
+                        paths=[path["path"] for path in paths],
                         tracker=discrete_oce_tracker,
                         static_polygons=sim.static_polygons,
                         horizon=args.discrete_oce_horizon or args.horizon,
@@ -4580,7 +5237,7 @@ def simulate(args, delivery_log=None):
                         grid=local_map,
                         origin=grid_origin,
                         resolution=grid_resolution,
-                        paths=paths,
+                        paths=[path["path"] for path in paths],
                         agents=visible_agents,
                         predictions=agent_predictions,
                         prediction_interval=args.tick_time,
@@ -4599,22 +5256,13 @@ def simulate(args, delivery_log=None):
                 if isinstance(_oce_results, dict) and "timing" in _oce_results:
                     print(f"[oce-eval-detail] {_oce_results['timing']}")
 
-            best_trajectory = constrain_selected_path_to_nominal(
-                paths,
-                best_trajectory,
-                oce_entropies if args.use_oce_trajectory_eval else None,
-                stable_nominal_route,
-                args.max_path_nominal_deviation,
-                debug=args.debug_steering or args.debug_oce_eval,
-            )
+            # BUGBUG - temporarily disable OCE-based path selection to evaluate MPPI performance without OCE overhead
+            best_trajectory = 0
+
             control_trajectory = choose_control_path_index(
                 paths,
                 best_trajectory,
                 start_heading=start[ActorStateEnum.THETA],
-                follow_selected_path=(
-                    args.follow_oce_selected_path
-                    or str(args.trajectory_generator).lower() == "kpaths"
-                ),
                 max_heading_error=np.deg2rad(args.max_control_path_heading_error_deg),
                 debug=args.debug_steering or args.debug_oce_eval,
             )
@@ -4632,10 +5280,6 @@ def simulate(args, delivery_log=None):
                 paths,
                 best_trajectory,
                 start_heading=start[ActorStateEnum.THETA],
-                follow_selected_path=(
-                    args.follow_oce_selected_path
-                    or str(args.trajectory_generator).lower() == "kpaths"
-                ),
                 max_heading_error=np.deg2rad(args.max_control_path_heading_error_deg),
                 debug=args.debug_steering or args.debug_oce_eval,
             )
@@ -4663,8 +5307,9 @@ def simulate(args, delivery_log=None):
             u_nom=u,
             initial_state=info["ego"]["pos"][: ActorStateEnum.DELTA],
             goal=[*info["ego"]["goal"], 0, 0],
-            path=paths[control_trajectory],
+            path=paths[control_trajectory]["path"],
             agents=visible_agents,
+            agent_predictions=agent_predictions,
             static_polygons=sim.static_polygons,
             args=args,
             debug_tick=sim.ticks,
@@ -4682,13 +5327,9 @@ def simulate(args, delivery_log=None):
                 actors=agent_predictions,
                 trajectories=trajectories,
                 trajectory_weights=trajectory_weights,
-                path=paths,
-                nominal_path=nominal_route,
-                debug_routes=(
-                    (cached_path_debug or {}).get("routes")
-                    if args.debug_kpaths
-                    else None
-                ),
+                path=[path["path"] for path in paths],
+                debug_routes=[path["route"] for path in paths],
+                debug_roadmap=cached_path_debug,
                 selected_path_index=control_trajectory,
                 prefix_str=args.prefix,
             )
@@ -4863,11 +5504,11 @@ if __name__ == "__main__":
         help="Enable verbose MPPI internal diagnostics.",
     )
     argparser.add_argument(
-        "--debug-kpaths",
+        "--debug-paths",
         action="store_true",
         help=(
-            "Print k-path replanning details and draw generated k-path route "
-            "waypoints in the simulator."
+            "Print path replanning details and draw generated route waypoints. "
+            "For specialk, also draw the first-phase roadmap in the simulator."
         ),
     )
     argparser.add_argument(
@@ -4928,6 +5569,18 @@ if __name__ == "__main__":
             "Run the slow Python/Shapely static-obstacle filter over every MPPI "
             "sample. By default static polygons are handled by MPPI and only the "
             "selected final trajectory is checked on the host."
+        ),
+    )
+    argparser.add_argument(
+        "--host-dynamic-sample-filter",
+        dest="host_dynamic_sample_filter",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the slow Python dynamic-agent collision filter over every MPPI "
+            "sample before recomputing the selected control. By default dynamic "
+            "agents are handled by MPPI and only the selected final trajectory is "
+            "checked on the host."
         ),
     )
     argparser.add_argument(
@@ -5058,7 +5711,7 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
-        "--planner-trajectory-count",
+        "--trajectory-count",
         default=3,
         type=int,
         help=(
@@ -5078,12 +5731,12 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--trajectory-generator",
-        choices=["kpaths", "frenet"],
+        choices=["kpaths", "specialk"],
         default="kpaths",
         help=(
             "Candidate trajectory generator. kpaths searches diverse "
-            "kinematically feasible grid routes; frenet uses lateral offsets "
-            "around one reference path."
+            "kinematically feasible grid routes; specialk uses homotopy-aware "
+            "roadmap skeletons refined with Ackermann state-lattice primitives."
         ),
     )
     argparser.add_argument(
@@ -5127,7 +5780,7 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--kpaths-turn-penalty",
-        default=0.15,
+        default=0.1,
         type=float,
         help="Additional A* path cost per radian of route heading change.",
     )
@@ -5159,12 +5812,127 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
-        "--follow-oce-selected-path",
-        action="store_true",
+        "--specialk-roadmap-samples",
+        default=180,
+        type=int,
+        help="Number of deterministic free-space roadmap samples used by specialk.",
+    )
+    argparser.add_argument(
+        "--specialk-roadmap-grid-step",
+        default=None,
+        type=float,
         help=(
-            "Track the OCE-selected candidate path directly. By default OCE may "
-            "score variations, but MPPI tracks the nominal center path."
+            "Deterministic grid sample spacing for specialk roadmap coverage. "
+            "Defaults from map size and connection radius."
         ),
+    )
+    argparser.add_argument(
+        "--specialk-obstacle-edge-step",
+        default=None,
+        type=float,
+        help=(
+            "Spacing for obstacle-edge offset samples used to cover narrow "
+            "corridors. Defaults from grid resolution and robot width."
+        ),
+    )
+    argparser.add_argument(
+        "--specialk-nearest",
+        default=12,
+        type=int,
+        help="Nearest roadmap neighbors considered for specialk visibility edges.",
+    )
+    argparser.add_argument(
+        "--specialk-connect-radius",
+        default=None,
+        type=float,
+        help="Maximum specialk roadmap edge length. Defaults from turn radius.",
+    )
+    argparser.add_argument(
+        "--specialk-raw-routes",
+        default=0,
+        type=int,
+        help="Raw penalized roadmap route attempts. Zero derives from trajectory count.",
+    )
+    argparser.add_argument(
+        "--specialk-route-candidates",
+        default=0,
+        type=int,
+        help="Diverse route skeletons to lattice-refine. Zero derives from trajectory count.",
+    )
+    argparser.add_argument(
+        "--specialk-max-overlap",
+        default=0.6,
+        type=float,
+        help="Maximum overlap before same-signature specialk routes are redundant.",
+    )
+    argparser.add_argument(
+        "--specialk-separation",
+        default=None,
+        type=float,
+        help="Minimum mean separation for geometrically diverse same-signature routes.",
+    )
+    argparser.add_argument(
+        "--specialk-clearance-weight",
+        default=0.25,
+        type=float,
+        help="Roadmap edge clearance penalty weight for specialk.",
+    )
+    argparser.add_argument(
+        "--specialk-obstacle-clearance",
+        default=0.0,
+        type=float,
+        help=(
+            "Extra obstacle inflation used by specialk in scene units. Defaults "
+            "to zero because the displayed polygons are already in planning scale."
+        ),
+    )
+    argparser.add_argument(
+        "--specialk-diversity-penalty",
+        default=1.2,
+        type=float,
+        help="Penalty applied to reused specialk roadmap edges and lattice cells.",
+    )
+    argparser.add_argument(
+        "--specialk-corridor-radius",
+        default=None,
+        type=float,
+        help="Route corridor radius for specialk lattice refinement.",
+    )
+    argparser.add_argument(
+        "--specialk-lattice-resolution",
+        default=None,
+        type=float,
+        help="SE(2) lattice xy resolution for specialk. Defaults from turn radius.",
+    )
+    argparser.add_argument(
+        "--specialk-heading-bins",
+        default=16,
+        type=int,
+        help="Number of heading bins in the specialk state lattice.",
+    )
+    argparser.add_argument(
+        "--specialk-motion-step",
+        default=None,
+        type=float,
+        help="Distance covered by each specialk Ackermann primitive.",
+    )
+    argparser.add_argument(
+        "--specialk-goal-tolerance",
+        default=None,
+        type=float,
+        help="Goal capture radius for specialk lattice search.",
+    )
+    argparser.add_argument(
+        "--specialk-max-expansions",
+        default=3500,
+        type=int,
+        help="Maximum lattice node expansions per specialk route.",
+    )
+    argparser.add_argument(
+        "--specialk-time-budget-ms",
+        default=0.0,
+        type=float,
+        help="Optional per-route specialk lattice time budget in milliseconds; zero disables.",
     )
     argparser.add_argument(
         "--max-control-path-heading-error-deg",
@@ -5201,6 +5969,60 @@ if __name__ == "__main__":
         type=float,
         default=DEFAULT_METHOD_WEIGHT,
         help="M/Lambda value for method weights",
+    )
+    argparser.add_argument(
+        "--dynamic-clearance-margin",
+        type=float,
+        default=MIN_SEPARATION,
+        help="Extra soft dynamic-agent clearance band outside the hard collision radius.",
+    )
+    argparser.add_argument(
+        "--dynamic-hard-clearance-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Extra hard dynamic-agent collision inflation. Keep at 0 so MPPI "
+            "uses soft cost for social clearance without zeroing every close rollout."
+        ),
+    )
+    argparser.add_argument(
+        "--dynamic-clearance-weight",
+        type=float,
+        default=DEFAULT_METHOD_WEIGHT,
+        help="Quadratic MPPI cost weight for dynamic-agent clearance violations.",
+    )
+    argparser.add_argument(
+        "--dynamic-collision-cost",
+        type=float,
+        default=1.0e7,
+        help="Hard MPPI cost added when a rollout intersects an inflated dynamic agent.",
+    )
+    argparser.add_argument(
+        "--static-clearance-margin",
+        type=float,
+        default=MIN_SEPARATION,
+        help="Extra soft static-obstacle clearance band outside the ego footprint.",
+    )
+    argparser.add_argument(
+        "--static-hard-clearance-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Hard static-obstacle clearance margin used by MPPI pruning and the "
+            "host final safety check. Keep smaller than --static-clearance-margin."
+        ),
+    )
+    argparser.add_argument(
+        "--static-clearance-weight",
+        type=float,
+        default=DEFAULT_METHOD_WEIGHT,
+        help="Quadratic MPPI cost weight for static-obstacle clearance violations.",
+    )
+    argparser.add_argument(
+        "--static-collision-cost",
+        type=float,
+        default=1.0e7,
+        help="Hard MPPI cost added when a rollout intersects a static obstacle.",
     )
     argparser.add_argument(
         "--x_weight", type=float, default=X_WEIGHT, help="Weight for x coordinate"

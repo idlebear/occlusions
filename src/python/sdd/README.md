@@ -31,6 +31,12 @@ Expected CSV class-map columns:
 scene_id,track_id,agent_class
 ```
 
+Launch with:
+```text
+python -m http.server 8000 --directory outputs/sdd_scene_review
+```
+
+
 ## Coordinate frames and bounds
 
 Section 3.1 preprocessing converts each scene into an explicit normalized Cartesian frame:
@@ -46,12 +52,13 @@ Run from the repository root:
 PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_sdd.preprocess \
   --data-root src/thirdParty/sdd/data \
   --out outputs/sdd_processed \
-  --min-track-displacement 10
+  --min-track-displacement 10 \
+  --assumed-walking-speed 1.4
 ```
 
 Each scene directory contains:
 
-- `metadata.json`: origin, axes, source-to-scene transform, scene bounds, `dt`, display factor, short-track filtering, validation metrics
+- `metadata.json`: origin, axes, source-to-scene transform, scene bounds, `dt`, display factor, short-track filtering, scene-units-per-meter calibration, validation metrics
 - `trajectories_scene.npz`: scene-frame trajectory arrays keyed by `track_<id>`
 - `polygons_scene.json`: scene-frame semantic polygons
 - `alignment_overlay.png`: image-space round-trip overlay for alignment checks
@@ -65,10 +72,13 @@ PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_s
   --processed-root outputs/sdd_processed \
   --out outputs/sdd_models \
   --grid-size 0.25 \
-  --destination-radius 2.0
+  --destination-radius-meters 2.0 \
+  --destination-min-samples 3 \
+  --endpoint-snap-distance 0.25
 ```
 
-`--grid-size` and `--destination-radius` use normalized scene units.
+`--grid-size` and `--endpoint-snap-distance` use normalized scene units. Destination classes use complete-link clustering over walkable shortest-path distances, so `--destination-radius-meters` is the maximum within-class endpoint diameter in meters. Use `--destination-radius` only if you want to pass the radius directly in normalized scene units.
+Endpoints that fall just outside the walkable grid can be snapped to a nearby walkable state with `--endpoint-snap-distance`; by default this is the grid cell size.
 
 Each model scene directory contains:
 

@@ -12,30 +12,31 @@ from config import *
 
 
 def main(args):
+    env_kwargs = {
+        "num_actors": args.actors,
+        "seed": args.seed,
+        "tracks": args.tracks,
+        "data_source": args.data_source,
+        "sdd_processed_root": args.sdd_processed_root,
+        "sdd_scene_id": args.sdd_scene_id,
+        "limit_tracks": args.limit_tracks,
+    }
 
     if args.debug:
         # set up debug version -- mo models
-        env = PedestrianEnv(num_actors=args.actors, seed=args.seed, tracks=args.tracks)
+        env = PedestrianEnv(**env_kwargs)
     else:
         if args.multipass:
             env = make_vec_env(
                 PedestrianEnv,
                 n_envs=args.instances,
-                env_kwargs={
-                    "num_actors": args.actors,
-                    "seed": args.seed,
-                    "tracks": args.tracks,
-                },
+                env_kwargs=env_kwargs,
             )
         else:
             env = make_vec_env(
                 PedestrianEnv,
                 n_envs=args.instances,
-                env_kwargs={
-                    "num_actors": args.actors,
-                    "seed": args.seed,
-                    "tracks": args.tracks,
-                },
+                env_kwargs=env_kwargs,
             )
 
         if not args.demo:
@@ -141,6 +142,32 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--tracks", default=None, type=str, help="Load pedestrian tracks from file"
+    )
+    argparser.add_argument(
+        "--limit_tracks",
+        default=None,
+        type=int,
+        help=(
+            "Maximum number of loaded pedestrian tracks. Randomly selects tracks "
+            "when the scenario has more tracks. Use 0 for no pedestrians."
+        ),
+    )
+    argparser.add_argument(
+        "--data-source",
+        choices=["eth", "sdd", "random"],
+        default=None,
+        help="Scenario provider. Defaults to eth when --tracks is set, otherwise random.",
+    )
+    argparser.add_argument(
+        "--sdd-processed-root",
+        default="outputs/sdd_processed",
+        help="Processed SDD root for --data-source sdd.",
+    )
+    argparser.add_argument(
+        "--sdd-scene-id",
+        type=int,
+        default=None,
+        help="Processed SDD scene id for --data-source sdd.",
     )
 
     args = argparser.parse_args()

@@ -160,12 +160,21 @@ def _write_scene_json(
         sampled = points[::trajectory_stride]
         if sampled.shape[0] == 0:
             continue
+        track_id_int = int(track_id)
+        destination_class = destination_labels.get(track_id_int)
+        if destination_class is None:
+            destination_status = "not_modeled"
+        elif destination_class < 0:
+            destination_status = "unassigned"
+        else:
+            destination_status = "assigned"
         max_frame = max(max_frame, sampled.shape[0] - 1)
         track_records.append(
             {
-                "trackId": int(track_id),
-                "agentClass": class_map.get((scene_id, int(track_id)), default_agent_class),
-                "destinationClass": int(destination_labels.get(int(track_id), -1)),
+                "trackId": track_id_int,
+                "agentClass": class_map.get((scene_id, track_id_int), default_agent_class),
+                "destinationClass": int(destination_class) if destination_class is not None else None,
+                "destinationStatus": destination_status,
                 "pointStride": trajectory_stride,
                 "points": np.round(sampled, 3).tolist(),
             }
@@ -579,6 +588,7 @@ def _review_html() -> str:
           <button id="playPause">Play</button>
           <button id="nextFrame">Forward</button>
           <span id="frameLabel" class="muted"></span>
+          <label><input id="endpointOnly" type="checkbox" checked> Endpoints only</label>
         </div>
         <div class="row">
           <input id="frameSlider" type="range" min="0" max="0" value="0" style="flex:1 1 260px">
@@ -620,6 +630,7 @@ def _review_html() -> str:
       markovHeatmap: null,
       frame: 0,
       playing: false,
+      endpointOnly: true,
       classVisible: new Map()
     };
 
@@ -636,6 +647,7 @@ def _review_html() -> str:
       prevFrame: document.getElementById("prevFrame"),
       nextFrame: document.getElementById("nextFrame"),
       playPause: document.getElementById("playPause"),
+      endpointOnly: document.getElementById("endpointOnly"),
       frameSlider: document.getElementById("frameSlider"),
       frameLabel: document.getElementById("frameLabel"),
       canvas: document.getElementById("sceneCanvas"),
@@ -676,6 +688,10 @@ def _review_html() -> str:
         el.playPause.textContent = state.playing ? "Pause" : "Play";
       });
       el.frameSlider.addEventListener("input", event => setFrame(Number(event.target.value)));
+      el.endpointOnly.addEventListener("change", event => {
+        state.endpointOnly = event.target.checked;
+        draw();
+      });
       el.modelClassSelect.addEventListener("change", () => loadSelectedMarkovHeatmap());
       window.addEventListener("resize", draw);
     }
@@ -813,6 +829,8 @@ def _review_html() -> str:
 
     function classKeyForTrack(track) {
       if (state.scene.classMode === "destination_class") {
+        if (track.destinationStatus === "not_modeled") return "destination:not-modeled";
+        if (track.destinationStatus === "unassigned") return "destination:unassigned";
         return Number.isInteger(track.destinationClass) && track.destinationClass >= 0
           ? `destination:${track.destinationClass}`
           : "destination:unassigned";
@@ -821,6 +839,8 @@ def _review_html() -> str:
     }
 
     function classKeyCompare(a, b) {
+      if (a === "destination:not-modeled") return 1;
+      if (b === "destination:not-modeled") return -1;
       if (a === "destination:unassigned") return 1;
       if (b === "destination:unassigned") return -1;
       const aNum = Number(a.split(":")[1]);
@@ -831,12 +851,14 @@ def _review_html() -> str:
 
     function labelForClassKey(key) {
       if (key === "destination:unassigned") return "Unassigned";
+      if (key === "destination:not-modeled") return "Not modeled";
       if (key.startsWith("destination:")) return `Destination ${key.split(":")[1]}`;
       return key;
     }
 
     function colorForClass(className, fallbackIndex = 0) {
       if (className === "destination:unassigned") return "#777777";
+      if (className === "destination:not-modeled") return "#bbbbbb";
       const classes = classesForScene();
       const index = classes.findIndex(item => item.key === className);
       return classColors[(index >= 0 ? index : fallbackIndex) % classColors.length];
@@ -916,13 +938,17 @@ def _review_html() -> str:
         if (!state.classVisible.get(classKey)) return;
         const classIndex = classes.findIndex(item => item.key === classKey);
         const color = colorForClass(classKey, classIndex);
-        const end = Math.min(state.frame, track.points.length - 1);
+        const end = state.endpointOnly
+          ? track.points.length - 1
+          : Math.min(state.frame, track.points.length - 1);
         if (end < 0) return;
-        drawPath(track.points, track.points.length - 1, "rgba(20,20,20,0.14)", 1);
-        drawPath(track.points, end, color, 2.2);
+        if (!state.endpointOnly) {
+          drawPath(track.points, track.points.length - 1, "rgba(20,20,20,0.14)", 1);
+          drawPath(track.points, end, color, 2.2);
+        }
         const [x, y] = track.points[end];
         ctx.beginPath();
-        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.arc(x, y, state.endpointOnly ? 4.5 : 3.5, 0, Math.PI * 2);
         ctx.fillStyle = color;
         ctx.strokeStyle = "white";
         ctx.lineWidth = 1.25;

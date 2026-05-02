@@ -6,7 +6,7 @@ import numpy as np
 from time import time
 
 from config import *
-from polygpu import visibility_from_region
+from polycheck import visibility_from_region
 
 from Grid.VisibilityGrid import VisibilityGrid
 
@@ -114,7 +114,7 @@ def get_visibility_dictionary(map, obs_pts, target_pts):
     result = visibility_from_region(map, obs_pts, target_pts).reshape((len(obs_pts), -1))
 
     # probability of perception is sum of all cells from each observation point
-    result = np.sum(result, axis=1).squeeze() / len(target_pts)
+    result = 1.0 - np.prod((1.0 - result), axis=1).squeeze()
 
     visibility_dict = {}
     for pt, val in zip(obs_pts, result):

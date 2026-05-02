@@ -468,7 +468,10 @@ class Simulation:
     def _is_free_start_location(self, point, blocking_union):
         if blocking_union is None:
             return True
-        radius = ROBOT_RADIUS * self.actor_dimension_multiplier + MIN_SEPARATION
+        radius = (
+            ROBOT_RADIUS * self.actor_dimension_multiplier
+            + MIN_SEPARATION * self.actor_dimension_multiplier
+        )
         return not blocking_union.buffer(radius).covers(
             Point(float(point[0]), float(point[1]))
         )
@@ -513,32 +516,7 @@ class Simulation:
         self.generator.reset()
 
         sx, sy = self._sample_free_location(self.ego_start, "ego start")
-
-        if self.ego_goal is None:
-            gx, gy = (
-                self.generator.random(n=2) * self.display_diff + self.display_offset
-            )
-        else:
-            gx = self.ego_goal[0]
-            if type(gx) is float:
-                gx = self.display_diff * gx + self.display_offset[0]
-            else:
-                r = gx[1] - gx[0]
-                gx = (
-                    self.display_offset[0]
-                    + (r * float(self.generator.random(n=1)) + gx[0])
-                    * self.display_diff
-                )
-            gy = self.ego_goal[1]
-            if type(gy) is float:
-                gy = self.display_diff * gy + self.display_offset[1]
-            else:
-                r = gy[1] - gy[0]
-                gy = (
-                    self.display_offset[1]
-                    + (r * float(self.generator.random(n=1)) + gy[0])
-                    * self.display_diff
-                )
+        gx, gy = self._sample_free_location(self.ego_goal, "ego goal")
 
         self.ego = DeliveryBot(
             id=0,
@@ -593,12 +571,16 @@ class Simulation:
     # Plotting and drawing functions
     ############################################################################
 
-    def _draw_actor(self, actor):
+    def _draw_actor(self, actor, draw_extent=True):
         actor_image = actor.get_image()
-        # draw collision radius
-        self.window.draw_circle(
-            actor.x[:2], colour=actor.colour, radius=actor.get_extent() + MIN_SEPARATION
-        )
+        if draw_extent:
+            # draw collision radius
+            self.window.draw_circle(
+                actor.x[:2],
+                colour=actor.colour,
+                radius=actor.get_extent()
+                + MIN_SEPARATION * self.actor_dimension_multiplier,
+            )
         if actor_image is not None:
             actor_pos = actor.get_pos()
             # drawing with y inverted reverse the rotation to correct the display
@@ -614,8 +596,7 @@ class Simulation:
             )
 
     def _draw_ego(self):
-        self.window.draw_circle(self.ego.goal[:2], colour="red", radius=0.2)
-        self._draw_actor(self.ego)
+        self._draw_actor(self.ego, draw_extent=False)
 
     def _draw_static_polygons(self):
         colours = {
@@ -640,18 +621,79 @@ class Simulation:
                 use_transparency=fill_colour is not None,
             )
 
-    def _draw_path(self, path, colours=["red"]):
+    def _draw_path(self, path, colours=["red"], selected_index=None):
         if path is None:
             return
         if type(path) == list:
             for i, p in enumerate(path):
+                colour = colours[i % len(colours)]
+                radius = 0.05
+                if selected_index is not None and i == selected_index:
+                    colour = (0, 180, 80, 255)
+                    radius = 0.075
                 for pos in zip(p.x, p.y):
-                    self.window.draw_circle(
-                        pos[:2], colour=colours[i % len(colours)], radius=0.05
-                    )
+                    self.window.draw_circle(pos[:2], colour=colour, radius=radius)
         else:
             for pos in zip(path.x, path.y):
                 self.window.draw_circle(pos[:2], colour=colours[0], radius=0.05)
+
+    def _draw_debug_routes(self, routes, selected_index=None):
+        if not routes:
+            return
+        colours = [
+            (230, 126, 34, 180),
+            (142, 68, 173, 180),
+            (22, 160, 133, 180),
+            (127, 140, 141, 180),
+            (241, 196, 15, 180),
+        ]
+        for index, route in enumerate(routes):
+            if route is None or len(route) < 2:
+                continue
+            selected = selected_index is not None and index == selected_index
+            colour = (0, 180, 80, 255) if selected else colours[index % len(colours)]
+            width = 4 if selected else 2
+            self.window.draw_polyline(route, colour=colour, width=width)
+            for point in route:
+                self.window.draw_circle(
+                    point[:2], colour=colour, radius=0.06 if selected else 0.04
+                )
+
+    def _draw_debug_roadmap(self, roadmap):
+        if not roadmap:
+            return
+        edge_colour = (82, 104, 118, 65)
+        node_colour = (82, 104, 118, 115)
+        skeleton_colour = (52, 73, 94, 150)
+        local_anchor_colour = (41, 128, 185, 220)
+        global_anchor_colour = (155, 89, 182, 210)
+        start_colour = (39, 174, 96, 240)
+        goal_colour = (192, 57, 43, 240)
+
+        for edge in roadmap.get("edges", []):
+            if len(edge) >= 2:
+                self.window.draw_polyline(edge[:2], colour=edge_colour, width=1)
+        for node in roadmap.get("nodes", []):
+            self.window.draw_circle(node[:2], colour=node_colour, radius=0.025)
+        for skeleton in roadmap.get("skeletons", []):
+            if skeleton is not None and len(skeleton) >= 2:
+                self.window.draw_polyline(
+                    skeleton,
+                    colour=skeleton_colour,
+                    width=2,
+                )
+        for point in roadmap.get("global_anchors", []):
+            self.window.draw_circle(point[:2], colour=global_anchor_colour, radius=0.07)
+        for point in roadmap.get("local_anchors", []):
+            self.window.draw_circle(point[:2], colour=local_anchor_colour, radius=0.08)
+        if roadmap.get("start") is not None:
+            self.window.draw_circle(
+                roadmap["start"][:2], colour=start_colour, radius=0.09
+            )
+        if roadmap.get("goal") is not None:
+            self.window.draw_circle(
+                roadmap["goal"][:2], colour=goal_colour, radius=0.09
+            )
 
     def _draw_nominal_path(self, path):
         if path is None or len(path) < 2:
@@ -727,10 +769,15 @@ class Simulation:
             merged_polygons = list(merged.geoms)
         else:
             merged_polygons = [
-                geom for geom in getattr(merged, "geoms", []) if isinstance(geom, Polygon)
+                geom
+                for geom in getattr(merged, "geoms", [])
+                if isinstance(geom, Polygon)
             ]
 
-        return [np.asarray(polygon.exterior.coords, dtype=float) for polygon in merged_polygons]
+        return [
+            np.asarray(polygon.exterior.coords, dtype=float)
+            for polygon in merged_polygons
+        ]
 
     ##################################################################################
     # Simulator step functions
@@ -995,7 +1042,9 @@ class Simulation:
         trajectory_weights=None,
         horizon=1,
         path=None,
-        nominal_path=None,
+        debug_routes=None,
+        debug_roadmap=None,
+        selected_path_index=None,
         prefix_str=None,
     ):
         if self.window is not None:
@@ -1015,29 +1064,44 @@ class Simulation:
                     pass
                 self._draw_actor(actor)
 
-            self._draw_nominal_path(nominal_path)
-            self._draw_path(path)
+            self._draw_debug_roadmap(debug_roadmap)
+            self._draw_debug_routes(debug_routes, selected_path_index)
+            self._draw_path(path, selected_index=selected_path_index)
 
             self._draw_ego()
             if trajectories is not None:
-                min_weight = np.min(trajectory_weights)
-                range_weight = np.max(trajectory_weights) - min_weight
-                if range_weight:
-                    trajectory_weights = (
-                        trajectory_weights - min_weight
-                    ) / range_weight
+                trajectory_weights = np.asarray(trajectory_weights, dtype=float)
+                if trajectory_weights.size:
+                    min_weight = np.min(trajectory_weights)
+                    range_weight = np.max(trajectory_weights) - min_weight
+                    if range_weight > 0:
+                        normalized_weights = (
+                            trajectory_weights - min_weight
+                        ) / range_weight
+                    else:
+                        normalized_weights = (
+                            np.ones_like(trajectory_weights)
+                            if np.max(trajectory_weights) > 0
+                            else np.zeros_like(trajectory_weights)
+                        )
 
-                for weight, trajectory in zip(trajectory_weights, trajectories):
-                    self.draw_polyline(
-                        trajectory,
-                        colour=[*EGO_TRAJECTORY_COLOUR, int(200 + weight * 55.0)],
-                    )
-                    # for pos in trajectory:
-                    #     self.window.draw_circle(
-                    #         pos[:2],
-                    #         colour=[*EGO_TRAJECTORY_COLOUR, int(200 + weight * 55.0)],
-                    #         radius=self.ego.get_extent(),
-                    #     )
+                    for weight, normalized_weight, trajectory in zip(
+                        trajectory_weights, normalized_weights, trajectories
+                    ):
+                        if weight > 0:
+                            self.draw_polyline(
+                                trajectory,
+                                colour=[
+                                    *EGO_TRAJECTORY_COLOUR,
+                                    int(200 + normalized_weight * 55.0),
+                                ],
+                            )
+                            # for pos in trajectory:
+                            #     self.window.draw_circle(
+                            #         pos[:2],
+                            #         colour=[*EGO_TRAJECTORY_COLOUR, int(200 + normalized_weight * 55.0)],
+                            #         radius=self.ego.get_extent(),
+                            #     )
             self._draw_visibility()
             self._draw_status()
 

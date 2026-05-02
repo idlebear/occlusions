@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 from scipy import sparse
+from scipy.sparse.csgraph import shortest_path
+from sklearn.cluster import AgglomerativeClustering
 from shapely.geometry import MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
@@ -52,6 +54,8 @@ class DestinationClasses:
     radius: float
     centers: np.ndarray
     train_counts: np.ndarray
+    member_endpoints: tuple[np.ndarray, ...]
+    member_state_ids: tuple[np.ndarray, ...]
     track_to_class: dict[int, int]
 
 
@@ -74,6 +78,7 @@ def main() -> None:
             non_walkable_classes=tuple(args.non_walkable_class or NON_WALKABLE_CLASSES),
         )
         trajectory_states = map_trajectories_to_states(scene, state_space)
+        destination_radius = destination_radius_scene_units(scene, args)
         splits = split_tracks(
             sorted(scene.trajectories),
             train_fraction=args.train_fraction,
@@ -82,18 +87,25 @@ def main() -> None:
         )
         destination_classes = fit_destination_classes(
             scene,
+            state_space,
             splits["train"],
-            radius=args.destination_radius,
+            radius=destination_radius,
+            min_samples=args.destination_min_samples,
+            snap_distance=args.endpoint_snap_distance,
         )
         track_to_class = assign_destination_classes(
             scene,
+            state_space,
             destination_classes,
-            max_distance=args.destination_radius,
+            max_distance=destination_radius,
+            snap_distance=args.endpoint_snap_distance,
         )
         destination_classes = DestinationClasses(
             radius=destination_classes.radius,
             centers=destination_classes.centers,
             train_counts=destination_classes.train_counts,
+            member_endpoints=destination_classes.member_endpoints,
+            member_state_ids=destination_classes.member_state_ids,
             track_to_class=track_to_class,
         )
 
@@ -125,6 +137,7 @@ def main() -> None:
             {
                 "scene_id": scene_id,
                 "cell_size": args.grid_size,
+                "destination_radius": destination_radius,
                 "state_count": len(state_space.state_ids),
                 "rows": state_space.rows,
                 "cols": state_space.cols,
@@ -159,11 +172,33 @@ def parse_args() -> argparse.Namespace:
         default=0.25,
         help="Uniform grid cell size in normalized scene units.",
     )
-    parser.add_argument(
+    radius_group = parser.add_mutually_exclusive_group()
+    radius_group.add_argument(
         "--destination-radius",
         type=float,
+        default=None,
+        help="Maximum destination-cluster complete-link diameter in normalized scene units.",
+    )
+    radius_group.add_argument(
+        "--destination-radius-meters",
+        type=float,
         default=2.0,
-        help="Maximum destination-cluster radius in scene units.",
+        help="Maximum destination-cluster complete-link diameter in meters.",
+    )
+    parser.add_argument(
+        "--destination-min-samples",
+        type=int,
+        default=3,
+        help="Minimum train endpoints required to keep a destination class.",
+    )
+    parser.add_argument(
+        "--endpoint-snap-distance",
+        type=float,
+        default=None,
+        help=(
+            "Maximum distance for snapping destination endpoints that land just outside "
+            "the walkable grid. Defaults to the grid cell size."
+        ),
     )
     parser.add_argument(
         "--non-walkable-class",
@@ -181,6 +216,32 @@ def parse_args() -> argparse.Namespace:
         help="Use every Nth state sample when counting transitions.",
     )
     return parser.parse_args()
+
+
+def destination_radius_scene_units(
+    scene: ProcessedSceneRecord,
+    args: argparse.Namespace,
+) -> float:
+    if args.destination_radius is not None:
+        radius = float(args.destination_radius)
+    else:
+        meters = float(args.destination_radius_meters)
+        try:
+            scene_units_per_meter = float(
+                scene.metadata["metric_calibration"]["scene_units_per_meter"]
+            )
+        except KeyError as exc:
+            raise KeyError(
+                "Processed metadata is missing metric_calibration.scene_units_per_meter; "
+                "use --destination-radius with normalized scene units instead."
+            ) from exc
+        radius = meters * scene_units_per_meter
+        if radius <= 0 and not scene.trajectories:
+            radius = meters
+
+    if not np.isfinite(radius) or radius <= 0:
+        raise ValueError("destination radius must be finite and positive")
+    return radius
 
 
 def available_scene_ids(processed_root: Path) -> list[int]:
@@ -318,7 +379,12 @@ def map_trajectories_to_states(
     }
 
 
-def map_points_to_states(points: np.ndarray, state_space: GridStateSpace) -> np.ndarray:
+def map_points_to_states(
+    points: np.ndarray,
+    state_space: GridStateSpace,
+    *,
+    snap_distance: float | None = None,
+) -> np.ndarray:
     bounds = state_space.bounds
     col = np.floor((points[:, 0] - bounds["min_x"]) / state_space.cell_size).astype(np.int64)
     row = np.floor((points[:, 1] - bounds["min_y"]) / state_space.cell_size).astype(np.int64)
@@ -330,6 +396,17 @@ def map_points_to_states(points: np.ndarray, state_space: GridStateSpace) -> np.
     )
     states = np.full(points.shape[0], -1, dtype=np.int64)
     states[valid] = state_space.grid_to_state[row[valid], col[valid]]
+    if snap_distance is not None:
+        if not np.isfinite(snap_distance) or snap_distance < 0:
+            raise ValueError("snap_distance must be finite and non-negative")
+        if snap_distance > 0 and state_space.centers.shape[0] > 0:
+            invalid_indices = np.flatnonzero(states < 0)
+            max_distance_sq = snap_distance * snap_distance
+            for point_index in invalid_indices:
+                distances_sq = np.sum((state_space.centers - points[point_index]) ** 2, axis=1)
+                nearest_state = int(np.argmin(distances_sq))
+                if distances_sq[nearest_state] <= max_distance_sq:
+                    states[point_index] = nearest_state
     return states
 
 
@@ -359,14 +436,58 @@ def split_tracks(
     }
 
 
+def build_8way_distance_graph(state_space: GridStateSpace) -> sparse.csr_matrix:
+    rows, cols = state_space.rows, state_space.cols
+    state_count = len(state_space.state_ids)
+
+    row_indices = []
+    col_indices = []
+    values = []
+
+    grid_to_state = state_space.grid_to_state
+    cell_size = state_space.cell_size
+    diag_dist = cell_size * np.sqrt(2)
+
+    directions = [
+        (-1, 0, cell_size),
+        (1, 0, cell_size),
+        (0, -1, cell_size),
+        (0, 1, cell_size),
+        (-1, -1, diag_dist),
+        (-1, 1, diag_dist),
+        (1, -1, diag_dist),
+        (1, 1, diag_dist),
+    ]
+
+    for state_i, (r, c) in enumerate(state_space.grid_indices):
+        for dr, dc, weight in directions:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols:
+                state_j = grid_to_state[nr, nc]
+                if state_j >= 0:
+                    row_indices.append(state_i)
+                    col_indices.append(state_j)
+                    values.append(weight)
+
+    return sparse.coo_matrix(
+        (values, (row_indices, col_indices)),
+        shape=(state_count, state_count),
+    ).tocsr()
+
+
 def fit_destination_classes(
     scene: ProcessedSceneRecord,
+    state_space: GridStateSpace,
     train_track_ids: list[int],
     *,
     radius: float,
+    min_samples: int,
+    snap_distance: float | None,
 ) -> DestinationClasses:
-    if radius <= 0:
-        raise ValueError("destination radius must be positive")
+    if not np.isfinite(radius) or radius <= 0:
+        raise ValueError("destination radius must be finite and positive")
+    if min_samples < 1:
+        raise ValueError("destination min samples must be >= 1")
 
     endpoints = []
     valid_track_ids = []
@@ -377,69 +498,230 @@ def fit_destination_classes(
         endpoints.append(trajectory[-1])
         valid_track_ids.append(track_id)
 
-    centers: list[np.ndarray] = []
-    member_endpoints: list[list[np.ndarray]] = []
-    members: list[list[int]] = []
-    for track_id, endpoint in sorted(zip(valid_track_ids, endpoints), key=lambda item: (item[1][0], item[1][1])):
-        best_index = -1
-        best_distance = np.inf
-        for index, center in enumerate(centers):
-            candidate_endpoints = [*member_endpoints[index], np.asarray(endpoint, dtype=float)]
-            candidate_center = np.asarray(candidate_endpoints).mean(axis=0)
-            candidate_distances = np.linalg.norm(
-                np.asarray(candidate_endpoints) - candidate_center,
-                axis=1,
-            )
-            distance = float(np.linalg.norm(endpoint - candidate_center))
-            if float(np.max(candidate_distances)) <= radius and distance < best_distance:
-                best_index = index
-                best_distance = distance
-        if best_index < 0:
-            centers.append(np.asarray(endpoint, dtype=float).copy())
-            member_endpoints.append([np.asarray(endpoint, dtype=float).copy()])
-            members.append([track_id])
-        else:
-            members[best_index].append(track_id)
-            member_endpoints[best_index].append(np.asarray(endpoint, dtype=float).copy())
-            centers[best_index] = np.asarray(member_endpoints[best_index]).mean(axis=0)
-
-    ordered = sorted(
-        enumerate(centers),
-        key=lambda item: (float(item[1][0]), float(item[1][1])),
-    )
-    remap = {old_index: new_index for new_index, (old_index, _) in enumerate(ordered)}
-    ordered_centers = np.asarray([center for _, center in ordered], dtype=float).reshape((-1, 2))
-    counts = np.zeros(len(ordered_centers), dtype=np.int64)
     track_to_class: dict[int, int] = {}
-    for old_index, track_ids in enumerate(members):
-        new_index = remap[old_index]
-        counts[new_index] = len(track_ids)
-        for track_id in track_ids:
-            track_to_class[track_id] = new_index
+    endpoints_array = np.asarray(endpoints, dtype=float)
+    if endpoints_array.size == 0:
+        return DestinationClasses(
+            radius=float(radius),
+            centers=np.zeros((0, 2), dtype=float),
+            train_counts=np.zeros(0, dtype=np.int64),
+            member_endpoints=tuple(),
+            member_state_ids=tuple(),
+            track_to_class=track_to_class,
+        )
+
+    if snap_distance is None:
+        snap_distance = state_space.cell_size
+
+    endpoint_states = map_points_to_states(
+        endpoints_array,
+        state_space,
+        snap_distance=snap_distance,
+    )
+    valid_mask = endpoint_states >= 0
+    valid_endpoint_states = endpoint_states[valid_mask]
+
+    for i, track_id in enumerate(valid_track_ids):
+        if not valid_mask[i]:
+            track_to_class[track_id] = -1
+
+    if valid_endpoint_states.size == 0:
+        return DestinationClasses(
+            radius=float(radius),
+            centers=np.zeros((0, 2), dtype=float),
+            train_counts=np.zeros(0, dtype=np.int64),
+            member_endpoints=tuple(),
+            member_state_ids=tuple(),
+            track_to_class=track_to_class,
+        )
+
+    graph = build_8way_distance_graph(state_space)
+
+    distances_from_endpoints = shortest_path(
+        csgraph=graph,
+        directed=False,
+        indices=valid_endpoint_states,
+    )
+    pairwise_distances = distances_from_endpoints[:, valid_endpoint_states]
+    if not np.all(np.isfinite(pairwise_distances)):
+        disconnected_distance = radius + max(
+            state_space.cell_size,
+            np.finfo(np.float64).eps * max(1.0, radius),
+        )
+        pairwise_distances = np.nan_to_num(
+            pairwise_distances,
+            nan=disconnected_distance,
+            posinf=disconnected_distance,
+            neginf=disconnected_distance,
+        )
+    endpoint_distances = np.linalg.norm(
+        endpoints_array[valid_mask][:, np.newaxis, :] - endpoints_array[valid_mask][np.newaxis, :, :],
+        axis=2,
+    )
+    pairwise_distances = np.maximum(pairwise_distances, endpoint_distances)
+
+    if valid_endpoint_states.size == 1:
+        labels = np.zeros(1, dtype=np.int64)
+    else:
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=radius,
+            metric="precomputed",
+            linkage="complete",
+        )
+        labels = clustering.fit_predict(pairwise_distances)
+
+    label_to_endpoints: dict[int, list[np.ndarray]] = {}
+    label_to_states: dict[int, list[int]] = {}
+    label_counts: dict[int, int] = {}
+    for label in labels:
+        label = int(label)
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    valid_idx = 0
+    for i, track_id in enumerate(valid_track_ids):
+        if not valid_mask[i]:
+            continue
+
+        label = int(labels[valid_idx])
+        state_id = int(valid_endpoint_states[valid_idx])
+        valid_idx += 1
+
+        if label_counts[label] < min_samples:
+            track_to_class[track_id] = -1
+        else:
+            label_to_endpoints.setdefault(label, []).append(endpoints_array[i])
+            label_to_states.setdefault(label, []).append(state_id)
+            track_to_class[track_id] = label
+
+    centers = []
+    ordered = sorted(
+        label_to_endpoints.items(),
+        key=lambda item: (np.mean(item[1], axis=0)[0], np.mean(item[1], axis=0)[1]),
+    )
+
+    remap = {old_label: new_label for new_label, (old_label, _) in enumerate(ordered)}
+
+    counts = np.zeros(len(ordered), dtype=np.int64)
+    member_endpoints = []
+    member_state_ids = []
+    for old_label, pts in ordered:
+        new_label = remap[old_label]
+        endpoints_for_label = np.asarray(pts, dtype=float).reshape((-1, 2))
+        centers.append(np.mean(endpoints_for_label, axis=0))
+        counts[new_label] = len(pts)
+        member_endpoints.append(endpoints_for_label)
+        member_state_ids.append(np.asarray(label_to_states[old_label], dtype=np.int64))
+
+    for track_id, old_label in track_to_class.items():
+        if old_label != -1:
+            track_to_class[track_id] = remap[old_label]
+
+    ordered_centers = np.asarray(centers, dtype=float).reshape((-1, 2))
 
     return DestinationClasses(
         radius=float(radius),
         centers=ordered_centers,
         train_counts=counts,
+        member_endpoints=tuple(member_endpoints),
+        member_state_ids=tuple(member_state_ids),
         track_to_class=track_to_class,
     )
 
 
 def assign_destination_classes(
     scene: ProcessedSceneRecord,
+    state_space: GridStateSpace,
     destination_classes: DestinationClasses,
     *,
     max_distance: float,
+    snap_distance: float | None,
 ) -> dict[int, int]:
-    track_to_class: dict[int, int] = {}
-    centers = destination_classes.centers
+    track_to_class: dict[int, int] = dict(destination_classes.track_to_class)
+    if not np.isfinite(max_distance) or max_distance <= 0:
+        raise ValueError("destination assignment distance must be finite and positive")
+
+    if destination_classes.centers.shape[0] == 0:
+        return {
+            track_id: track_to_class.get(track_id, -1)
+            for track_id in scene.trajectories
+        }
+
+    endpoints = []
+    valid_track_ids = []
     for track_id, trajectory in scene.trajectories.items():
-        if trajectory.shape[0] == 0 or centers.shape[0] == 0:
+        if track_id in track_to_class:
+            continue
+        if trajectory.shape[0] == 0:
             track_to_class[track_id] = -1
             continue
-        distances = np.linalg.norm(centers - trajectory[-1], axis=1)
-        best_index = int(np.argmin(distances))
-        track_to_class[track_id] = best_index if distances[best_index] <= max_distance else -1
+        endpoints.append(trajectory[-1])
+        valid_track_ids.append(track_id)
+
+    if not endpoints:
+        return track_to_class
+
+    if snap_distance is None:
+        snap_distance = state_space.cell_size
+
+    endpoint_states = map_points_to_states(
+        np.asarray(endpoints, dtype=float),
+        state_space,
+        snap_distance=snap_distance,
+    )
+    valid_mask = endpoint_states >= 0
+    valid_endpoint_states = endpoint_states[valid_mask]
+    for i, track_id in enumerate(valid_track_ids):
+        if not valid_mask[i]:
+            track_to_class[track_id] = -1
+
+    if valid_endpoint_states.size == 0:
+        return track_to_class
+
+    graph = build_8way_distance_graph(state_space)
+    distances_from_endpoints = shortest_path(
+        csgraph=graph,
+        directed=False,
+        indices=valid_endpoint_states,
+    )
+
+    working_member_endpoints = [points.copy() for points in destination_classes.member_endpoints]
+    working_member_states = [states.copy() for states in destination_classes.member_state_ids]
+
+    valid_idx = 0
+    for i, track_id in enumerate(valid_track_ids):
+        if not valid_mask[i]:
+            continue
+
+        distances = distances_from_endpoints[valid_idx]
+        endpoint = endpoints[i]
+        valid_idx += 1
+        best_class = -1
+        best_distance = np.inf
+        for class_id, (member_endpoints, member_states) in enumerate(
+            zip(working_member_endpoints, working_member_states)
+        ):
+            if member_states.size == 0:
+                continue
+            graph_distances = distances[member_states]
+            euclidean_distances = np.linalg.norm(member_endpoints - endpoint, axis=1)
+            member_distances = np.maximum(graph_distances, euclidean_distances)
+            if not np.all(np.isfinite(member_distances)):
+                continue
+            class_distance = float(np.max(member_distances))
+            if class_distance <= max_distance and class_distance < best_distance:
+                best_class = class_id
+                best_distance = class_distance
+        track_to_class[track_id] = best_class
+        if best_class >= 0:
+            working_member_endpoints[best_class] = np.vstack(
+                [working_member_endpoints[best_class], endpoint.reshape(1, 2)]
+            )
+            working_member_states[best_class] = np.append(
+                working_member_states[best_class],
+                valid_endpoint_states[valid_idx - 1],
+            )
+
     return track_to_class
 
 
@@ -629,6 +911,7 @@ def write_summary(rows: list[dict[str, Any]], path: Path) -> None:
     fieldnames = [
         "scene_id",
         "cell_size",
+        "destination_radius",
         "state_count",
         "rows",
         "cols",

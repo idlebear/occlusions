@@ -38,6 +38,7 @@ def main() -> None:
         fps=args.fps,
         speed_threshold=args.speed_threshold,
         min_track_displacement=args.min_track_displacement,
+        assumed_walking_speed=args.assumed_walking_speed,
         write_overlays=not args.no_overlays,
     )
 
@@ -96,6 +97,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--assumed-walking-speed",
+        type=float,
+        default=1.4,
+        help=(
+            "Assumed average pedestrian walking speed in m/s. Used to estimate "
+            "scene_units_per_meter from average track speed."
+        ),
+    )
+    parser.add_argument(
         "--quantized",
         action="store_true",
         help="Use trajectories.pkl instead of trajectories_dequantized.pkl.",
@@ -118,6 +128,7 @@ def process_scene(
     dt: float = 1.0 / 30.0,
     speed_threshold: float = 2.0,
     min_track_displacement: float = 10.0,
+    assumed_walking_speed: float = 1.4,
 ) -> ProcessedScene:
     image = data.images[scene_id]
     transform = make_scene_transform(
@@ -150,6 +161,7 @@ def process_scene(
         scene_polygons=scene_polygons,
         dt=dt,
         speed_threshold=speed_threshold,
+        assumed_walking_speed=assumed_walking_speed,
     )
 
     return ProcessedScene(
@@ -173,6 +185,7 @@ def write_processed_dataset(
     fps: float,
     speed_threshold: float,
     min_track_displacement: float,
+    assumed_walking_speed: float,
     write_overlays: bool,
 ) -> None:
     if fps <= 0:
@@ -181,6 +194,8 @@ def write_processed_dataset(
         raise ValueError("speed_threshold must be non-negative")
     if min_track_displacement < 0:
         raise ValueError("min_track_displacement must be non-negative")
+    if assumed_walking_speed <= 0:
+        raise ValueError("assumed_walking_speed must be positive")
     dt = 1.0 / fps
     output_root.mkdir(parents=True, exist_ok=True)
     summary_rows: list[dict[str, Any]] = []
@@ -198,6 +213,7 @@ def write_processed_dataset(
             dt=dt,
             speed_threshold=speed_threshold,
             min_track_displacement=min_track_displacement,
+            assumed_walking_speed=assumed_walking_speed,
         )
         scene_root = output_root / f"scene_{scene_id:03d}"
         scene_root.mkdir(parents=True, exist_ok=True)
@@ -272,6 +288,7 @@ def validate_scene_transform(
     scene_polygons: dict[str, list[np.ndarray]],
     dt: float,
     speed_threshold: float,
+    assumed_walking_speed: float,
 ) -> dict[str, Any]:
     trajectory_errors = []
     for track_id, raw_points in raw_trajectories.items():
@@ -312,6 +329,8 @@ def validate_scene_transform(
         trajectory_bounds = {"min_x": 0.0, "min_y": 0.0, "max_x": 0.0, "max_y": 0.0}
 
     speeds = []
+    track_mean_speeds = []
+    track_median_speeds = []
     max_track_speeds: dict[str, float] = {}
     for track_id, points in scene_trajectories.items():
         if points.shape[0] < 2:
@@ -319,7 +338,13 @@ def validate_scene_transform(
             continue
         track_speeds = np.linalg.norm(np.diff(points, axis=0), axis=1) / dt
         speeds.extend(track_speeds.tolist())
+        track_mean_speeds.append(float(np.mean(track_speeds)))
+        track_median_speeds.append(float(np.median(track_speeds)))
         max_track_speeds[str(track_id)] = float(np.max(track_speeds))
+
+    point_mean_speed = float(np.mean(speeds)) if speeds else 0.0
+    calibration_speed = float(np.mean(track_median_speeds)) if track_median_speeds else 0.0
+    scene_units_per_meter = calibration_speed / assumed_walking_speed
 
     return {
         "max_trajectory_round_trip_error_source_units": max(trajectory_errors, default=0.0),
@@ -328,14 +353,30 @@ def validate_scene_transform(
         "trajectory_bounds": trajectory_bounds,
         "speed_summary": {
             "units": f"{transform.scene_units}/s",
-            "mean": float(np.mean(speeds)) if speeds else 0.0,
+            "mean": point_mean_speed,
             "median": float(np.median(speeds)) if speeds else 0.0,
             "p95": float(np.percentile(speeds, 95)) if speeds else 0.0,
             "max": float(np.max(speeds)) if speeds else 0.0,
+            "track_mean": float(np.mean(track_mean_speeds)) if track_mean_speeds else 0.0,
+            "track_median_mean": calibration_speed,
+            "track_median_median": (
+                float(np.median(track_median_speeds)) if track_median_speeds else 0.0
+            ),
             "threshold": speed_threshold,
             "tracks_over_threshold": [
                 int(track_id) for track_id, speed in max_track_speeds.items() if speed > speed_threshold
             ],
+        },
+        "metric_calibration": {
+            "method": "mean_track_median_speed_matches_assumed_walking_speed",
+            "average_scene_speed": calibration_speed,
+            "average_scene_speed_units": f"{transform.scene_units}/s",
+            "assumed_walking_speed_mps": assumed_walking_speed,
+            "scene_units_per_meter": scene_units_per_meter,
+            "meters_per_scene_unit": (
+                1.0 / scene_units_per_meter if scene_units_per_meter > 0 else None
+            ),
+            "actor_dimension_multiplier": scene_units_per_meter,
         },
     }
 
@@ -380,6 +421,7 @@ def write_scene_metadata(
         },
         "transform": scene.transform.to_metadata(),
         "filtering": scene.filtering,
+        "metric_calibration": scene.validation["metric_calibration"],
         "validation": scene.validation,
         "files": {
             "trajectories": "trajectories_scene.npz",
@@ -498,6 +540,10 @@ def scene_summary_row(scene: ProcessedScene) -> dict[str, Any]:
         "trajectory_count": len(scene.trajectories),
         "removed_trajectory_count": scene.filtering["removed_trajectory_count"],
         "min_endpoint_displacement_source_units": scene.filtering["min_endpoint_displacement"],
+        "assumed_walking_speed_mps": validation["metric_calibration"][
+            "assumed_walking_speed_mps"
+        ],
+        "scene_units_per_meter": validation["metric_calibration"]["scene_units_per_meter"],
         "polygon_count": sum(len(items) for items in scene.polygons.values()),
         "max_trajectory_round_trip_error_source_units": validation[
             "max_trajectory_round_trip_error_source_units"
@@ -527,6 +573,8 @@ def write_processing_summary(rows: list[dict[str, Any]], path: Path) -> None:
         "trajectory_count",
         "removed_trajectory_count",
         "min_endpoint_displacement_source_units",
+        "assumed_walking_speed_mps",
+        "scene_units_per_meter",
         "polygon_count",
         "max_trajectory_round_trip_error_source_units",
         "max_polygon_round_trip_error_source_units",
