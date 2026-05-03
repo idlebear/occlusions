@@ -137,7 +137,9 @@ class OccupancyGrid:
                     r = max_range
 
                 cellList = self.__inverseScanner(X, rng=r, bearing=bearing, alpha=self.resolution * 2)
-                self.__updateCells(cellList)
+                self.__updateCells(cellList, clip=False)
+
+            self.grid = np.clip(self.grid, MIN_PROBABILITY, MAX_PROBABILITY)
 
         finally:
             self.mutex.release()
@@ -145,28 +147,35 @@ class OccupancyGrid:
     def updateCells(self, cellList, free_only=False):
         self.mutex.acquire()
         try:
-            self.__updateCells(cellList, free_only)
+            self.__updateCells(cellList, free_only, clip=True)
         finally:
             self.mutex.release()
 
-    def __updateCells(self, cellList, free_only=False):
+    def __updateCells(self, cellList, free_only=False, clip=True):
         if free_only:
             _min_prob = 0
         else:
             _min_prob = MIN_PROBABILITY
 
-        # Loop through each cell from measurement model
-        for j in range(len(cellList)):
-            ix = int(cellList[j, 0])
-            iy = int(cellList[j, 1])
-            il = cellList[j, 2]
+        cellList = np.asarray(cellList)
+        if not len(cellList):
+            return
 
-            if not free_only or il < 0.5:
-                # Calculate updated log odds
-                if ix > 0 and ix < self.grid_size and iy > 0 and iy < self.grid_size:
-                    self.grid[iy, ix] = self.grid[iy, ix] + log(il / (1 - il)) - self.l0
+        ix = cellList[:, 0].astype(np.intp, copy=False)
+        iy = cellList[:, 1].astype(np.intp, copy=False)
+        il = cellList[:, 2]
 
-        self.grid = np.clip(self.grid, _min_prob, MAX_PROBABILITY)
+        mask = (ix > 0) & (ix < self.grid_size) & (iy > 0) & (iy < self.grid_size)
+        if free_only:
+            mask &= il < 0.5
+        if not np.any(mask):
+            return
+
+        updates = np.log(il[mask] / (1 - il[mask])) - self.l0
+        np.add.at(self.grid, (iy[mask], ix[mask]), updates)
+
+        if clip:
+            self.grid = np.clip(self.grid, _min_prob, MAX_PROBABILITY)
 
     def mungeCells(self, cellList):
         # Loop through each cell from measurement model
@@ -251,11 +260,7 @@ class OccupancyGrid:
 
     def __probabilityMap(self):
         # return the current state as a probabilistic representation
-        num = np.zeros([self.grid_size, self.grid_size])
-        denom = np.ones([self.grid_size, self.grid_size])
-        np.exp(self.grid, out=num)
-        denom = denom + num
-        return np.divide(num, denom)
+        return 1.0 / (1.0 + np.exp(-self.grid))
 
     def obstacleMap(self):
         # return the current state as a free/occupied space representation

@@ -7,7 +7,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from Actor import STATE as ActorStateEnum
-from config import GRID_RESOLUTION
+from config import GRID_RESOLUTION, STATIC_PLANNER_OBSTACLE_CLEARANCE
 from trajectory_planner.frenet_optimal_trajectory import Frenet_path
 
 try:
@@ -27,8 +27,10 @@ class SpecialKParams:
     max_steer: float
     display_offset: np.ndarray
     display_diff: float
+    scene_scale: float
     grid_resolution: float
     heading_bins: int
+    roadmap_samples_density: float
     roadmap_samples: int
     roadmap_grid_step: float
     obstacle_edge_step: float
@@ -707,8 +709,16 @@ def local_anchor_points(start_state, goal_xy, obstacle_union, params):
     heading_forward = np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
     min_turn_radius = params.vehicle_length / max(np.tan(params.max_steer), 1.0e-6)
     distances = [
-        max(2.5 * params.vehicle_length, 0.65 * min_turn_radius, 1.2),
-        max(4.0 * params.vehicle_length, 1.15 * min_turn_radius, 2.0),
+        max(
+            2.5 * params.vehicle_length,
+            0.65 * min_turn_radius,
+            1.2 * params.scene_scale,
+        ),
+        max(
+            4.0 * params.vehicle_length,
+            1.15 * min_turn_radius,
+            2.0 * params.scene_scale,
+        ),
     ]
     angles = [
         0.0,
@@ -728,7 +738,9 @@ def local_anchor_points(start_state, goal_xy, obstacle_union, params):
             if float(direction @ heading_forward) <= 0.0:
                 continue
             point = start + distance_scale * direction
-            if np.linalg.norm(goal - point) >= max(0.4, 0.15 * distance):
+            if np.linalg.norm(goal - point) >= max(
+                0.4 * params.scene_scale, 0.15 * distance
+            ):
                 if point_is_free(point, obstacle_union, params):
                     anchors.append(point)
     return anchors
@@ -1140,6 +1152,25 @@ def state_cell(state, params):
     )
 
 
+def route_spatial_cells(route, params):
+    samples = polyline_sample(
+        route,
+        spacing=max(float(params.lattice_resolution), 0.5 * float(params.vehicle_width)),
+    )
+    if samples.ndim != 2 or samples.shape[0] == 0:
+        return []
+    origin = np.asarray(params.display_offset, dtype=float)[:2]
+    cell_size = max(float(params.lattice_resolution), 1.0e-6)
+    cells = []
+    previous = None
+    for point in samples[:, :2]:
+        cell = tuple(np.floor((point - origin) / cell_size).astype(int))
+        if cell != previous:
+            cells.append(cell)
+            previous = cell
+    return cells
+
+
 def reconstruct_states(parent, node_states, goal_key):
     keys = []
     key = goal_key
@@ -1542,15 +1573,37 @@ def build_params(
     display_diff,
     vehicle_length,
     vehicle_width,
+    vehicle_scale,
     max_steer,
     resolution,
 ):
+    scene_scale = max(float(vehicle_scale or 1.0), 1.0e-6)
     min_turn_radius = float(vehicle_length) / max(np.tan(float(max_steer)), 1.0e-6)
     grid_resolution = float(resolution or GRID_RESOLUTION)
+    density = max(
+        0.0,
+        float(getattr(args, "specialk_roadmap_samples_density", 1.0)),
+    )
+    display_diff = float(display_diff)
+    scene_area_m2 = (display_diff / scene_scale) ** 2
+    roadmap_samples = int(np.ceil(density * scene_area_m2)) if density > 0.0 else 0
+    density_spacing = (
+        scene_scale / np.sqrt(density)
+        if density > 0.0
+        else max(scene_scale, grid_resolution)
+    )
+    connect_radius = float(
+        getattr(args, "specialk_connect_radius", None)
+        or max(2.5 * density_spacing, 6.0 * grid_resolution, 4.0 * min_turn_radius)
+    )
     lattice_resolution = float(
         getattr(args, "specialk_lattice_resolution", None)
-        or max(grid_resolution, min_turn_radius / 5.0)
+        or max(grid_resolution, 0.35 * scene_scale, min_turn_radius / 4.0)
     )
+    obstacle_clearance = getattr(args, "specialk_obstacle_clearance", None)
+    if obstacle_clearance is None:
+        obstacle_clearance = STATIC_PLANNER_OBSTACLE_CLEARANCE * scene_scale
+
     return SpecialKParams(
         count=max(1, int(getattr(args, "trajectory_count", 1))),
         speed=float(getattr(args, "robot_speed", 0.5)),
@@ -1560,51 +1613,40 @@ def build_params(
         vehicle_width=float(vehicle_width),
         max_steer=float(max_steer),
         display_offset=np.asarray(display_offset, dtype=float)[:2],
-        display_diff=float(display_diff),
+        display_diff=display_diff,
+        scene_scale=scene_scale,
         grid_resolution=grid_resolution,
         heading_bins=max(8, int(getattr(args, "specialk_heading_bins", 16))),
-        roadmap_samples=max(0, int(getattr(args, "specialk_roadmap_samples", 180))),
+        roadmap_samples_density=density,
+        roadmap_samples=roadmap_samples,
         roadmap_grid_step=float(
             getattr(args, "specialk_roadmap_grid_step", None)
-            or max(
-                2.0 * grid_resolution,
-                min(
-                    0.5
-                    * (
-                        getattr(args, "specialk_connect_radius", None)
-                        or max(6.0 * grid_resolution, 4.0 * min_turn_radius)
-                    ),
-                    float(display_diff) / 35.0,
-                ),
-            )
+            or max(2.0 * grid_resolution, density_spacing)
         ),
         obstacle_edge_step=float(
             getattr(args, "specialk_obstacle_edge_step", None)
-            or max(grid_resolution, 0.5 * float(vehicle_width))
+            or max(2.0 * grid_resolution, min(density_spacing, 1.5 * scene_scale))
         ),
-        nearest=max(3, int(getattr(args, "specialk_nearest", 12))),
-        connect_radius=float(
-            getattr(args, "specialk_connect_radius", None)
-            or max(6.0 * grid_resolution, 4.0 * min_turn_radius)
-        ),
+        nearest=max(3, int(getattr(args, "specialk_nearest", 8))),
+        connect_radius=connect_radius,
         raw_routes=max(
             1,
             int(
                 getattr(args, "specialk_raw_routes", 0)
-                or max(6 * int(getattr(args, "trajectory_count", 1)), 24)
+                or max(3 * int(getattr(args, "trajectory_count", 1)), 12)
             ),
         ),
         route_candidates=max(
             1,
             int(
                 getattr(args, "specialk_route_candidates", 0)
-                or max(3 * int(getattr(args, "trajectory_count", 1)), 8)
+                or max(2 * int(getattr(args, "trajectory_count", 1)), 6)
             ),
         ),
         max_overlap=float(getattr(args, "specialk_max_overlap", 0.6)),
         separation=float(
             getattr(args, "specialk_separation", None)
-            or max(2.0 * float(vehicle_width), 2.0 * grid_resolution)
+            or max(2.0 * float(vehicle_width), density_spacing, 2.0 * grid_resolution)
         ),
         clearance_weight=float(getattr(args, "specialk_clearance_weight", 0.25)),
         diversity_penalty=float(getattr(args, "specialk_diversity_penalty", 1.2)),
@@ -1615,16 +1657,16 @@ def build_params(
         lattice_resolution=lattice_resolution,
         motion_step=float(
             getattr(args, "specialk_motion_step", None)
-            or max(1.5 * lattice_resolution, 0.5 * min_turn_radius)
+            or max(1.5 * lattice_resolution, 0.75 * min_turn_radius)
         ),
         goal_tolerance=float(
             getattr(args, "specialk_goal_tolerance", None)
-            or max(1.5 * lattice_resolution, 0.5)
+            or max(1.5 * lattice_resolution, 0.5 * scene_scale)
         ),
-        max_expansions=max(250, int(getattr(args, "specialk_max_expansions", 3500))),
+        max_expansions=max(250, int(getattr(args, "specialk_max_expansions", 1200))),
         time_budget_ms=float(getattr(args, "specialk_time_budget_ms", 0.0)),
         curvature_tolerance=float(getattr(args, "kpaths_curvature_tolerance", 0.25)),
-        obstacle_clearance=float(getattr(args, "specialk_obstacle_clearance", 0.0)),
+        obstacle_clearance=max(0.0, float(obstacle_clearance)),
         debug=bool(
             getattr(args, "debug_paths", False)
             or getattr(args, "debug_steering", False)
@@ -1653,6 +1695,7 @@ def generate_specialk_trajectories(
         display_diff,
         vehicle_length,
         vehicle_width,
+        vehicle_scale,
         max_steer,
         resolution,
     )
@@ -1679,10 +1722,11 @@ def generate_specialk_trajectories(
     accepted = []
     used_cells = {}
     reject_counts = {"lattice": 0, "kinematics": 0, "loop": 0, "duplicate": 0}
-    seen_cells = []
+    seen_route_cells = []
     centroids = obstacle_centroids(static_polygons)
 
     for route in routes:
+        route_cells = route_spatial_cells(route, params)
         states = track_route_with_ackermann(start_state, route, obstacle_union, params)
         source = "tracker"
         if states is None:
@@ -1712,16 +1756,20 @@ def generate_specialk_trajectories(
             reject_counts["kinematics"] += 1
             continue
         cells = [state_cell(state, params) for state in states]
-        if any(edge_overlap(cells, [existing]) > 0.98 for existing in seen_cells):
+        if any(
+            edge_overlap(route_cells, [existing]) > 0.98
+            for existing in seen_route_cells
+        ):
             reject_counts["duplicate"] += 1
             continue
-        route_out = states_to_route(
+        tracked_route = states_to_route(
             states, min_spacing=max(params.grid_resolution, 0.1)
         )
         accepted.append(
             {
                 "path": path,
-                "route": route_out,
+                "route": dedupe_points(route),
+                "tracked_route": tracked_route,
                 "roadmap_route": route,
                 "cells": cells,
                 "length": polyline_length(route),
@@ -1730,7 +1778,7 @@ def generate_specialk_trajectories(
                 "source": source,
             }
         )
-        seen_cells.append(set(cells))
+        seen_route_cells.append(set(route_cells))
         for cell in set(cells):
             used_cells[cell] = used_cells.get(cell, 0) + 1
         if len(accepted) >= params.count:
@@ -1746,9 +1794,11 @@ def generate_specialk_trajectories(
             "[specialk] "
             f"accepted={len(accepted)}/{params.count} "
             f"routes={len(routes)} lengths={lengths} "
+            f"roadmap_density={params.roadmap_samples_density:.3f} "
             f"roadmap_samples={params.roadmap_samples} "
             f"lattice_resolution={params.lattice_resolution:.3f} "
             f"motion_step={params.motion_step:.3f} "
+            f"obstacle_clearance={params.obstacle_clearance:.3f} "
             f"elapsed_ms={elapsed_ms:.1f} "
             f"rejects={reject_counts}"
         )

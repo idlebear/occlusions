@@ -1,6 +1,9 @@
 import argparse
 import cProfile
 import csv
+import io
+import pstats
+import re
 from heapq import heappop, heappush
 from pathlib import Path
 from random import seed
@@ -339,7 +342,9 @@ def collision_circle_centers(state, geometry):
     return radius, np.asarray(centers, dtype=float)
 
 
-def three_circle_min_clearance_host(ego_state, ego_geometry, actor_state, actor_geometry):
+def three_circle_min_clearance_host(
+    ego_state, ego_geometry, actor_state, actor_geometry
+):
     ego_radius, ego_centers = collision_circle_centers(ego_state, ego_geometry)
     actor_radius, actor_centers = collision_circle_centers(actor_state, actor_geometry)
     deltas = ego_centers[:, np.newaxis, :] - actor_centers[np.newaxis, :, :]
@@ -494,7 +499,11 @@ def control_sequence_collision_summary(
             clearance=static_clearance,
         )
 
-    dynamic_summary = {"collision": False, "min_distance": float("inf"), "closest": None}
+    dynamic_summary = {
+        "collision": False,
+        "min_distance": float("inf"),
+        "closest": None,
+    }
     if agents:
         dynamic_summary = trajectory_dynamic_collision_summary(
             trajectory=trajectory,
@@ -532,7 +541,9 @@ def find_safe_control_candidate(
 ):
     candidates = [("nominal", None, np.asarray(u_nom, dtype=float))]
     if u_variations is not None and len(u_variations):
-        sampled_controls = np.asarray(u_nom, dtype=float)[np.newaxis, :, :] + np.asarray(
+        sampled_controls = np.asarray(u_nom, dtype=float)[
+            np.newaxis, :, :
+        ] + np.asarray(
             u_variations,
             dtype=float,
         )
@@ -980,6 +991,68 @@ def print_loop_timing_debug(tick, timing):
     ]
     parts = [f"{key}={timing.get(key, 0.0) * 1000.0:.2f}ms" for key in ordered_keys]
     print(f"[timing] tick={tick} " + " ".join(parts))
+
+
+def print_sim_tick_timing_debug(tick, timing):
+    if not timing:
+        return
+    ordered_keys = [
+        "advance_time",
+        "ego",
+        "generate_agents",
+        "static_collision",
+        "actors",
+        "cleanup",
+        "decay",
+        "scan",
+        "observation",
+        "info",
+        "done",
+        "total",
+    ]
+    parts = [f"{key}={timing.get(key, 0.0) * 1000.0:.2f}ms" for key in ordered_keys]
+    counts = (
+        f"actors={int(timing.get('actor_count', 0))} "
+        f"visible={int(timing.get('visible_actors', 0))} "
+        f"finished={int(timing.get('finished_actors', 0))} "
+        f"collisions={int(timing.get('collisions', 0))} "
+        f"scan_enabled={bool(timing.get('scan_enabled', False))}"
+    )
+    print(f"[sim-tick] tick={tick} {counts} " + " ".join(parts))
+
+
+def print_sim_scan_timing_debug(tick, timing):
+    if not timing or "scan_total" not in timing:
+        return
+    ordered_keys = [
+        "scan_load_polycheck",
+        "scan_polygons",
+        "scan_faux_scan",
+        "scan_visible_update",
+        "scan_postprocess",
+        "scan_total",
+    ]
+    parts = [f"{key}={timing.get(key, 0.0) * 1000.0:.2f}ms" for key in ordered_keys]
+    counts = (
+        f"polygons={int(timing.get('scan_polygon_count', 0))} "
+        f"vertices={int(timing.get('scan_vertex_count', 0))} "
+        f"rays={int(timing.get('scan_ray_count', 0))} "
+        f"fallback={bool(timing.get('scan_fallback', False))}"
+    )
+    print(f"[sim-scan] tick={tick} {counts} " + " ".join(parts))
+
+
+def print_sim_observation_timing_debug(tick, timing):
+    if not timing or "observation_total" not in timing:
+        return
+    ordered_keys = [
+        "observation_move_origin",
+        "observation_update",
+        "observation_probability_map",
+        "observation_total",
+    ]
+    parts = [f"{key}={timing.get(key, 0.0) * 1000.0:.2f}ms" for key in ordered_keys]
+    print(f"[sim-observation] tick={tick} " + " ".join(parts))
 
 
 TIMING_CSV_FIELDS = [
@@ -4780,37 +4853,37 @@ def get_control(
         return_indices=True,
     )
     trajectory_weights = np.asarray(u_weights, dtype=float)[trajectory_indices]
-    positive_display = trajectory_weights > 0.0
-    if np.any(positive_display):
-        static_display_collisions = 0
-        dynamic_display_collisions = 0
-        for trajectory in trajectories[positive_display]:
-            if static_union is not None and trajectory_collides_with_static(
-                trajectory,
-                static_union,
-                vehicle_length=robot_model.L,
-                vehicle_width=robot_model.W,
-                clearance=static_hard_clearance,
-            ):
-                static_display_collisions += 1
-            if agents:
-                dynamic_summary = trajectory_dynamic_collision_summary(
-                    trajectory=trajectory,
-                    agents=agents,
-                    agent_predictions=agent_predictions,
-                    horizon=args.horizon,
-                    robot_model=robot_model,
-                    clearance=dynamic_hard_clearance,
-                )
-                if dynamic_summary["collision"]:
-                    dynamic_display_collisions += 1
-        if static_display_collisions or dynamic_display_collisions:
-            print(
-                "[rollout-display-audit] "
-                f"tick={debug_tick} positive={int(np.count_nonzero(positive_display))} "
-                f"static_colliding={static_display_collisions} "
-                f"dynamic_colliding={dynamic_display_collisions}"
-            )
+    # positive_display = trajectory_weights > 0.0
+    # if np.any(positive_display):
+    #     static_display_collisions = 0
+    #     dynamic_display_collisions = 0
+    #     for trajectory in trajectories[positive_display]:
+    #         if static_union is not None and trajectory_collides_with_static(
+    #             trajectory,
+    #             static_union,
+    #             vehicle_length=robot_model.L,
+    #             vehicle_width=robot_model.W,
+    #             clearance=static_hard_clearance,
+    #         ):
+    #             static_display_collisions += 1
+    #         if agents:
+    #             dynamic_summary = trajectory_dynamic_collision_summary(
+    #                 trajectory=trajectory,
+    #                 agents=agents,
+    #                 agent_predictions=agent_predictions,
+    #                 horizon=args.horizon,
+    #                 robot_model=robot_model,
+    #                 clearance=dynamic_hard_clearance,
+    #             )
+    #             if dynamic_summary["collision"]:
+    #                 dynamic_display_collisions += 1
+    #     if static_display_collisions or dynamic_display_collisions:
+    #         print(
+    #             "[rollout-display-audit] "
+    #             f"tick={debug_tick} positive={int(np.count_nonzero(positive_display))} "
+    #             f"static_colliding={static_display_collisions} "
+    #             f"dynamic_colliding={dynamic_display_collisions}"
+    #         )
     control_timing["rollout_display"] = perf_counter() - section_start
 
     control_timing["trajectory_agent_check"] = 0.0
@@ -4937,6 +5010,7 @@ def simulate(args, delivery_log=None):
         ego_goal=[[0.05, 0.95], [0.7, 1]],
     )
     args.tick_time = sim.tick_time
+    sim.debug_tick_timing = bool(args.debug_timing)
 
     if args.seed is not None:
         # Save the tasks (or reload them)
@@ -5339,6 +5413,18 @@ def simulate(args, delivery_log=None):
         timing["total"] = perf_counter() - loop_start
         if args.debug_timing and sim.ticks % args.timing_interval == 0:
             print_loop_timing_debug(sim.ticks, timing)
+            print_sim_tick_timing_debug(
+                sim.ticks,
+                getattr(sim, "last_tick_timing", {}),
+            )
+            print_sim_scan_timing_debug(
+                sim.ticks,
+                getattr(sim, "last_tick_timing", {}),
+            )
+            print_sim_observation_timing_debug(
+                sim.ticks,
+                getattr(sim, "last_tick_timing", {}),
+            )
         if args.timing_output:
             append_timing_csv(
                 args.timing_output,
@@ -5359,16 +5445,69 @@ def run_with_optional_profile(args):
 
     profile_output = Path(args.profile_output)
     profile_output.parent.mkdir(parents=True, exist_ok=True)
+    profile_report_output = (
+        Path(args.profile_report_output)
+        if args.profile_report_output
+        else profile_output.with_suffix(profile_output.suffix + ".txt")
+    )
+    profile_report_output.parent.mkdir(parents=True, exist_ok=True)
 
     profiler = cProfile.Profile()
     try:
-        profiler.enable()
-        simulate(args)
+        profiler.runcall(simulate, args)
     finally:
-        profiler.disable()
         profiler.dump_stats(str(profile_output))
+        write_profile_report(
+            profile_output,
+            profile_report_output,
+            sort_by=args.profile_sort,
+            limit=args.profile_limit,
+            project_filter=args.profile_project_filter,
+            ignore_filter=args.profile_ignore_filter,
+        )
         print(f"Wrote cProfile stats to {profile_output}")
+        print(f"Wrote cProfile text report to {profile_report_output}")
         print(f"Open with: snakeviz {profile_output}")
+
+
+def write_profile_report(
+    profile_output,
+    report_output,
+    *,
+    sort_by,
+    limit,
+    project_filter,
+    ignore_filter,
+):
+    limit = max(1, int(limit))
+    stream = io.StringIO()
+    stream.write(f"Profile stats: {profile_output}\n")
+    stream.write(f"Sort: {sort_by}, limit: {limit}\n\n")
+
+    stream.write("== Full Profile ==\n")
+    pstats.Stats(str(profile_output), stream=stream).strip_dirs().sort_stats(
+        sort_by
+    ).print_stats(limit)
+
+    if project_filter:
+        stream.write("\n\n== Project Functions ==\n")
+        stream.write(f"Filter: {project_filter}\n")
+        pstats.Stats(str(profile_output), stream=stream).sort_stats(
+            sort_by
+        ).print_stats(project_filter, limit)
+
+    if ignore_filter:
+        stream.write("\n\n== Full Profile, Infrastructure Rows Removed ==\n")
+        stream.write(f"Ignoring: {ignore_filter}\n")
+        filtered_stats = pstats.Stats(str(profile_output), stream=stream)
+        filtered_stats.stats = {
+            func: stat
+            for func, stat in filtered_stats.stats.items()
+            if not re.search(ignore_filter, f"{func[0]}:{func[1]}:{func[2]}")
+        }
+        filtered_stats.strip_dirs().sort_stats(sort_by).print_stats(limit)
+
+    report_output.write_text(stream.getvalue())
 
 
 if __name__ == "__main__":
@@ -5580,6 +5719,48 @@ if __name__ == "__main__":
         "--profile-output",
         default="results/simulation.prof",
         help="Path for cProfile stats output. SnakeViz can open this file directly.",
+    )
+    argparser.add_argument(
+        "--profile-report-output",
+        default=None,
+        help=(
+            "Optional text report path for cProfile stats. Defaults to "
+            "<profile-output>.txt."
+        ),
+    )
+    argparser.add_argument(
+        "--profile-sort",
+        default="cumulative",
+        choices=["cumulative", "tottime", "time", "calls", "ncalls"],
+        help="Sort key for the text cProfile report.",
+    )
+    argparser.add_argument(
+        "--profile-limit",
+        default=80,
+        type=int,
+        help="Number of rows to include in each text cProfile report section.",
+    )
+    argparser.add_argument(
+        "--profile-project-filter",
+        default=(
+            "src/python/pedestrian|pedestrian/main.py|pedestrian/simulation.py|"
+            "pedestrian/specialk.py|warp_mppi|discrete_oce"
+        ),
+        help=(
+            "Regex filter for project functions in the text cProfile report. "
+            "Use an empty string to disable the filtered section."
+        ),
+    )
+    argparser.add_argument(
+        "--profile-ignore-filter",
+        default=(
+            "debugpy|pydevd|queue.py|threading.py|socket.py|selectors.py|"
+            "subprocess.py|prefork.py"
+        ),
+        help=(
+            "Regex for debugger/wait infrastructure to remove from the extra "
+            "filtered text profile section. Use an empty string to disable it."
+        ),
     )
     argparser.add_argument(
         "--show-sim", action="store_true", help="Display the simulation window"
@@ -5800,10 +5981,13 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
-        "--specialk-roadmap-samples",
-        default=180,
-        type=int,
-        help="Number of deterministic free-space roadmap samples used by specialk.",
+        "--specialk-roadmap-samples-density",
+        default=1.0,
+        type=float,
+        help=(
+            "Target specialk free-space roadmap sample density in samples per "
+            "square meter. Converted to scene units using scene_scale."
+        ),
     )
     argparser.add_argument(
         "--specialk-roadmap-grid-step",
@@ -5811,7 +5995,7 @@ if __name__ == "__main__":
         type=float,
         help=(
             "Deterministic grid sample spacing for specialk roadmap coverage. "
-            "Defaults from map size and connection radius."
+            "Defaults from --specialk-roadmap-samples-density."
         ),
     )
     argparser.add_argument(
@@ -5820,12 +6004,12 @@ if __name__ == "__main__":
         type=float,
         help=(
             "Spacing for obstacle-edge offset samples used to cover narrow "
-            "corridors. Defaults from grid resolution and robot width."
+            "corridors. Defaults from --specialk-roadmap-samples-density."
         ),
     )
     argparser.add_argument(
         "--specialk-nearest",
-        default=12,
+        default=8,
         type=int,
         help="Nearest roadmap neighbors considered for specialk visibility edges.",
     )
@@ -5867,11 +6051,11 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--specialk-obstacle-clearance",
-        default=0.0,
+        default=None,
         type=float,
         help=(
             "Extra obstacle inflation used by specialk in scene units. Defaults "
-            "to zero because the displayed polygons are already in planning scale."
+            "to STATIC_PLANNER_OBSTACLE_CLEARANCE scaled by the scene scale."
         ),
     )
     argparser.add_argument(
@@ -5912,7 +6096,7 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--specialk-max-expansions",
-        default=3500,
+        default=1200,
         type=int,
         help="Maximum lattice node expansions per specialk route.",
     )
@@ -5988,13 +6172,13 @@ if __name__ == "__main__":
     argparser.add_argument(
         "--static-clearance-margin",
         type=float,
-        default=MIN_SEPARATION,
+        default=STATIC_OBSTACLE_CLEARANCE,
         help="Extra soft static-obstacle clearance band outside the ego footprint.",
     )
     argparser.add_argument(
         "--static-hard-clearance-margin",
         type=float,
-        default=0.0,
+        default=STATIC_OBSTACLE_HARD_CLEARANCE,
         help=(
             "Hard static-obstacle clearance margin used by MPPI pruning and the "
             "host final safety check. Keep smaller than --static-clearance-margin."

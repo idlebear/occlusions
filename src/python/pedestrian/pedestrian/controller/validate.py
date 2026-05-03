@@ -3,7 +3,7 @@ import numpy as np
 from skimage.morphology import binary_dilation, binary_opening
 import matplotlib.pyplot as plt
 
-TRAJECTORIES_TO_VISUALIZE = 25
+TRAJECTORIES_TO_VISUALIZE = 100
 
 global fig, ax, plot_lines, nom_line, weighted_line, plot_backgrounds
 fig, ax = None, None
@@ -72,27 +72,44 @@ def run_trajectory(vehicle, initial_state, controls, dt):
     return traj
 
 
-def rollout_trajectories(vehicle, initial_state, u_nom, u_variations, weights=None, dt=0.1):
+def rollout_trajectories(
+    vehicle,
+    initial_state,
+    u_nom,
+    u_variations,
+    weights=None,
+    dt=0.1,
+    return_indices=False,
+):
     n_samples, n_controls, n_steps = u_variations.shape
 
     if weights is not None and np.sum(weights) > 0:
         sorted_indexes = np.argsort(weights)
         indexes = sorted_indexes[-TRAJECTORIES_TO_VISUALIZE:]
     else:
-        indexes = np.random.choice(n_samples, min(n_samples, TRAJECTORIES_TO_VISUALIZE), replace=False)
+        indexes = np.random.choice(
+            n_samples, min(n_samples, TRAJECTORIES_TO_VISUALIZE), replace=False
+        )
 
     new_traj_pts = []
     for i in indexes:
         u_var = np.array(u_nom)
-        u_var = u_var + u_variations[i, ...].T
+        u_var += u_variations[i, ...]
 
-        traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_var, dt=dt)
+        traj = run_trajectory(
+            vehicle=vehicle, initial_state=initial_state, controls=u_var, dt=dt
+        )
         new_traj_pts.append(np.expand_dims(traj, axis=0))
 
-    return np.vstack(new_traj_pts)
+    trajectories = np.vstack(new_traj_pts)
+    if return_indices:
+        return trajectories, np.asarray(indexes, dtype=int)
+    return trajectories
 
 
-def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_weighted, weights, dt):
+def visualize_variations(
+    figure, vehicle, initial_state, u_nom, u_variations, u_weighted, weights, dt
+):
     # visualizing!
 
     global fig, ax, plot_lines, nom_line, weighted_line, plot_backgrounds
@@ -112,9 +129,13 @@ def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_
         dt=dt,
     )
 
-    traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_weighted, dt=dt)
+    traj = run_trajectory(
+        vehicle=vehicle, initial_state=initial_state, controls=u_weighted, dt=dt
+    )
 
-    nom_traj = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=u_nom, dt=dt)
+    nom_traj = run_trajectory(
+        vehicle=vehicle, initial_state=initial_state, controls=u_nom, dt=dt
+    )
 
     if plot_lines is None:
         nom_line = ax[0].plot(traj[:, 0], traj[:, 1])
@@ -142,7 +163,9 @@ def visualize_variations(figure, vehicle, initial_state, u_nom, u_variations, u_
         plt.pause(0.001)
 
 
-def draw_agent_probability(grid, origin, resolution, centre, size, heading=0.0, probability=1.0):
+def draw_agent_probability(
+    grid, origin, resolution, centre, size, heading=0.0, probability=1.0
+):
 
     size_y, size_x = grid.shape
 
@@ -164,11 +187,15 @@ def draw_agent_probability(grid, origin, resolution, centre, size, heading=0.0, 
                 grid[_y, _x] += probability
 
 
-def validate_controls(vehicle, initial_state, controls, obs, static_objects, resolution, dt) -> np.array:
+def validate_controls(
+    vehicle, initial_state, controls, obs, static_objects, resolution, dt
+) -> np.array:
     N_controls = len(controls)
 
     # calculate the future states
-    states = run_trajectory(vehicle=vehicle, initial_state=initial_state, controls=controls, dt=dt)
+    states = run_trajectory(
+        vehicle=vehicle, initial_state=initial_state, controls=controls, dt=dt
+    )
 
     # remove all the static structures/objects  - blot any inaccuracies as well
     # construct a mask of static objects from the map based on the object's position and size
@@ -179,7 +206,12 @@ def validate_controls(vehicle, initial_state, controls, obs, static_objects, res
         yaw = np.deg2rad(agent.get_transform().rotation.yaw)
 
         draw_agent_probability(
-            static_mask, initial_state, resolution, [centre.x, centre.y], [extent.x, extent.y], heading=yaw
+            static_mask,
+            initial_state,
+            resolution,
+            [centre.x, centre.y],
+            [extent.x, extent.y],
+            heading=yaw,
         )
 
     pedestrian_grid = np.where(static_mask == 1, 0, obs)

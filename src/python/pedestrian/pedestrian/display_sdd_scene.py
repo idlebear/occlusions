@@ -29,7 +29,6 @@ def main() -> None:
         "sdd",
         sdd_processed_root=args.sdd_processed_root,
         sdd_scene_id=args.sdd_scene_id,
-        sdd_actor_scale_percentile=args.sdd_actor_scale_percentile,
     )
     sim = Simulation(
         screen=surface,
@@ -57,12 +56,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sdd-processed-root", default="outputs/sdd_processed")
     parser.add_argument("--sdd-scene-id", type=int, required=True)
-    parser.add_argument(
-        "--sdd-actor-scale-percentile",
-        type=float,
-        default=75.0,
-        help="Dataset percentile for shared SDD actor scale. Use -1 for local scale.",
-    )
     parser.add_argument(
         "--out",
         default=None,

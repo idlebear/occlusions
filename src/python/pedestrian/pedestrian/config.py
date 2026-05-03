@@ -7,12 +7,12 @@ ROBOT_SPEED = 0.5
 ROBOT_ACCELERATION = 0.5
 ROBOT_RADIUS = 0.35
 ROBOT_MAX_STEER = PI / 3.0
-CONTROL_LIMITS = [2.0, ROBOT_MAX_STEER]
+CONTROL_LIMITS = [1.5, ROBOT_MAX_STEER]
 CONTROL_VARIATION_LIMITS = [
-    0.5,
-    ROBOT_MAX_STEER / 2.0,
+    1.5,
+    ROBOT_MAX_STEER,
 ]
-MPPI_SAMPLES = 1000
+MPPI_SAMPLES = 100
 
 # --------------------------------------------------------------------------------
 # DEBUG flags
@@ -66,7 +66,10 @@ NUM_ACTORS = 1
 BETA = 0.712  # constant for TSP length
 ACTOR_SPEED = 1.0
 LAMBDA_TASKS = 0.1
-MIN_SEPARATION = 0.10  # minimum separation between agents and robot (m)
+MIN_SEPARATION = 0.50  # minimum separation between agents and robot (m)
+STATIC_OBSTACLE_CLEARANCE = 0.75  # preferred static-obstacle clearance margin (m)
+STATIC_OBSTACLE_HARD_CLEARANCE = 0.25  # hard static-obstacle inflation margin (m)
+STATIC_PLANNER_OBSTACLE_CLEARANCE = 0.50  # route-planner static inflation margin (m)
 
 
 OCC_PROB = 0.65  # default occupancy probability
@@ -134,5 +137,5 @@ DEFAULT_LAMBDA = 200.0
 
 FINAL_X_WEIGHT = 1.0
 FINAL_Y_WEIGHT = 1.0
-FINAL_V_WEIGHT = 0.0
-FINAL_THETA_WEIGHT = 0.0
+FINAL_V_WEIGHT = 0.01
+FINAL_THETA_WEIGHT = 0.01

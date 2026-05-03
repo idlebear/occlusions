@@ -130,12 +130,18 @@ def main() -> None:
         )
 
         transition_model = learn_transition_model(
-            state_count=len(state_space.state_ids),
+            state_space=state_space,
+            destination_classes=destination_classes,
             trajectory_states=trajectory_states,
             train_track_ids=splits["train"],
             track_to_class=track_to_class,
-            class_count=len(destination_classes.centers),
             trajectory_stride=args.trajectory_stride,
+            transition_min_support=args.transition_min_support,
+            global_goal_tau_meters=args.global_goal_tau_meters,
+            global_goal_tau=meters_to_scene_units(args.global_goal_tau_meters, scale),
+            map_goal_tau_meters=args.map_goal_tau_meters,
+            map_goal_tau=meters_to_scene_units(args.map_goal_tau_meters, scale),
+            endpoint_snap_distance=args.endpoint_snap_distance,
         )
 
         write_state_space(state_space, scene_out)
@@ -169,6 +175,11 @@ def main() -> None:
                 "test_tracks": len(splits["test"]),
                 "destination_classes": len(destination_classes.centers),
                 "global_nonzero": int(transition_model["global_counts"].nnz),
+                "transition_min_support": args.transition_min_support,
+                "global_goal_tau_meters": args.global_goal_tau_meters,
+                "global_goal_tau": transition_model["global_goal_tau"],
+                "map_goal_tau_meters": args.map_goal_tau_meters,
+                "map_goal_tau": transition_model["map_goal_tau"],
                 "unassigned_tracks": sum(1 for c in track_to_class.values() if c < 0),
             }
         )
@@ -244,9 +255,33 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Use every Nth state sample when counting transitions.",
     )
+    parser.add_argument(
+        "--transition-min-support",
+        type=int,
+        default=10,
+        help="Visit count N_min required for stable transition estimates.",
+    )
+    parser.add_argument(
+        "--global-goal-tau-meters",
+        type=float,
+        default=1.0,
+        help="Goal-distance penalty temperature tau_g for class-conditioned global transitions, in meters.",
+    )
+    parser.add_argument(
+        "--map-goal-tau-meters",
+        type=float,
+        default=1.0,
+        help="Goal-distance temperature tau_m for class-conditioned map priors, in meters.",
+    )
     args = parser.parse_args()
     if args.destination_radius is None and args.destination_radius_meters is None:
         args.destination_radius_meters = 2.0
+    if args.transition_min_support <= 0:
+        parser.error("--transition-min-support must be positive")
+    if not np.isfinite(args.global_goal_tau_meters) or args.global_goal_tau_meters <= 0:
+        parser.error("--global-goal-tau-meters must be finite and positive")
+    if not np.isfinite(args.map_goal_tau_meters) or args.map_goal_tau_meters <= 0:
+        parser.error("--map-goal-tau-meters must be finite and positive")
     return args
 
 
@@ -808,21 +843,37 @@ def assign_destination_classes(
 
 def learn_transition_model(
     *,
-    state_count: int,
+    state_space: GridStateSpace,
+    destination_classes: DestinationClasses,
     trajectory_states: dict[int, np.ndarray],
     train_track_ids: list[int],
     track_to_class: dict[int, int],
-    class_count: int,
+    transition_min_support: int,
+    global_goal_tau_meters: float,
+    global_goal_tau: float,
+    map_goal_tau_meters: float,
+    map_goal_tau: float,
+    endpoint_snap_distance: float | None,
     trajectory_stride: int = 1,
 ) -> dict[str, Any]:
     if trajectory_stride < 1:
         raise ValueError("trajectory_stride must be >= 1")
+    if transition_min_support <= 0:
+        raise ValueError("transition_min_support must be positive")
+    if not np.isfinite(global_goal_tau) or global_goal_tau <= 0:
+        raise ValueError("global_goal_tau must be finite and positive")
+    if not np.isfinite(map_goal_tau) or map_goal_tau <= 0:
+        raise ValueError("map_goal_tau must be finite and positive")
 
+    state_count = len(state_space.state_ids)
+    class_count = len(destination_classes.centers)
     global_counts = sparse.dok_matrix((state_count, state_count), dtype=np.float64)
+    global_visits = np.zeros(state_count, dtype=np.float64)
     class_counts = [
         sparse.dok_matrix((state_count, state_count), dtype=np.float64)
         for _ in range(class_count)
     ]
+    class_visits = np.zeros((class_count, state_count), dtype=np.float64)
 
     for track_id in train_track_ids:
         states = trajectory_states.get(track_id)
@@ -833,47 +884,258 @@ def learn_transition_model(
         for source, target in zip(states[:-1], states[1:]):
             if source < 0 or target < 0:
                 continue
-            global_counts[int(source), int(target)] += 1.0
-            if destination_class >= 0:
-                class_counts[destination_class][int(source), int(target)] += 1.0
+            source = int(source)
+            target = int(target)
+            global_counts[source, target] += 1.0
+            global_visits[source] += 1.0
+            if 0 <= destination_class < class_count:
+                class_counts[destination_class][source, target] += 1.0
+                class_visits[destination_class, source] += 1.0
 
     global_counts_csr = global_counts.tocsr()
-    global_transition = row_normalize_with_fallback(global_counts_csr)
+    global_empirical_transition = row_normalize_zero(global_counts_csr)
+    global_transition = row_normalize_self_loop(global_counts_csr)
     class_counts_csr = [counts.tocsr() for counts in class_counts]
-    class_transitions = [
-        row_normalize_with_fallback(counts, fallback=global_transition)
-        for counts in class_counts_csr
+    class_empirical_transitions = [row_normalize_zero(counts) for counts in class_counts_csr]
+
+    graph = build_8way_distance_graph(state_space)
+    goal_state_ids = destination_goal_state_ids(
+        state_space,
+        destination_classes,
+        endpoint_snap_distance=endpoint_snap_distance,
+    )
+    goal_distance_fields = goal_distance_fields_for_classes(
+        graph,
+        state_count=state_count,
+        goal_state_ids=goal_state_ids,
+    )
+    class_global_transitions = [
+        class_conditioned_global_transition(
+            global_empirical_transition,
+            goal_distances=goal_distance_fields[class_id],
+            tau=global_goal_tau,
+        )
+        for class_id in range(class_count)
     ]
+    class_map_transitions = [
+        class_topological_transition(
+            graph,
+            goal_distances=goal_distance_fields[class_id],
+            tau=map_goal_tau,
+        )
+        for class_id in range(class_count)
+    ]
+    class_transitions = [
+        combine_transition_layers(
+            class_transition=class_empirical_transitions[class_id],
+            global_transition=class_global_transitions[class_id],
+            map_transition=class_map_transitions[class_id],
+            class_visits=class_visits[class_id],
+            global_visits=global_visits,
+            transition_min_support=transition_min_support,
+        )
+        for class_id in range(class_count)
+    ]
+    for class_id, transition in enumerate(class_transitions):
+        validate_row_stochastic(transition, label=f"class {class_id} transition")
+
     return {
         "global_counts": global_counts_csr,
+        "global_visits": global_visits,
+        "global_empirical_transition": global_empirical_transition,
         "global_transition": global_transition,
         "class_counts": class_counts_csr,
+        "class_visits": class_visits,
+        "class_empirical_transitions": class_empirical_transitions,
+        "class_global_transitions": class_global_transitions,
+        "class_map_transitions": class_map_transitions,
         "class_transitions": class_transitions,
+        "goal_state_ids": goal_state_ids,
+        "transition_min_support": int(transition_min_support),
+        "global_goal_tau_meters": float(global_goal_tau_meters),
+        "global_goal_tau": float(global_goal_tau),
+        "map_goal_tau_meters": float(map_goal_tau_meters),
+        "map_goal_tau": float(map_goal_tau),
     }
 
 
-def row_normalize_with_fallback(
-    counts: sparse.csr_matrix,
-    *,
-    fallback: sparse.csr_matrix | None = None,
-) -> sparse.csr_matrix:
+def row_normalize_zero(counts: sparse.csr_matrix) -> sparse.csr_matrix:
     counts = counts.tocsr()
     row_sums = np.asarray(counts.sum(axis=1)).ravel()
     nonzero_rows = row_sums > 0
     inv = np.zeros_like(row_sums, dtype=np.float64)
     inv[nonzero_rows] = 1.0 / row_sums[nonzero_rows]
-    transition = sparse.diags(inv).dot(counts).tolil()
+    return sparse.diags(inv).dot(counts).tocsr()
 
-    zero_rows = np.flatnonzero(~nonzero_rows)
-    if fallback is not None:
-        fallback = fallback.tocsr()
+
+def row_normalize_self_loop(counts: sparse.csr_matrix) -> sparse.csr_matrix:
+    transition = row_normalize_zero(counts).tolil()
+    row_sums = np.asarray(counts.sum(axis=1)).ravel()
+    zero_rows = np.flatnonzero(row_sums <= 0)
     for row in zero_rows:
-        if fallback is not None and fallback[row].nnz:
-            transition[row, :] = fallback[row]
-        else:
-            transition[row, row] = 1.0
-
+        transition[row, row] = 1.0
     return transition.tocsr()
+
+
+def destination_goal_state_ids(
+    state_space: GridStateSpace,
+    destination_classes: DestinationClasses,
+    *,
+    endpoint_snap_distance: float | None,
+) -> np.ndarray:
+    if len(destination_classes.centers) == 0:
+        return np.zeros(0, dtype=np.int64)
+    snap_distance = state_space.cell_size if endpoint_snap_distance is None else endpoint_snap_distance
+    goal_state_ids = map_points_to_states(
+        destination_classes.centers,
+        state_space,
+        snap_distance=snap_distance,
+    )
+    invalid = np.flatnonzero(goal_state_ids < 0)
+    if invalid.size:
+        raise ValueError(
+            f"Could not map destination class centers to walkable states for "
+            f"scene {state_space.scene_id}: classes {invalid.tolist()}"
+        )
+    return goal_state_ids.astype(np.int64, copy=False)
+
+
+def goal_distance_fields_for_classes(
+    graph: sparse.csr_matrix,
+    *,
+    state_count: int,
+    goal_state_ids: np.ndarray,
+) -> list[np.ndarray]:
+    if goal_state_ids.size == 0:
+        return []
+    distances = dijkstra(
+        csgraph=graph,
+        directed=False,
+        indices=goal_state_ids,
+    )
+    distances = np.asarray(distances, dtype=np.float64).reshape((goal_state_ids.size, state_count))
+    return [distances[class_id] for class_id in range(goal_state_ids.size)]
+
+
+def class_conditioned_global_transition(
+    global_transition: sparse.csr_matrix,
+    *,
+    goal_distances: np.ndarray,
+    tau: float,
+) -> sparse.csr_matrix:
+    global_transition = global_transition.tocsr()
+    data = []
+    indices = []
+    indptr = [0]
+    for source in range(global_transition.shape[0]):
+        row_start = global_transition.indptr[source]
+        row_end = global_transition.indptr[source + 1]
+        targets = global_transition.indices[row_start:row_end]
+        probabilities = global_transition.data[row_start:row_end]
+        source_distance = goal_distances[source]
+        if targets.size == 0 or not np.isfinite(source_distance):
+            indptr.append(len(data))
+            continue
+
+        target_distances = goal_distances[targets]
+        penalties = np.exp(-np.maximum(0.0, target_distances - source_distance) / tau)
+        penalties[~np.isfinite(target_distances)] = 0.0
+        weighted = probabilities * penalties
+        total = float(weighted.sum())
+        if total > 0.0:
+            keep = weighted > 0.0
+            indices.extend(int(target) for target in targets[keep])
+            data.extend(float(value) for value in weighted[keep] / total)
+        indptr.append(len(data))
+    return sparse.csr_matrix(
+        (
+            np.asarray(data, dtype=np.float64),
+            np.asarray(indices, dtype=np.int64),
+            np.asarray(indptr, dtype=np.int64),
+        ),
+        shape=global_transition.shape,
+    )
+
+
+def class_topological_transition(
+    graph: sparse.csr_matrix,
+    *,
+    goal_distances: np.ndarray,
+    tau: float,
+) -> sparse.csr_matrix:
+    graph = graph.tocsr()
+    data = []
+    indices = []
+    indptr = [0]
+    for source in range(graph.shape[0]):
+        row_start = graph.indptr[source]
+        row_end = graph.indptr[source + 1]
+        neighbors = graph.indices[row_start:row_end]
+        neighbor_distances = goal_distances[neighbors]
+        finite = np.isfinite(neighbor_distances)
+        if np.any(finite):
+            finite_neighbors = neighbors[finite]
+            finite_distances = neighbor_distances[finite]
+            min_distance = float(finite_distances.min())
+            weights = np.exp(-(finite_distances - min_distance) / tau)
+            total = float(weights.sum())
+            indices.extend(int(target) for target in finite_neighbors)
+            data.extend(float(value) for value in weights / total)
+        else:
+            indices.append(source)
+            data.append(1.0)
+        indptr.append(len(data))
+    return sparse.csr_matrix(
+        (
+            np.asarray(data, dtype=np.float64),
+            np.asarray(indices, dtype=np.int64),
+            np.asarray(indptr, dtype=np.int64),
+        ),
+        shape=graph.shape,
+    )
+
+
+def combine_transition_layers(
+    *,
+    class_transition: sparse.csr_matrix,
+    global_transition: sparse.csr_matrix,
+    map_transition: sparse.csr_matrix,
+    class_visits: np.ndarray,
+    global_visits: np.ndarray,
+    transition_min_support: int,
+) -> sparse.csr_matrix:
+    class_transition = class_transition.tocsr()
+    global_transition = global_transition.tocsr()
+    map_transition = map_transition.tocsr()
+    class_lambda = class_visits / (class_visits + float(transition_min_support))
+    global_lambda = global_visits / (global_visits + float(transition_min_support))
+    global_row_sums = np.asarray(global_transition.sum(axis=1)).ravel()
+    global_available = global_row_sums > 0.0
+
+    global_weight = (1.0 - class_lambda) * global_lambda * global_available
+    map_weight = (1.0 - class_lambda) * (1.0 - global_lambda)
+    map_weight += (1.0 - class_lambda) * global_lambda * (~global_available)
+
+    return (
+        sparse.diags(class_lambda).dot(class_transition)
+        + sparse.diags(global_weight).dot(global_transition)
+        + sparse.diags(map_weight).dot(map_transition)
+    ).tocsr()
+
+
+def validate_row_stochastic(
+    transition: sparse.csr_matrix,
+    *,
+    label: str,
+    atol: float = 1.0e-9,
+) -> None:
+    row_sums = np.asarray(transition.sum(axis=1)).ravel()
+    if row_sums.size and not np.allclose(row_sums, 1.0, atol=atol):
+        bad_rows = np.flatnonzero(~np.isclose(row_sums, 1.0, atol=atol))
+        raise ValueError(
+            f"{label} has {bad_rows.size} non-stochastic rows; "
+            f"first_bad_row={int(bad_rows[0])}, row_sum={row_sums[bad_rows[0]]:.12g}"
+        )
 
 
 def write_state_space(state_space: GridStateSpace, output_root: Path) -> None:
@@ -935,8 +1197,26 @@ def write_transition_model(transition_model: dict[str, Any], output_root: Path) 
     transitions_root.mkdir(exist_ok=True)
     sparse.save_npz(transitions_root / "global_counts.npz", transition_model["global_counts"])
     sparse.save_npz(transitions_root / "global_transition.npz", transition_model["global_transition"])
+    np.savez_compressed(
+        transitions_root / "visits.npz",
+        global_visits=transition_model["global_visits"],
+        class_visits=transition_model["class_visits"],
+        goal_state_ids=transition_model["goal_state_ids"],
+    )
     for class_id, counts in enumerate(transition_model["class_counts"]):
         sparse.save_npz(transitions_root / f"class_{class_id:03d}_counts.npz", counts)
+    for class_id, transition in enumerate(transition_model["class_empirical_transitions"]):
+        sparse.save_npz(
+            transitions_root / f"class_{class_id:03d}_class_transition.npz",
+            transition,
+        )
+    for class_id, transition in enumerate(transition_model["class_global_transitions"]):
+        sparse.save_npz(
+            transitions_root / f"class_{class_id:03d}_global_conditioned_transition.npz",
+            transition,
+        )
+    for class_id, transition in enumerate(transition_model["class_map_transitions"]):
+        sparse.save_npz(transitions_root / f"class_{class_id:03d}_map_transition.npz", transition)
     for class_id, transition in enumerate(transition_model["class_transitions"]):
         sparse.save_npz(transitions_root / f"class_{class_id:03d}_transition.npz", transition)
 
@@ -980,8 +1260,20 @@ def write_model_metadata(
         "splits": {key: len(value) for key, value in splits.items()},
         "transitions": {
             "trajectory_stride": trajectory_stride,
+            "transition_min_support": int(transition_model["transition_min_support"]),
+            "global_goal_tau_meters": transition_model["global_goal_tau_meters"],
+            "global_goal_tau": transition_model["global_goal_tau"],
+            "map_goal_tau_meters": transition_model["map_goal_tau_meters"],
+            "map_goal_tau": transition_model["map_goal_tau"],
             "global_nonzero_count": int(transition_model["global_counts"].nnz),
+            "global_visit_count": float(transition_model["global_visits"].sum()),
+            "global_visited_state_count": int(np.count_nonzero(transition_model["global_visits"])),
             "class_nonzero_counts": [int(counts.nnz) for counts in transition_model["class_counts"]],
+            "class_visit_counts": [
+                float(transition_model["class_visits"][class_id].sum())
+                for class_id in range(transition_model["class_visits"].shape[0])
+            ],
+            "goal_state_ids": [int(value) for value in transition_model["goal_state_ids"]],
             "min_global_row_sum": float(row_sums.min()) if row_sums.size else 0.0,
             "max_global_row_sum": float(row_sums.max()) if row_sums.size else 0.0,
         },
@@ -992,6 +1284,7 @@ def write_model_metadata(
             "splits": "splits.json",
             "destination_classes": "destination_classes.json",
             "transitions": "transitions/",
+            "transition_visits": "transitions/visits.npz",
         },
     }
     path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -1013,6 +1306,11 @@ def write_summary(rows: list[dict[str, Any]], path: Path) -> None:
         "test_tracks",
         "destination_classes",
         "global_nonzero",
+        "transition_min_support",
+        "global_goal_tau_meters",
+        "global_goal_tau",
+        "map_goal_tau_meters",
+        "map_goal_tau",
         "unassigned_tracks",
     ]
     with path.open("w", newline="") as f:

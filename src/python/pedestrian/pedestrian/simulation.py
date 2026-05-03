@@ -2,6 +2,7 @@ from copy import deepcopy
 from dataclasses import replace
 from importlib import import_module
 from math import sqrt, exp
+from time import perf_counter
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
@@ -353,6 +354,10 @@ class Simulation:
         self.record_data = record_data
         self.tick_time = self._resolve_tick_time(tick_time)
         self.enable_scan = enable_scan
+        self.debug_tick_timing = False
+        self.last_tick_timing = {}
+        self.last_scan_timing = {}
+        self.last_observation_timing = {}
         grid = resolve_scenario_grid(self.scenario)
         self.grid_width = grid["width"]
         self.grid_height = grid["height"]
@@ -508,10 +513,7 @@ class Simulation:
     def _is_free_start_location(self, point, blocking_union):
         if blocking_union is None:
             return True
-        radius = (
-            ROBOT_RADIUS * self.scene_scale
-            + MIN_SEPARATION * self.scene_scale
-        )
+        radius = ROBOT_RADIUS * self.scene_scale + MIN_SEPARATION * self.scene_scale
         return not blocking_union.buffer(radius).covers(
             Point(float(point[0]), float(point[1]))
         )
@@ -618,8 +620,7 @@ class Simulation:
             self.window.draw_circle(
                 actor.x[:2],
                 colour=actor.colour,
-                radius=actor.get_extent()
-                + MIN_SEPARATION * self.scene_scale,
+                radius=actor.get_extent() + MIN_SEPARATION * self.scene_scale,
             )
         if actor_image is not None:
             actor_pos = actor.get_pos()
@@ -661,32 +662,50 @@ class Simulation:
                 use_transparency=fill_colour is not None,
             )
 
-    def _draw_path(self, path, colours=["red"], selected_index=None):
+    def _path_colours(self):
+        return [
+            (52, 152, 219, 220),
+            (231, 76, 60, 220),
+            (46, 204, 113, 220),
+            (155, 89, 182, 220),
+            (241, 196, 15, 220),
+            (230, 126, 34, 220),
+            (26, 188, 156, 220),
+            (149, 165, 166, 220),
+            (52, 73, 94, 220),
+            (192, 57, 43, 220),
+        ]
+
+    def _draw_path(self, path, colours=None, selected_index=None):
         if path is None:
             return
+        colours = colours or self._path_colours()
         if type(path) == list:
             for i, p in enumerate(path):
                 colour = colours[i % len(colours)]
                 radius = 0.05
+                width = 2
                 if selected_index is not None and i == selected_index:
                     colour = (0, 180, 80, 255)
                     radius = 0.075
-                for pos in zip(p.x, p.y):
+                    width = 4
+                points = [pos[:2] for pos in zip(p.x, p.y)]
+                if len(points) >= 2:
+                    self.window.draw_polyline(points, colour=colour, width=width)
+                point_stride = max(1, len(points) // 12)
+                for pos in points[::point_stride]:
                     self.window.draw_circle(pos[:2], colour=colour, radius=radius)
         else:
-            for pos in zip(path.x, path.y):
+            points = [pos[:2] for pos in zip(path.x, path.y)]
+            if len(points) >= 2:
+                self.window.draw_polyline(points, colour=colours[0], width=2)
+            for pos in points:
                 self.window.draw_circle(pos[:2], colour=colours[0], radius=0.05)
 
     def _draw_debug_routes(self, routes, selected_index=None):
         if not routes:
             return
-        colours = [
-            (230, 126, 34, 180),
-            (142, 68, 173, 180),
-            (22, 160, 133, 180),
-            (127, 140, 141, 180),
-            (241, 196, 15, 180),
-        ]
+        colours = self._path_colours()
         for index, route in enumerate(routes):
             if route is None or len(route) < 2:
                 continue
@@ -902,8 +921,22 @@ class Simulation:
                 self.actor_list.append(actor)
 
     def _get_next_observation(self, scan_data):
+        timing_enabled = bool(getattr(self, "debug_tick_timing", False))
+        observation_started = perf_counter() if timing_enabled else None
+        section_started = observation_started
+        observation_timing = {} if timing_enabled else None
+
+        def mark_observation_timing(name):
+            nonlocal section_started
+            if not timing_enabled:
+                return
+            now = perf_counter()
+            observation_timing[name] = now - section_started
+            section_started = now
+
         # update the observation
         self.obs.move_origin(self.ego.x[0:2])
+        mark_observation_timing("move_origin")
         self.obs.update(
             X=[*self.ego.x[0:2], self.ego.x[STATE.THETA]],
             angle_min=SCAN_START_ANGLE,
@@ -912,7 +945,13 @@ class Simulation:
             min_range=0,
             max_range=SCAN_RANGE + 1,
         )
-        return self.obs.probabilityMap()
+        mark_observation_timing("update")
+        observation = self.obs.probabilityMap()
+        mark_observation_timing("probability_map")
+        if timing_enabled:
+            observation_timing["total"] = perf_counter() - observation_started
+            self.last_observation_timing = observation_timing
+        return observation
 
     def _get_info(self):
         info = {}
@@ -943,18 +982,60 @@ class Simulation:
         return info
 
     def _calculate_scan(self):
+        timing_enabled = bool(getattr(self, "debug_tick_timing", False))
+        scan_started = perf_counter() if timing_enabled else None
+        section_started = scan_started
+        scan_timing = {} if timing_enabled else None
+
+        def mark_scan_timing(name):
+            nonlocal section_started
+            if not timing_enabled:
+                return
+            now = perf_counter()
+            scan_timing[name] = now - section_started
+            section_started = now
+
+        def finish_scan_timing(**counts):
+            if not timing_enabled:
+                return
+            scan_timing["total"] = perf_counter() - scan_started
+            scan_timing.update(counts)
+            self.last_scan_timing = scan_timing
+
         # create the scan of the environment
         if not self.enable_scan:
+            finish_scan_timing(
+                polygon_count=0,
+                vertex_count=0,
+                ray_count=SCAN_RAYS,
+                fallback=False,
+            )
             return np.full(SCAN_RAYS, SCAN_RANGE + 1, dtype=np.float32)
 
         load_polycheck()
+        mark_scan_timing("load_polycheck")
         if faux_scan is None:
             for actor in self.actor_list:
                 actor.set_visible(False)
+            mark_scan_timing("visible_update")
+            finish_scan_timing(
+                polygon_count=0,
+                vertex_count=0,
+                ray_count=SCAN_RAYS,
+                fallback=True,
+            )
             return np.full(SCAN_RAYS, SCAN_RANGE + 1, dtype=np.float32)
 
         # build a list of sensor-blocking polygons in the environment
         polygons = self.sensor_blocking_polygons()
+        vertex_count = 0
+        for polygon in polygons:
+            polygon_array = np.asarray(polygon)
+            if polygon_array.ndim == 1:
+                vertex_count += polygon_array.size // 2
+            else:
+                vertex_count += len(polygon_array)
+        mark_scan_timing("polygons")
 
         scan_data, indices = faux_scan(
             polygons,
@@ -965,21 +1046,28 @@ class Simulation:
             max_range=SCAN_RANGE,
             resolution=SCAN_RESOLUTION,
         )
+        mark_scan_timing("faux_scan")
 
-        # TODO: change this from binary visiblity to a count of the number of rays
-        #       that hit each actor
-        visible_actors = [
-            self.actor_list[i] for i in list(set(indices)) if i < len(self.actor_list)
-        ]
-        for actor in self.actor_list:
-            if actor in visible_actors:
-                actor.set_visible(True)
-            else:
-                actor.set_visible(False)
+        # Actor polygons are packed before static polygons, so only hit indices
+        # in actor_list range correspond to dynamic actors.
+        visible_actor_indices = {
+            int(index) for index in indices if 0 <= int(index) < len(self.actor_list)
+        }
+        for index, actor in enumerate(self.actor_list):
+            actor.set_visible(index in visible_actor_indices)
+        mark_scan_timing("visible_update")
 
         # clear any rays that didn't hit anything
         scan_data[scan_data == -1] = SCAN_RANGE + 1
-        return scan_data.astype(np.float32)
+        scan_data = scan_data.astype(np.float32)
+        mark_scan_timing("postprocess")
+        finish_scan_timing(
+            polygon_count=len(polygons),
+            vertex_count=vertex_count,
+            ray_count=SCAN_RAYS,
+            fallback=False,
+        )
+        return scan_data
 
     ##################################################################################
     # Simulator step functions
@@ -995,16 +1083,31 @@ class Simulation:
 
     def tick(self, action):
         """[summary]"""
+        timing_enabled = bool(getattr(self, "debug_tick_timing", False))
+        tick_started = perf_counter() if timing_enabled else None
+        section_started = tick_started
+        tick_timing = {} if timing_enabled else None
+
+        def mark_timing(name):
+            nonlocal section_started
+            if not timing_enabled:
+                return
+            now = perf_counter()
+            tick_timing[name] = now - section_started
+            section_started = now
 
         # one clock tick for the simulation time
         self.sim_time += self.tick_time
         self.ticks += 1
+        mark_timing("advance_time")
 
         # apply the requested action to the ego vehicle
         self.ego.set_control(action)
         self.ego.tick(self.tick_time)
+        mark_timing("ego")
 
         self._generate_new_agents()
+        mark_timing("generate_agents")
 
         # move everyone
         finished_actors = []
@@ -1017,6 +1120,7 @@ class Simulation:
             )
             collisions += 1
             self.ego.set_collided("red")
+        mark_timing("static_collision")
 
         for i, actor in enumerate(self.actor_list[::-1]):
             actor.tick(self.tick_time)
@@ -1054,24 +1158,48 @@ class Simulation:
                     # collisions += 1
                     actor.set_collided("red")
                     self.ego.set_collided("red")
+        mark_timing("actors")
 
         # clean up
         for actor in finished_actors:
             self.actor_list.remove(actor)
+        mark_timing("cleanup")
 
         # degrade previous sensor information
         self.obs.decay(0.95)
+        mark_timing("decay")
 
         # update the observation
         self.scan_data = self._calculate_scan()
+        mark_timing("scan")
+        if timing_enabled:
+            for key, value in getattr(self, "last_scan_timing", {}).items():
+                tick_timing[f"scan_{key}"] = value
         observation = self._get_next_observation(self.scan_data)
+        mark_timing("observation")
+        if timing_enabled:
+            for key, value in getattr(self, "last_observation_timing", {}).items():
+                tick_timing[f"observation_{key}"] = value
         info = self._get_info()
+        mark_timing("info")
 
         # calculate the reward
         reward = 0
 
         # check if this episode is finished
         done = collisions != 0 or self.ego.at_goal()
+        mark_timing("done")
+
+        if timing_enabled:
+            tick_timing["total"] = perf_counter() - tick_started
+            tick_timing["actor_count"] = len(self.actor_list)
+            tick_timing["finished_actors"] = len(finished_actors)
+            tick_timing["visible_actors"] = sum(
+                1 for actor in self.actor_list if actor.visible
+            )
+            tick_timing["collisions"] = collisions
+            tick_timing["scan_enabled"] = bool(self.enable_scan)
+            self.last_tick_timing = tick_timing
 
         return observation, reward, done, info
 
@@ -1145,9 +1273,10 @@ class Simulation:
             self._draw_visibility()
             self._draw_status()
 
-            if prefix_str is None:
-                prefix_str = "pedestrian"
-            self.window.save_screen(f"results/{prefix_str}_{self.ticks:05}.png")
+            # BUGBUG - make screen saving optional
+            # if prefix_str is None:
+            #     prefix_str = "pedestrian"
+            # self.window.save_screen(f"results/{prefix_str}_{self.ticks:05}.png")
 
         if DEBUG:
             pass

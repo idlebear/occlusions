@@ -2,8 +2,14 @@ import numpy as np
 from enum import Enum
 from controller.ModelParameters.Ackermann import Ackermann4
 
-from config import LANE_WIDTH, DISCOUNT_FACTOR, SCAN_RANGE
-from controller.validate import visualize_variations, run_trajectory, step_fn, runge_kutta_step, euler
+from config import DISCOUNT_FACTOR, SCAN_RANGE
+from controller.validate import (
+    visualize_variations,
+    run_trajectory,
+    step_fn,
+    runge_kutta_step,
+    euler,
+)
 
 import matplotlib.pyplot as plt
 
@@ -32,7 +38,15 @@ class MPPI:
         IGNORE = 4
 
     def __init__(
-        self, mode=None, vehicle=Ackermann4(), limits=None, c_lambda=20000, Q=None, R=None, M=1, seed=None
+        self,
+        mode=None,
+        vehicle=Ackermann4(),
+        limits=None,
+        c_lambda=20000,
+        Q=None,
+        R=None,
+        M=1,
+        seed=None,
     ) -> None:
 
         if mode is not None:
@@ -105,7 +119,7 @@ class MPPI:
 
         for step in range(u_M):
             u_dist[:, :, step] = weights * u_dist[:, :, step]
-            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0) 
+            u_weighted[:, step] = u_nom[:, step] + np.sum(u_dist[:, :, step], axis=0)
 
         return u_weighted, u_dist
 
@@ -163,7 +177,9 @@ class MPPI:
             elif self.mode == MPPI.visibility_method.HIGGINS:
                 u_weight += self.higgins_visibility_cost(state, [dstep[0], dstep[1]], actors=actors)
             elif self.mode == MPPI.visibility_method.ANDERSEN:
-                u_weight += self.andersen_visibility_cost(state, [dstep[0], dstep[1]], actors=actors)
+                u_weight += self.andersen_visibility_cost(
+                    state, [dstep[0], dstep[1]], actors=actors
+                )
 
         return u_weight
 
@@ -277,7 +293,9 @@ if __name__ == "__main__":
 
     initial = np.array([0, 0, 0, 0, 0]).astype(np.float64)
 
-    u, u_variations, weights = roller.find_control(costmap, origin, resolution, u_nom, initial, samples, dt)
+    u, u_variations, weights = roller.find_control(
+        costmap, origin, resolution, u_nom, initial, samples, dt
+    )
 
     state = np.array(initial)
     last_distance = 10000.0

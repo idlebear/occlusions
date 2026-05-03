@@ -74,11 +74,15 @@ PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_s
   --grid-size 0.25 \
   --destination-radius-meters 2.0 \
   --destination-min-samples 3 \
+  --transition-min-support 10 \
+  --global-goal-tau-meters 1.0 \
+  --map-goal-tau-meters 1.0 \
   --endpoint-snap-distance 0.25
 ```
 
 `--grid-size` and `--destination-radius-meters` use meters and are converted per scene with `metadata.json`'s `scene_scale`. `--endpoint-snap-distance` uses normalized scene units. Destination classes use complete-link clustering over walkable shortest-path distances, so `--destination-radius-meters` is the maximum within-class endpoint diameter in meters. Use `--destination-radius` only if you want to pass the radius directly in normalized scene units.
 Endpoints that fall just outside the walkable grid can be snapped to a nearby walkable state with `--endpoint-snap-distance`; by default this is the grid cell size.
+Transitions use a three-layer goal-conditioned Markov estimator. `--transition-min-support` controls the visit-count smoothing threshold, while `--global-goal-tau-meters` and `--map-goal-tau-meters` control the global-flow goal penalty and map-prior goal temperature.
 
 Each model scene directory contains:
 
@@ -88,3 +92,4 @@ Each model scene directory contains:
 - `destination_classes.json`
 - `transitions/global_transition.npz`
 - `transitions/class_<id>_transition.npz`
+- diagnostic transition layers under `transitions/class_<id>_*_transition.npz`
