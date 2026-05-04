@@ -3,7 +3,7 @@ from heapq import heappop, heappush
 from time import perf_counter
 
 import numpy as np
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 from Actor import STATE as ActorStateEnum
@@ -228,6 +228,50 @@ def add_unique_node(nodes, point, obstacle_union, params, tolerance=1.0e-4):
     return len(nodes) - 1
 
 
+def obstacle_boundary_polygons(obstacle_union):
+    if obstacle_union is None or obstacle_union.is_empty:
+        return []
+    if isinstance(obstacle_union, Polygon):
+        return [obstacle_union]
+    if isinstance(obstacle_union, MultiPolygon):
+        return [polygon for polygon in obstacle_union.geoms if not polygon.is_empty]
+    polygons = []
+    for geometry in getattr(obstacle_union, "geoms", []):
+        if isinstance(geometry, Polygon) and not geometry.is_empty:
+            polygons.append(geometry)
+    return polygons
+
+
+def add_obstacle_boundary_nodes(nodes, obstacle_union, params):
+    epsilon = max(0.05 * float(params.grid_resolution), 1.0e-4)
+    edge_step = max(float(params.obstacle_edge_step), params.grid_resolution)
+    for polygon in obstacle_boundary_polygons(obstacle_union):
+        centroid = np.asarray([polygon.centroid.x, polygon.centroid.y], dtype=float)
+        exterior = np.asarray(polygon.exterior.coords[:-1], dtype=float)
+        if exterior.ndim != 2 or exterior.shape[0] < 3:
+            continue
+        for a, b in zip(exterior, np.roll(exterior, -1, axis=0)):
+            edge = b - a
+            length = float(np.linalg.norm(edge))
+            if length <= 1.0e-9:
+                continue
+            samples = max(1, int(np.ceil(length / edge_step)))
+            for sample_idx in range(samples + 1):
+                t = sample_idx / float(samples)
+                point = a + t * edge
+                direction = point - centroid
+                norm = float(np.linalg.norm(direction))
+                if norm <= 1.0e-9:
+                    continue
+                add_unique_node(
+                    nodes,
+                    point + direction / norm * epsilon,
+                    obstacle_union,
+                    params,
+                    tolerance=0.35 * params.grid_resolution,
+                )
+
+
 def build_roadmap_nodes(start_xy, goal_xy, static_polygons, obstacle_union, params):
     nodes = []
     start_idx = add_unique_node(nodes, start_xy, obstacle_union, params)
@@ -243,10 +287,12 @@ def build_roadmap_nodes(start_xy, goal_xy, static_polygons, obstacle_union, para
     max_x = min_x + params.display_diff
     max_y = min_y + params.display_diff
 
+    add_obstacle_boundary_nodes(nodes, obstacle_union, params)
+
     offset = max(
+        1.1 * params.obstacle_clearance,
         params.grid_resolution,
         0.5 * params.vehicle_width,
-        params.obstacle_clearance,
     )
     edge_step = max(float(params.obstacle_edge_step), params.grid_resolution)
     for static_polygon in static_polygons or []:
@@ -446,30 +492,62 @@ def attach_endpoint_to_roadmap(graph, nodes, endpoint_idx, obstacle_union, param
 
 def stitch_visible_components(graph, nodes, obstacle_union, params, required_nodes=()):
     added = 0
-    for _ in range(max(1, nodes.shape[0])):
+    required_nodes = tuple(int(node) for node in required_nodes or ())
+    max_iterations = max(1, min(nodes.shape[0], 64 if len(required_nodes) >= 2 else nodes.shape[0]))
+    for _ in range(max_iterations):
         components, component_index = graph_components(graph, nodes.shape[0])
         if len(components) <= 1:
             break
+        if len(required_nodes) >= 2:
+            start_component = int(component_index[required_nodes[0]])
+            goal_component = int(component_index[required_nodes[1]])
+            if start_component == goal_component:
+                break
 
         best = None
-        for comp_a_idx, comp_a in enumerate(components):
-            for comp_b_idx in range(comp_a_idx + 1, len(components)):
-                comp_b = components[comp_b_idx]
-                for a in comp_a:
+        if len(required_nodes) >= 2:
+            active_component = components[start_component]
+            goal_point = nodes[required_nodes[1]]
+            for comp_b_idx, comp_b in enumerate(components):
+                if comp_b_idx == start_component:
+                    continue
+                for a in active_component:
                     deltas = nodes[comp_b] - nodes[a]
                     distances = np.linalg.norm(deltas, axis=1)
-                    for order_idx in np.argsort(distances)[: min(12, len(comp_b))]:
+                    order = np.argsort(distances)[: min(12, len(comp_b))]
+                    for order_idx in order:
                         b = comp_b[int(order_idx)]
                         distance = float(distances[int(order_idx)])
                         if distance > max(
                             params.display_diff * np.sqrt(2.0), params.connect_radius
                         ):
                             continue
-                        if best is not None and distance >= best[0]:
+                        goal_bias = 0.1 * float(np.linalg.norm(nodes[b] - goal_point))
+                        score = distance + goal_bias
+                        if best is not None and score >= best[0]:
                             continue
                         if segment_is_free(nodes[a], nodes[b], obstacle_union):
-                            best = (distance, int(a), int(b))
+                            best = (score, int(a), int(b))
                             break
+        else:
+            for comp_a_idx, comp_a in enumerate(components):
+                for comp_b_idx in range(comp_a_idx + 1, len(components)):
+                    comp_b = components[comp_b_idx]
+                    for a in comp_a:
+                        deltas = nodes[comp_b] - nodes[a]
+                        distances = np.linalg.norm(deltas, axis=1)
+                        for order_idx in np.argsort(distances)[: min(12, len(comp_b))]:
+                            b = comp_b[int(order_idx)]
+                            distance = float(distances[int(order_idx)])
+                            if distance > max(
+                                params.display_diff * np.sqrt(2.0), params.connect_radius
+                            ):
+                                continue
+                            if best is not None and distance >= best[0]:
+                                continue
+                            if segment_is_free(nodes[a], nodes[b], obstacle_union):
+                                best = (distance, int(a), int(b))
+                                break
         if best is None:
             break
         if graph_add_edge(graph, nodes, best[1], best[2], obstacle_union, params):

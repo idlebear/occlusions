@@ -4,6 +4,7 @@ import csv
 import io
 import pstats
 import re
+from dataclasses import replace
 from heapq import heappop, heappush
 from pathlib import Path
 from random import seed
@@ -46,12 +47,23 @@ from trajectory_planner.frenet_optimal_trajectory import (
     PlannerArgs,
     Frenet_path,
 )
+from trajectory_planner import cubic_spline_planner
+from trajectory_planner.frenet_candidate import (
+    frenet_lateral_offsets,
+    project_pose_to_spline_frenet,
+    sample_spline_route,
+)
 from trajectory_planner.trajectory_eval import evaluate
 
 from Actor import STATE as ActorStateEnum
 from entropy import evaluate_method
 from hmm import HMM
-from specialk import generate_specialk_trajectories
+from specialk import (
+    buffered_obstacle_union as specialk_buffered_obstacle_union,
+    build_params as build_specialk_params,
+    generate_route_skeletons,
+    generate_specialk_trajectories,
+)
 
 
 def blocking_static_polygon_union(static_polygons):
@@ -96,11 +108,15 @@ def trajectory_collides_with_static(
     vehicle_length,
     vehicle_width,
     clearance=0.0,
+    max_steps=None,
 ):
     if static_union is None or static_union.is_empty:
         return False
     collision_region = static_union.buffer(clearance) if clearance > 0 else static_union
-    for state in trajectory:
+    states = trajectory
+    if max_steps is not None:
+        states = states[: max(1, int(max_steps)) + 1]
+    for state in states:
         footprint = vehicle_footprint_polygon(state, vehicle_length, vehicle_width)
         if footprint.intersects(collision_region):
             return True
@@ -117,6 +133,7 @@ def filter_static_collision_samples(
     static_polygons,
     dt,
     clearance=0.0,
+    safety_horizon=None,
 ):
     static_union = blocking_static_polygon_union(static_polygons)
     if static_union is None or static_union.is_empty:
@@ -144,9 +161,12 @@ def filter_static_collision_samples(
             vehicle_length=robot_model.L,
             vehicle_width=robot_model.W,
             clearance=clearance,
+            max_steps=safety_horizon,
         )
 
     filtered_weights[~collision_free] = 0.0
+    if not np.any(collision_free):
+        filtered_weights = input_weights.copy()
     if np.any(collision_free) and float(np.sum(filtered_weights)) <= 0.0:
         filtered_weights[collision_free] = 1.0
 
@@ -155,6 +175,7 @@ def filter_static_collision_samples(
         "collision_free": collision_free,
         "input_weights": input_weights,
         "filtered_weights": filtered_weights,
+        "all_samples_violate_clearance": not bool(np.any(collision_free)),
     }
     return filtered_weights, static_union, debug
 
@@ -273,6 +294,11 @@ def mppi_static_clearance_margin(robot_model, clearance_margin):
     return float(clearance_margin) * scene_scale(robot_model)
 
 
+def host_safety_horizon(args):
+    horizon = int(getattr(args, "host_safety_horizon", 10))
+    return None if horizon <= 0 else horizon
+
+
 def build_dynamic_obstacles_for_mppi(
     agents, agent_predictions, horizon, robot_model=None, hard_clearance_margin=0.0
 ):
@@ -361,6 +387,7 @@ def trajectory_dynamic_collision_summary(
     horizon,
     robot_model,
     clearance,
+    max_steps=None,
 ):
     min_distance = float("inf")
     min_clearance = float("inf")
@@ -377,6 +404,8 @@ def trajectory_dynamic_collision_summary(
             buffer=clearance,
         )
         steps = min(states.shape[0], max(0, trajectory.shape[0] - 1))
+        if max_steps is not None:
+            steps = min(steps, max(0, int(max_steps)))
         for step_idx in range(steps):
             clearance_value, dist, threshold = three_circle_min_clearance_host(
                 trajectory[step_idx + 1, :4],
@@ -418,6 +447,7 @@ def filter_dynamic_collision_samples(
     horizon,
     dt,
     clearance=None,
+    safety_horizon=None,
 ):
     if clearance is None:
         clearance = MIN_SEPARATION * scene_scale(robot_model)
@@ -443,6 +473,7 @@ def filter_dynamic_collision_samples(
             horizon=horizon,
             robot_model=robot_model,
             clearance=clearance,
+            max_steps=safety_horizon,
         )
         collision_free[sample_idx] = not summary["collision"]
         min_distances[sample_idx] = summary["min_distance"]
@@ -478,10 +509,12 @@ def control_sequence_collision_summary(
     dt,
     static_union=None,
     static_clearance=0.0,
+    static_safety_horizon=None,
     agents=None,
     agent_predictions=None,
     horizon=None,
     dynamic_clearance=0.0,
+    dynamic_safety_horizon=None,
 ):
     trajectory = run_trajectory(
         vehicle=robot_model,
@@ -497,6 +530,7 @@ def control_sequence_collision_summary(
             vehicle_length=robot_model.L,
             vehicle_width=robot_model.W,
             clearance=static_clearance,
+            max_steps=static_safety_horizon,
         )
 
     dynamic_summary = {
@@ -512,6 +546,7 @@ def control_sequence_collision_summary(
             horizon=horizon if horizon is not None else len(controls),
             robot_model=robot_model,
             clearance=dynamic_clearance,
+            max_steps=dynamic_safety_horizon,
         )
 
     return {
@@ -538,6 +573,8 @@ def find_safe_control_candidate(
     horizon=None,
     dynamic_clearance=0.0,
     max_candidates=200,
+    static_safety_horizon=None,
+    dynamic_safety_horizon=None,
 ):
     candidates = [("nominal", None, np.asarray(u_nom, dtype=float))]
     if u_variations is not None and len(u_variations):
@@ -570,10 +607,16 @@ def find_safe_control_candidate(
             dt=dt,
             static_union=static_union,
             static_clearance=static_clearance,
+            static_safety_horizon=static_safety_horizon,
             agents=agents,
             agent_predictions=agent_predictions,
-            horizon=horizon,
+            horizon=(
+                dynamic_safety_horizon
+                if dynamic_safety_horizon is not None
+                else horizon
+            ),
             dynamic_clearance=dynamic_clearance,
+            dynamic_safety_horizon=dynamic_safety_horizon,
         )
         if summary["safe"]:
             summary.update(
@@ -655,7 +698,7 @@ def nominal_steering_components(robot_model, state, target, args, lookahead_dist
     steering_opposing_cross_track_scale = getattr(
         args,
         "steering_opposing_cross_track_scale",
-        0.25,
+        1.0,
     )
     cross_track_delta = np.arctan2(
         steering_cross_track_gain * cross_track_error,
@@ -704,6 +747,7 @@ def nominal_steering_components(robot_model, state, target, args, lookahead_dist
 def nominal_controls_to_path(robot_model, initial_state, path, args):
     u_nom = np.zeros((args.horizon, 2), dtype=float)
     state = np.asarray(initial_state[:4], dtype=float).copy()
+    progress_index = closest_path_index(path, state)
     lookahead_distance = max(
         1.5 * float(robot_model.L),
         args.robot_speed * args.tick_time * 4.0,
@@ -711,10 +755,11 @@ def nominal_controls_to_path(robot_model, initial_state, path, args):
     )
 
     for i in range(args.horizon):
+        progress_index = max(progress_index, closest_path_index(path, state))
         target = path_state_at_lookahead(
             path,
             state,
-            start_index=min(i + 1, len(path.x) - 1),
+            start_index=progress_index,
             lookahead_distance=lookahead_distance,
         )
         steering = nominal_steering_components(
@@ -930,6 +975,45 @@ def print_mppi_filter_debug(
             f"safe={bool(collision_free[index])}"
         )
     print(f"[steering-debug top-samples] tick={tick} " + " | ".join(top_parts))
+
+
+def print_host_viability_debug(
+    *,
+    tick,
+    pre_filter_weights,
+    post_filter_weights,
+    static_debug,
+    dynamic_debug,
+    emergency_stop,
+):
+    pre_filter_weights = np.asarray(pre_filter_weights, dtype=float)
+    post_filter_weights = np.asarray(post_filter_weights, dtype=float)
+    before_count = int(np.count_nonzero(pre_filter_weights > 0.0))
+    after_count = int(np.count_nonzero(post_filter_weights > 0.0))
+    total_count = int(pre_filter_weights.size)
+
+    def safe_count(debug):
+        if debug is None:
+            return "not-run"
+        collision_free = np.asarray(debug.get("collision_free", []), dtype=bool)
+        if collision_free.size == 0:
+            return "0/0"
+        suffix = ""
+        if bool(debug.get("all_samples_violate_clearance", False)):
+            suffix = " all-clearance-violated"
+        return f"{int(np.count_nonzero(collision_free))}/{int(collision_free.size)}{suffix}"
+
+    print(
+        "[host-viability] "
+        f"tick={tick} "
+        f"before_host_nonzero={before_count}/{total_count} "
+        f"after_host_nonzero={after_count}/{int(post_filter_weights.size)} "
+        f"before_weight_sum={float(np.sum(pre_filter_weights)):.3e} "
+        f"after_weight_sum={float(np.sum(post_filter_weights)):.3e} "
+        f"static_safe={safe_count(static_debug)} "
+        f"dynamic_safe={safe_count(dynamic_debug)} "
+        f"emergency_stop={bool(emergency_stop)}"
+    )
 
 
 def print_applied_steering_debug(
@@ -2713,6 +2797,290 @@ def frenet_path_static_collision_free(
     return True
 
 
+def spline_route_intersects_obstacle(csp, obstacle_union, *, spacing):
+    if obstacle_union is None or obstacle_union.is_empty:
+        return False
+    route = sample_spline_route(csp, spacing=spacing)
+    if len(route) < 2:
+        return False
+    return route_intersects_obstacle(route, obstacle_union)
+
+
+def build_collision_aware_frenet_spline(route, obstacle_union, *, resolution):
+    route = dedupe_waypoints(route)
+    spacing = max(float(resolution or GRID_RESOLUTION), 0.05)
+    best_route = route
+    best_csp = None
+    best_collides = False
+
+    candidate_routes = [route]
+    route_length = max(waypoint_route_length(route), spacing)
+    for factor in (2.0, 1.0, 0.5, 0.25):
+        sample_spacing = max(spacing * factor, 0.03)
+        max_points = int(np.ceil(route_length / sample_spacing)) + 2
+        sampled = sample_polyline_points(
+            route,
+            spacing=sample_spacing,
+            max_points=max_points,
+        )
+        if sampled.ndim == 2 and sampled.shape[0] >= 2:
+            candidate_routes.append(sampled[:, :2].astype(float).tolist())
+
+    for candidate_route in candidate_routes:
+        candidate_route = dedupe_waypoints(candidate_route)
+        if len(candidate_route) < 2:
+            continue
+        points = np.asarray(candidate_route, dtype=float)
+        csp = cubic_spline_planner.Spline2D(points[:, 0], points[:, 1])
+        collides = spline_route_intersects_obstacle(
+            csp,
+            obstacle_union,
+            spacing=max(spacing * 0.5, 0.03),
+        )
+        best_route = candidate_route
+        best_csp = csp
+        best_collides = collides
+        if not collides:
+            return csp, candidate_route, False
+
+    if best_csp is None:
+        points = np.asarray(route, dtype=float)
+        best_csp = cubic_spline_planner.Spline2D(points[:, 0], points[:, 1])
+    return best_csp, best_route, best_collides
+
+
+def roadmap_nominal_route_for_frenet(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+):
+    params = build_specialk_params(
+        args,
+        display_offset,
+        display_diff,
+        vehicle_length,
+        vehicle_width,
+        vehicle_scale,
+        max_steer,
+        resolution,
+    )
+    start_state = np.asarray(start, dtype=float)[:4]
+    goal_xy = np.asarray(end, dtype=float)[:2]
+    hard_obstacle_union = specialk_buffered_obstacle_union(
+        static_polygons,
+        clearance=0.0,
+    )
+    clearance_values = []
+    for clearance in (
+        params.obstacle_clearance,
+        0.5 * params.obstacle_clearance,
+        0.0,
+    ):
+        clearance = max(0.0, float(clearance))
+        if not any(abs(clearance - existing) <= 1.0e-9 for existing in clearance_values):
+            clearance_values.append(clearance)
+
+    last_debug = None
+    last_routes = []
+    for clearance in clearance_values:
+        attempt_params = replace(params, obstacle_clearance=clearance)
+        obstacle_union = specialk_buffered_obstacle_union(
+            static_polygons,
+            clearance=clearance,
+        )
+        routes, debug = generate_route_skeletons(
+            start_state,
+            goal_xy,
+            static_polygons,
+            obstacle_union,
+            attempt_params,
+        )
+        last_debug = debug
+        last_routes = routes
+        args._last_frenet_debug = debug if params.show_roadmap else None
+
+        for route in routes:
+            route = dedupe_waypoints(route)
+            if len(route) >= 2 and not route_intersects_obstacle(
+                route,
+                hard_obstacle_union,
+            ):
+                if (
+                    clearance < params.obstacle_clearance
+                    and (
+                        getattr(args, "debug_paths", False)
+                        or getattr(args, "debug_steering", False)
+                    )
+                ):
+                    print(
+                        "[frenet] roadmap nominal route required reduced clearance "
+                        f"{params.obstacle_clearance:.3f}->{clearance:.3f}"
+                    )
+                return route, debug, "roadmap"
+
+    if getattr(args, "debug_paths", False) or getattr(args, "debug_steering", False):
+        print(
+            "[frenet] roadmap did not return a static-collision-free nominal route; "
+            f"routes={len(last_routes)} "
+            f"reasons={last_debug.get('reasons', []) if last_debug else []}"
+        )
+    return None, last_debug, "no_roadmap_route"
+
+
+def fallback_forward_nominal_route(
+    start,
+    *,
+    resolution=None,
+):
+    heading = float(start[ActorStateEnum.THETA])
+    start_xy = np.asarray(start[:2], dtype=float)
+    lookahead = max(float(resolution or GRID_RESOLUTION), 0.05)
+    return [
+        start_xy.tolist(),
+        (
+            start_xy
+            + lookahead * np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
+        ).tolist(),
+    ]
+
+
+def build_frenet_nominal_context(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+):
+    route, roadmap_debug, route_source = roadmap_nominal_route_for_frenet(
+        start,
+        end,
+        args,
+        static_polygons=static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        vehicle_scale=vehicle_scale,
+        max_steer=max_steer,
+        resolution=resolution,
+    )
+    if route is None:
+        route = fallback_forward_nominal_route(start, resolution=resolution)
+        route_source = "forward_recovery_no_roadmap"
+    route = dedupe_waypoints(route)
+    if len(route) < 2:
+        route = fallback_forward_nominal_route(start, resolution=resolution)
+    if (
+        np.linalg.norm(
+            np.asarray(route[-1], dtype=float) - np.asarray(route[0], dtype=float)
+        )
+        <= 1.0e-6
+    ):
+        heading = float(start[ActorStateEnum.THETA])
+        route = [
+            list(start[:2]),
+            (
+                np.asarray(start[:2], dtype=float)
+                + max(float(resolution or GRID_RESOLUTION), 0.05)
+                * np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
+            ).tolist(),
+        ]
+
+    obstacle_union = buffered_static_obstacle_union(
+        static_polygons,
+        vehicle_length,
+        vehicle_width,
+    )
+    csp, spline_route, spline_collides = build_collision_aware_frenet_spline(
+        route,
+        obstacle_union,
+        resolution=resolution,
+    )
+    if spline_collides and (
+        getattr(args, "debug_paths", False) or getattr(args, "debug_steering", False)
+    ):
+        print(
+            "[frenet] nominal spline intersects buffered static obstacles; "
+            "using densest available route"
+        )
+    return {
+        "goal": np.asarray(end[:2], dtype=float),
+        "route": spline_route,
+        "csp": csp,
+        "last_s": 0.0,
+        "length": float(csp.s[-1]),
+        "spline_collides": bool(spline_collides),
+        "roadmap_debug": roadmap_debug,
+        "route_source": route_source,
+    }
+
+
+def get_frenet_nominal_context(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+):
+    goal = np.asarray(end[:2], dtype=float)
+    context = getattr(args, "_frenet_nominal_context", None)
+    goal_tolerance = max(float(resolution or GRID_RESOLUTION), 1.0e-3)
+    context_goal = (
+        np.asarray(context.get("goal"), dtype=float)
+        if isinstance(context, dict) and "goal" in context
+        else None
+    )
+    if (
+        isinstance(context, dict)
+        and context.get("established", False)
+        and context_goal is not None
+        and np.linalg.norm(context_goal - goal) <= goal_tolerance
+        and context.get("csp") is not None
+    ):
+        return context
+
+    context = build_frenet_nominal_context(
+        start,
+        end,
+        args,
+        static_polygons=static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        vehicle_scale=vehicle_scale,
+        max_steer=max_steer,
+        resolution=resolution,
+    )
+    context["established"] = bool(context.get("route_source") == "roadmap")
+    context["goal_tolerance"] = goal_tolerance
+    args._frenet_nominal_context = context
+    return context
+
+
 def select_best_kpath_candidates(candidates, *, k, max_overlap):
     if not candidates:
         return []
@@ -3270,6 +3638,8 @@ def k_diverse_kinematic_routes(
         display_diff=display_diff,
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
+        vehicle_scale=vehicle_scale,
+        max_steer=max_steer,
         resolution=resolution,
     )
     is_blocked = grid["is_blocked"]
@@ -4399,6 +4769,182 @@ def generate_k_path_trajectories(
     return accepted
 
 
+def generate_frenet_trajectories(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+):
+    speed = float(getattr(args, "robot_speed", 0.5))
+    dt = float(getattr(args, "tick_time", 0.01))
+    horizon = int(getattr(args, "horizon", 1))
+    count = max(1, int(getattr(args, "trajectory_count", 1)))
+    scene_scale = max(float(vehicle_scale or 1.0), 1.0e-6)
+    max_d_arg = getattr(args, "frenet_max_d", None)
+    max_d = float(max_d_arg) if max_d_arg is not None else 1.25 * scene_scale
+    offsets = frenet_lateral_offsets(count, max_d)
+
+    context = get_frenet_nominal_context(
+        start,
+        end,
+        args,
+        static_polygons=static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        vehicle_scale=vehicle_scale,
+        max_steer=max_steer,
+        resolution=resolution,
+    )
+    csp = context["csp"]
+    projection = project_pose_to_spline_frenet(
+        csp,
+        start,
+        min_s=context.get("last_s", 0.0),
+        search_step=max(float(resolution or GRID_RESOLUTION) * 0.25, 0.03),
+    )
+    context["last_s"] = projection["s"]
+
+    heading_error = wrap_angle(float(start[ActorStateEnum.THETA]) - projection["yaw"])
+    robot_speed = max(0.0, float(start[ActorStateEnum.VELOCITY]))
+    s_dot = max(0.0, robot_speed * np.cos(heading_error))
+    d_dot = robot_speed * np.sin(heading_error)
+
+    planner_args = PlannerArgs(
+        max_predict_time=horizon * dt,
+        min_predict_time=horizon * dt,
+        predict_step=dt,
+        time_tick=dt,
+        target_speed=speed,
+        stopping_time=None,
+        trajectories_requested=count,
+        generate_planning_path=True,
+        trajectory_offsets=offsets,
+        max_road_width=2.0 * max_d,
+    )
+    trajectories = frenet_optimal_planning(
+        csp,
+        projection["s"],
+        s_dot,
+        projection["d"],
+        d_dot,
+        0.0,
+        0.0,
+        planner_args,
+    )[1]
+
+    static_union = blocking_static_polygon_union(static_polygons)
+    collision_region = (
+        static_union if static_union is not None and not static_union.is_empty else None
+    )
+    nominal_route = sample_spline_route(
+        csp,
+        spacing=max(float(resolution or GRID_RESOLUTION), speed * dt, 0.05),
+    )
+
+    accepted = []
+    reject_counts = {"short": 0, "collision": 0}
+    for offset, path in zip(offsets, trajectories):
+        route = frenet_path_xy(path).astype(float).tolist()
+        if len(route) < 2:
+            reject_counts["short"] += 1
+            continue
+        collision_free = frenet_path_static_collision_free(
+            path,
+            collision_region,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+        )
+        if not collision_free:
+            reject_counts["collision"] += 1
+            continue
+        accepted.append(
+            {
+                "path": path,
+                "route": route,
+                "nominal_route": nominal_route,
+                "length": waypoint_route_length(route),
+                "generator": "frenet",
+                "offset": float(offset),
+                "s0": float(projection["s"]),
+                "d0": float(projection["d"]),
+                "d_dot0": float(d_dot),
+                "nominal": bool(abs(float(offset)) <= 1.0e-9),
+            }
+        )
+
+    if accepted:
+        accepted.sort(
+            key=lambda item: (not item["nominal"], offsets.index(item["offset"]))
+        )
+        if getattr(args, "debug_paths", False) or getattr(
+            args, "debug_steering", False
+        ):
+            print(
+                "[frenet] "
+                f"accepted={len(accepted)}/{count} "
+                f"s0={projection['s']:.3f} d0={projection['d']:.3f} "
+                f"offsets={[round(item['offset'], 3) for item in accepted]} "
+                f"nominal_length={context['length']:.3f} "
+                f"route_source={context.get('route_source')} "
+                f"rejects={reject_counts}"
+            )
+        return accepted
+
+    if getattr(args, "debug_paths", False) or getattr(args, "debug_steering", False):
+        print(
+            "[frenet] no collision-free candidates; using forward recovery "
+            f"s0={projection['s']:.3f} d0={projection['d']:.3f} "
+            f"offsets={[round(offset, 3) for offset in offsets]} "
+            f"rejects={reject_counts}"
+        )
+
+    recovery_route = build_forward_recovery_route(
+        start,
+        static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        resolution=resolution,
+        recovery_lookahead=getattr(args, "recovery_route_lookahead", 1.0),
+        max_heading_error=np.deg2rad(
+            getattr(args, "max_initial_route_heading_error_deg", 35.0)
+        ),
+    )
+    path = points_to_frenet_path(
+        recovery_route,
+        start_heading=start[ActorStateEnum.THETA],
+        speed=speed,
+        dt=dt,
+        max_points=max(horizon + 1, 2),
+    )
+    return [
+        {
+            "path": path,
+            "route": recovery_route,
+            "nominal_route": nominal_route,
+            "length": waypoint_route_length(recovery_route),
+            "generator": "frenet",
+            "offset": 0.0,
+            "s0": float(projection["s"]),
+            "d0": float(projection["d"]),
+            "d_dot0": float(d_dot),
+            "nominal": True,
+            "fallback": True,
+        }
+    ]
+
+
 def generate_trajectories(
     start,
     end,
@@ -4443,8 +4989,35 @@ def generate_trajectories(
             max_steer=max_steer,
             resolution=resolution,
         )
+    elif generator == "frenet":
+        return generate_frenet_trajectories(
+            start,
+            end,
+            args,
+            static_polygons=static_polygons,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            vehicle_scale=vehicle_scale,
+            max_steer=max_steer,
+            resolution=resolution,
+        )
     else:
         raise ValueError(f"Unsupported trajectory generator: {generator}")
+
+
+def debug_routes_for_render(paths, args):
+    routes = [path["route"] for path in paths]
+    if (
+        getattr(args, "debug_paths", False)
+        and str(getattr(args, "trajectory_generator", "")).lower() == "frenet"
+        and paths
+    ):
+        nominal_route = paths[0].get("nominal_route")
+        if nominal_route is not None and len(nominal_route) >= 2:
+            routes.append(nominal_route)
+    return routes
 
 
 def get_control(
@@ -4568,6 +5141,11 @@ def get_control(
         robot_model,
         args.static_hard_clearance_margin,
     )
+    # Static clearance margins are handled as MPPI costs. Host-side viability
+    # checks must only reject true footprint intersections, or narrow but
+    # feasible passages can deadlock with every recovery candidate marked unsafe.
+    static_collision_clearance = 0.0
+    safety_horizon = host_safety_horizon(args)
     if static_polygons and args.host_static_sample_filter:
         section_start = perf_counter()
         u_weights, static_union, static_debug = filter_static_collision_samples(
@@ -4578,7 +5156,8 @@ def get_control(
             weights=u_weights,
             static_polygons=static_polygons,
             dt=args.tick_time,
-            clearance=static_hard_clearance,
+            clearance=static_collision_clearance,
+            safety_horizon=safety_horizon,
         )
         control_timing["static_sample_filter"] = perf_counter() - section_start
         static_safe_weight = float(np.sum(u_weights))
@@ -4617,6 +5196,7 @@ def get_control(
             horizon=args.horizon,
             dt=args.tick_time,
             clearance=MIN_SEPARATION * scene_scale(robot_model),
+            safety_horizon=safety_horizon,
         )
         control_timing["dynamic_sample_filter"] = perf_counter() - section_start
         dynamic_safe_weight = float(np.sum(u_weights))
@@ -4674,11 +5254,13 @@ def get_control(
             weights=u_weights,
             dt=args.tick_time,
             static_union=static_union,
-            static_clearance=static_hard_clearance,
+            static_clearance=static_collision_clearance,
             agents=agents,
             agent_predictions=agent_predictions,
             horizon=args.horizon,
             dynamic_clearance=dynamic_hard_clearance,
+            static_safety_horizon=safety_horizon,
+            dynamic_safety_horizon=safety_horizon,
         )
         if recovery is not None and recovery.get("safe", False):
             u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -4701,7 +5283,8 @@ def get_control(
             static_union,
             vehicle_length=robot_model.L,
             vehicle_width=robot_model.W,
-            clearance=static_hard_clearance,
+            clearance=static_collision_clearance,
+            max_steps=safety_horizon,
         ):
             recovery = find_safe_control_candidate(
                 robot_model=robot_model,
@@ -4711,11 +5294,13 @@ def get_control(
                 weights=u_weights,
                 dt=args.tick_time,
                 static_union=static_union,
-                static_clearance=static_hard_clearance,
+                static_clearance=static_collision_clearance,
                 agents=agents,
                 agent_predictions=agent_predictions,
                 horizon=args.horizon,
                 dynamic_clearance=dynamic_hard_clearance,
+                static_safety_horizon=safety_horizon,
+                dynamic_safety_horizon=safety_horizon,
             )
             if recovery is not None and recovery.get("safe", False):
                 u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -4746,6 +5331,7 @@ def get_control(
             horizon=args.horizon,
             robot_model=robot_model,
             clearance=dynamic_hard_clearance,
+            max_steps=safety_horizon,
         )
         if dynamic_summary["collision"]:
             closest = dynamic_summary["closest"] or {}
@@ -4757,11 +5343,13 @@ def get_control(
                 weights=u_weights,
                 dt=args.tick_time,
                 static_union=static_union,
-                static_clearance=static_hard_clearance,
+                static_clearance=static_collision_clearance,
                 agents=agents,
                 agent_predictions=agent_predictions,
                 horizon=args.horizon,
                 dynamic_clearance=dynamic_hard_clearance,
+                static_safety_horizon=safety_horizon,
+                dynamic_safety_horizon=safety_horizon,
             )
             if recovery is not None and recovery.get("safe", False):
                 u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -4798,6 +5386,16 @@ def get_control(
         )
         # Set weights to zero for consistency
         u_weights = np.zeros_like(u_weights)
+
+    if getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
+        print_host_viability_debug(
+            tick=debug_tick,
+            pre_filter_weights=pre_filter_weights,
+            post_filter_weights=u_weights,
+            static_debug=static_debug,
+            dynamic_debug=dynamic_debug,
+            emergency_stop=emergency_stop,
+        )
 
     if getattr(args, "debug_steering", False):
         print_planned_steering_debug(
@@ -5242,13 +5840,15 @@ def simulate(args, delivery_log=None):
             cached_path_debug = (
                 getattr(args, "_last_specialk_debug", None)
                 if str(args.trajectory_generator).lower() == "specialk"
+                else getattr(args, "_last_frenet_debug", None)
+                if str(args.trajectory_generator).lower() == "frenet"
                 else None
             )
             timing["trajectories"] = perf_counter() - section_start
 
             next_route_replan_tick = sim.ticks + replan_interval
             if args.debug_paths or args.debug_steering:
-                debug_routes = [path["route"] for path in paths]
+                debug_routes = debug_routes_for_render(paths, args)
                 route_count = len(debug_routes)
                 route_lengths = [
                     round(waypoint_route_length(route), 3) for route in debug_routes
@@ -5399,7 +5999,7 @@ def simulate(args, delivery_log=None):
                 trajectories=trajectories,
                 trajectory_weights=trajectory_weights,
                 path=[path["path"] for path in paths],
-                debug_routes=[path["route"] for path in paths],
+                debug_routes=debug_routes_for_render(paths, args),
                 debug_roadmap=cached_path_debug,
                 selected_path_index=control_trajectory,
                 prefix_str=args.prefix,
@@ -5711,6 +6311,15 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
+        "--host-safety-horizon",
+        type=int,
+        default=10,
+        help=(
+            "Number of near-term ticks used by host-side hard collision checks "
+            "and recovery selection. Use 0 to check the full MPPI horizon."
+        ),
+    )
+    argparser.add_argument(
         "--profile",
         action="store_true",
         help="Run the simulation under cProfile and write stats for SnakeViz.",
@@ -5818,7 +6427,7 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--steering-opposing-cross-track-scale",
-        default=0.25,
+        default=1.0,
         type=float,
         help=(
             "Scale cross-track steering when it opposes trajectory heading "
@@ -5900,12 +6509,22 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--trajectory-generator",
-        choices=["kpaths", "specialk"],
+        choices=["kpaths", "specialk", "frenet"],
         default="kpaths",
         help=(
             "Candidate trajectory generator. kpaths searches diverse "
             "kinematically feasible grid routes; specialk uses homotopy-aware "
-            "roadmap skeletons refined with Ackermann state-lattice primitives."
+            "roadmap skeletons refined with Ackermann state-lattice primitives; "
+            "frenet samples lateral offsets around a stable nominal route."
+        ),
+    )
+    argparser.add_argument(
+        "--frenet-max-d",
+        default=None,
+        type=float,
+        help=(
+            "Maximum lateral distance from the Frenet nominal centerline. "
+            "Defaults to 1.25 times the scene scale."
         ),
     )
     argparser.add_argument(
@@ -6180,8 +6799,8 @@ if __name__ == "__main__":
         type=float,
         default=STATIC_OBSTACLE_HARD_CLEARANCE,
         help=(
-            "Hard static-obstacle clearance margin used by MPPI pruning and the "
-            "host final safety check. Keep smaller than --static-clearance-margin."
+            "Inner static-obstacle clearance band used as MPPI near-obstacle cost. "
+            "Only actual footprint intersections are treated as hard static collisions."
         ),
     )
     argparser.add_argument(

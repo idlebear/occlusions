@@ -65,6 +65,7 @@ class PlannerArgs:
         max_brake_acceleration=3,
         trajectories_requested=1,
         generate_planning_path=True,
+        trajectory_offsets=None,
     ):
         self.MAX_SPEED = max_speed  # maximum speed [m/s]
         self.MAX_ACCEL = max_accel  # maximum acceleration [m/ss]
@@ -83,6 +84,7 @@ class PlannerArgs:
         )
         self.GENERATE_PLANNING_PATH = generate_planning_path
         self.TRAJECTORIES_REQUESTED = trajectories_requested
+        self.TRAJECTORY_OFFSETS = trajectory_offsets
 
         # cost weights
         self.KJ = 0.1
@@ -266,8 +268,11 @@ def calc_frenet_paths(c_speed, c_d, c_d_d, c_d_dd, a, s0, planner_args):
         safety_paths = []  # no safety path
     frenet_paths.append(safety_paths)
 
-    d_steps = [0.0]
-    if planner_args.TRAJECTORIES_REQUESTED > 1:
+    if planner_args.TRAJECTORY_OFFSETS is not None:
+        d_steps = [float(di) for di in planner_args.TRAJECTORY_OFFSETS]
+    else:
+        d_steps = [0.0]
+    if planner_args.TRAJECTORY_OFFSETS is None and planner_args.TRAJECTORIES_REQUESTED > 1:
         d_step = MAX_ROAD_WIDTH / (2 * (planner_args.TRAJECTORIES_REQUESTED - 1))
         d_steps.extend([i for i in np.arange(-MAX_ROAD_WIDTH / 2, 0, d_step)])
         d_steps.extend([i for i in np.arange(d_step, MAX_ROAD_WIDTH / 2 + 0.001, d_step)])

@@ -12,7 +12,7 @@ CONTROL_VARIATION_LIMITS = [
     1.5,
     ROBOT_MAX_STEER,
 ]
-MPPI_SAMPLES = 100
+MPPI_SAMPLES = 5000
 
 # --------------------------------------------------------------------------------
 # DEBUG flags
