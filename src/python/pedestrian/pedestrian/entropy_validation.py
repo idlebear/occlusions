@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from heapq import heappop, heappush
 import json
 import os
 import sys
@@ -31,8 +32,8 @@ DEFAULT_TRACK_ID = 13
 DEFAULT_HORIZON = 30
 DEFAULT_INTERVAL = 5
 DEFAULT_ROLLOUT_STEPS = 180
-DEFAULT_ROBOT_START = (7.15, 1.8)
-DEFAULT_ROBOT_GOAL = (0.35, 2.45)
+DEFAULT_ROBOT_START = (7.15, 3.0)
+DEFAULT_ROBOT_GOAL = (0.35, 1.8)
 DEFAULT_ROBOT_HEADING = float(np.pi)
 DEFAULT_OUT_DIR = "outputs/entropy_validation/scene_007_track_013"
 DEFAULT_SCAN_RANGE = 10.0
@@ -242,6 +243,146 @@ def linear_robot_path(start, goal, steps: int) -> np.ndarray:
     return start.reshape(1, 2) + (goal - start).reshape(1, 2) * alpha
 
 
+def segment_is_free(start, end, static_union) -> bool:
+    if static_union is None or static_union.is_empty:
+        return True
+    segment = LineString([np.asarray(start, dtype=float), np.asarray(end, dtype=float)])
+    return not segment.intersects(static_union)
+
+
+def nearest_connectable_state(
+    bundle: SDDModelBundle,
+    point,
+    static_union,
+    max_candidates: int = 300,
+) -> int:
+    point = np.asarray(point, dtype=float)
+    distances = np.linalg.norm(bundle.state_centers_sim - point.reshape(1, 2), axis=1)
+    for state in np.argsort(distances)[: int(max_candidates)]:
+        if segment_is_free(point, bundle.state_centers_sim[int(state)], static_union):
+            return int(state)
+    raise RuntimeError(f"Unable to connect point {point.tolist()} to the walkable grid")
+
+
+def astar_state_path(
+    bundle: SDDModelBundle, start_state: int, goal_state: int
+) -> list[int]:
+    grid_to_state = np.asarray(bundle.state_space["grid_to_state"], dtype=int)
+    rows, cols = grid_to_state.shape
+    state_rc = np.asarray(bundle.state_grid_indices, dtype=int)
+    goal_xy = bundle.state_centers_sim[int(goal_state)]
+
+    open_heap = []
+    heappush(open_heap, (0.0, int(start_state)))
+    came_from = {}
+    g_score = {int(start_state): 0.0}
+    closed = set()
+    neighbours = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    while open_heap:
+        _priority, current = heappop(open_heap)
+        if current in closed:
+            continue
+        if current == int(goal_state):
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+        closed.add(current)
+        row, col = state_rc[current]
+        for drow, dcol in neighbours:
+            nr = int(row) + drow
+            nc = int(col) + dcol
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols:
+                continue
+            neighbour = int(grid_to_state[nr, nc])
+            if neighbour < 0 or neighbour in closed:
+                continue
+            step_cost = float(
+                np.linalg.norm(
+                    bundle.state_centers_sim[current]
+                    - bundle.state_centers_sim[neighbour]
+                )
+            )
+            tentative = g_score[current] + step_cost
+            if tentative >= g_score.get(neighbour, np.inf):
+                continue
+            came_from[neighbour] = current
+            g_score[neighbour] = tentative
+            heuristic = float(
+                np.linalg.norm(bundle.state_centers_sim[neighbour] - goal_xy)
+            )
+            heappush(open_heap, (tentative + heuristic, neighbour))
+
+    raise RuntimeError(
+        f"No walkable-grid path from state {int(start_state)} to {int(goal_state)}"
+    )
+
+
+def resample_polyline(points: np.ndarray, count: int) -> np.ndarray:
+    points = np.asarray(points, dtype=float)
+    count = int(count)
+    if count <= 0:
+        raise ValueError("count must be positive")
+    if points.shape[0] == 0:
+        raise ValueError("cannot resample an empty polyline")
+    if points.shape[0] == 1 or count == 1:
+        return np.repeat(points[:1], count, axis=0)
+
+    segment_lengths = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+    total = float(cumulative[-1])
+    if total <= TOLERANCE:
+        return np.repeat(points[:1], count, axis=0)
+
+    samples = np.linspace(0.0, total, count)
+    result = np.zeros((count, 2), dtype=float)
+    for idx, distance in enumerate(samples):
+        segment = int(np.searchsorted(cumulative, distance, side="right") - 1)
+        segment = min(max(segment, 0), len(segment_lengths) - 1)
+        length = segment_lengths[segment]
+        alpha = (
+            0.0 if length <= TOLERANCE else (distance - cumulative[segment]) / length
+        )
+        result[idx] = points[segment] + alpha * (points[segment + 1] - points[segment])
+    return result
+
+
+def obstacle_aware_robot_path(
+    bundle: SDDModelBundle,
+    start,
+    goal,
+    steps: int,
+    static_union,
+) -> np.ndarray:
+    start_state = nearest_connectable_state(bundle, start, static_union)
+    goal_state = nearest_connectable_state(bundle, goal, static_union)
+    state_path = astar_state_path(bundle, start_state, goal_state)
+    points = np.vstack(
+        [
+            np.asarray(start, dtype=float).reshape(1, 2),
+            bundle.state_centers_sim[np.asarray(state_path, dtype=int)],
+            np.asarray(goal, dtype=float).reshape(1, 2),
+        ]
+    )
+    keep = [0]
+    for idx in range(1, points.shape[0]):
+        if np.linalg.norm(points[idx] - points[keep[-1]]) > 1.0e-9:
+            keep.append(idx)
+    return resample_polyline(points[keep], steps)
+
+
+def robot_path_collides(robot_path: np.ndarray, static_union) -> bool:
+    if static_union is None or static_union.is_empty:
+        return False
+    path = np.asarray(robot_path, dtype=float)
+    return any(
+        LineString([path[idx], path[idx + 1]]).intersects(static_union)
+        for idx in range(path.shape[0] - 1)
+    )
+
+
 def shapely_occlusion_schedule(
     robot_path: np.ndarray,
     state_centers: np.ndarray,
@@ -387,6 +528,7 @@ def sparse_exact_entropy(
             result = {
                 "step": step,
                 "entropy": 0.0,
+                "oc_entropy": 0.0,
                 "state_entropy": 0.0,
                 "prob": 0.0,
                 "E_state": 0.0,
@@ -404,13 +546,14 @@ def sparse_exact_entropy(
                 legacy_entropy += posterior_entropy * prob
                 a_state += posterior_entropy * prob / total_prob
                 sum_state += belief / total_prob
-            state_entropy = float(calc_entropy(sum_state))
+            oc_entropy = float(calc_entropy(sum_state))
             result = {
                 "step": step,
                 "entropy": float(legacy_entropy),
-                "state_entropy": state_entropy,
+                "oc_entropy": oc_entropy,
+                "state_entropy": oc_entropy,
                 "prob": total_prob,
-                "E_state": float(max(0.0, state_entropy - a_state)),
+                "E_state": float(max(0.0, oc_entropy - a_state)),
                 "A_state": float(a_state),
                 "belief": sum_state,
             }
@@ -456,6 +599,7 @@ def run_gpu_entropy(
         horizon=int(horizon),
         scan_range=float(scan_range),
         return_visibility=True,
+        return_belief_sums=True,
     )
 
 
@@ -770,7 +914,7 @@ def plot_entropy_step(
     gpu_entropy = float(gpu_result.step_entropy[0, 0, step - 1])
     gpu_prob = float(gpu_result.step_probability[0, 0, step - 1])
     max_belief = float(np.nanmax(grid))
-    state_entropy = float(cpu_row["state_entropy"])
+    oce_entropy = float(cpu_row.get("oc_entropy", cpu_row["state_entropy"]))
     e_state = float(cpu_row["E_state"])
     a_state = float(cpu_row["A_state"])
     axes[0].text(
@@ -778,7 +922,7 @@ def plot_entropy_step(
         0.02,
         (
             f"current entropy: {cpu_row['entropy']:.6f}\n"
-            f"state entropy: {state_entropy:.6f}\n"
+            f"OCE entropy: {oce_entropy:.6f}\n"
             f"max belief: {max_belief:.6f}"
         ),
         transform=axes[0].transAxes,
@@ -932,6 +1076,29 @@ def target_future_points(
     return bundle.state_centers_sim[np.asarray(indices, dtype=int)]
 
 
+def gpu_oce_step_belief(gpu_result, horizon_step: int) -> np.ndarray:
+    horizon_step = int(horizon_step)
+    if getattr(gpu_result, "step_belief_sums", None) is None:
+        raise ValueError("GPU result does not include step_belief_sums")
+    belief = np.asarray(
+        gpu_result.step_belief_sums[0, 0, horizon_step - 1], dtype=float
+    )
+    prob = float(gpu_result.step_probability[0, 0, horizon_step - 1])
+    if prob > TOLERANCE:
+        belief = belief / prob
+    return belief
+
+
+def occluded_belief_mass(
+    prefix_belief: np.ndarray,
+    visibility_tensor: np.ndarray,
+    horizon_step: int,
+) -> float:
+    visibility = np.asarray(visibility_tensor[0, int(horizon_step)], dtype=float)
+    occlusion = 1.0 - visibility
+    return float(np.sum(np.asarray(prefix_belief, dtype=float) * occlusion))
+
+
 def plot_current_belief_step(
     path: Path,
     *,
@@ -1017,7 +1184,16 @@ def gpu_horizon_rows(
     cumulative_entropy = 0.0
     for idx in range(horizon):
         entropy = float(gpu_result.step_entropy[0, 0, idx])
-        cumulative_entropy += entropy
+        prob = float(gpu_result.step_probability[0, 0, idx])
+        e_state = float(gpu_result.step_e_state[0, 0, idx])
+        a_state = float(gpu_result.step_a_state[0, 0, idx])
+        oce_entropy = float(
+            getattr(
+                gpu_result,
+                "step_oc_entropy",
+                gpu_result.step_state_entropy,
+            )[0, 0, idx]
+        )
         visibility = np.asarray(gpu_result.visibility_tensor[0, idx + 1], dtype=float)
         target_visible = None
         if future_target_states is not None:
@@ -1025,6 +1201,7 @@ def gpu_horizon_rows(
                 future_target_states[min(idx + 1, len(future_target_states) - 1)]
             )
             target_visible = float(visibility[target_state])
+        cumulative_entropy += entropy
         rows.append(
             {
                 "tick": int(tick),
@@ -1032,10 +1209,11 @@ def gpu_horizon_rows(
                 "visible_state_count": int(np.count_nonzero(visibility > 0.5)),
                 "target_visible": target_visible,
                 "gpu_entropy": entropy,
-                "gpu_prob": float(gpu_result.step_probability[0, 0, idx]),
-                "gpu_E_state": float(gpu_result.step_e_state[0, 0, idx]),
-                "gpu_A_state": float(gpu_result.step_a_state[0, 0, idx]),
-                "gpu_state_entropy": float(gpu_result.step_state_entropy[0, 0, idx]),
+                "gpu_prob": prob,
+                "gpu_E_state": e_state,
+                "gpu_A_state": a_state,
+                "gpu_oc_entropy": oce_entropy,
+                "gpu_state_entropy": oce_entropy,
                 "gpu_cumulative_entropy": float(cumulative_entropy),
             }
         )
@@ -1078,7 +1256,10 @@ def plot_simulation_contact_sheet(
     )
     axes[0].set_title(f"Current layout\nsim step {int(tick)}")
     for ax, horizon_step in zip(axes[1:], selected_steps):
-        belief = prefix_beliefs[int(horizon_step)]
+        target_state = int(
+            future_target_states[min(int(horizon_step), len(future_target_states) - 1)]
+        )
+        belief = gpu_oce_step_belief(gpu_result, int(horizon_step))
         grid = state_belief_to_grid(bundle, belief)
         ax.imshow(
             grid,
@@ -1108,19 +1289,25 @@ def plot_simulation_contact_sheet(
         ax.scatter(goal_point[0], goal_point[1], s=24, c="#c0392b")
         format_layout_axis(ax, scenario)
         idx = int(horizon_step) - 1
-        target_state = int(
-            future_target_states[min(int(horizon_step), len(future_target_states) - 1)]
-        )
         target_visible = float(
             gpu_result.visibility_tensor[0, int(horizon_step), target_state]
         )
+        display_entropy = float(gpu_result.step_entropy[0, 0, idx])
+        display_prob = float(gpu_result.step_probability[0, 0, idx])
+        display_e_state = float(gpu_result.step_e_state[0, 0, idx])
+        display_a_state = float(gpu_result.step_a_state[0, 0, idx])
+        mass_occ = occluded_belief_mass(
+            prefix_beliefs[int(horizon_step)],
+            gpu_result.visibility_tensor,
+            int(horizon_step),
+        )
         ax.set_title(
             f"h={int(horizon_step)}\n"
-            f"GPU H={float(gpu_result.step_entropy[0, 0, idx]):.4f}, "
-            f"p={float(gpu_result.step_probability[0, 0, idx]):.4f}\n"
-            f"E={float(gpu_result.step_e_state[0, 0, idx]):.4f}, "
-            f"A={float(gpu_result.step_a_state[0, 0, idx]):.4f}\n"
-            f"target visible={target_visible:.0f}"
+            f"GPU H={display_entropy:.4f}, "
+            f"p={display_prob:.4f}\n"
+            f"E={display_e_state:.4f}, "
+            f"A={display_a_state:.4f}\n"
+            f"target visible={target_visible:.0f}, occ mass={mass_occ:.3f}"
         )
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -1136,7 +1323,7 @@ def write_horizon_entropy_csv(path: Path, rows: list[dict]) -> None:
         "gpu_prob",
         "gpu_E_state",
         "gpu_A_state",
-        "gpu_state_entropy",
+        "gpu_oc_entropy",
         "gpu_cumulative_entropy",
         "cpu_entropy",
         "cpu_prob",
@@ -1239,9 +1426,15 @@ def run_validation(args: argparse.Namespace) -> dict:
         args.sdd_model_root, args.scene_id, args.track_id
     )
     static_union = blocking_union(scenario.static_polygons)
-    rollout_path = linear_robot_path(
-        args.robot_start, args.robot_goal, args.rollout_steps
+    rollout_path = obstacle_aware_robot_path(
+        bundle,
+        args.robot_start,
+        args.robot_goal,
+        args.rollout_steps,
+        static_union,
     )
+    if robot_path_collides(rollout_path, static_union):
+        raise RuntimeError("Generated robot rollout path intersects a blocking polygon")
     target_points = target_future_points(
         bundle,
         target_states,

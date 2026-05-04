@@ -50,6 +50,7 @@ from trajectory_planner.frenet_optimal_trajectory import (
 from trajectory_planner import cubic_spline_planner
 from trajectory_planner.frenet_candidate import (
     frenet_lateral_offsets,
+    frenet_prediction_schedule,
     project_pose_to_spline_frenet,
     sample_spline_route,
 )
@@ -1731,6 +1732,7 @@ def evaluate_candidate_paths_by_discrete_oce(
                 "step_probability": getattr(result, "step_probability", None),
                 "step_e_state": getattr(result, "step_e_state", None),
                 "step_a_state": getattr(result, "step_a_state", None),
+                "step_oc_entropy": getattr(result, "step_oc_entropy", None),
                 "step_state_entropy": getattr(result, "step_state_entropy", None),
                 "score_components": getattr(result, "score_components", None),
                 "visibility_tensor": getattr(result, "visibility_tensor", None),
@@ -2886,7 +2888,9 @@ def roadmap_nominal_route_for_frenet(
         0.0,
     ):
         clearance = max(0.0, float(clearance))
-        if not any(abs(clearance - existing) <= 1.0e-9 for existing in clearance_values):
+        if not any(
+            abs(clearance - existing) <= 1.0e-9 for existing in clearance_values
+        ):
             clearance_values.append(clearance)
 
     last_debug = None
@@ -2914,12 +2918,9 @@ def roadmap_nominal_route_for_frenet(
                 route,
                 hard_obstacle_union,
             ):
-                if (
-                    clearance < params.obstacle_clearance
-                    and (
-                        getattr(args, "debug_paths", False)
-                        or getattr(args, "debug_steering", False)
-                    )
+                if clearance < params.obstacle_clearance and (
+                    getattr(args, "debug_paths", False)
+                    or getattr(args, "debug_steering", False)
                 ):
                     print(
                         "[frenet] roadmap nominal route required reduced clearance "
@@ -4818,13 +4819,22 @@ def generate_frenet_trajectories(
     robot_speed = max(0.0, float(start[ActorStateEnum.VELOCITY]))
     s_dot = max(0.0, robot_speed * np.cos(heading_error))
     d_dot = robot_speed * np.sin(heading_error)
+    remaining_s = max(0.0, float(csp.s[-1]) - float(projection["s"]))
+    schedule = frenet_prediction_schedule(
+        remaining_s=remaining_s,
+        target_speed=speed,
+        current_s_speed=s_dot,
+        control_dt=dt,
+        resolution=float(resolution or GRID_RESOLUTION),
+        control_horizon=horizon,
+    )
 
     planner_args = PlannerArgs(
-        max_predict_time=horizon * dt,
-        min_predict_time=horizon * dt,
+        max_predict_time=schedule["predict_time"],
+        min_predict_time=schedule["predict_time"],
         predict_step=dt,
-        time_tick=dt,
-        target_speed=speed,
+        time_tick=schedule["time_tick"],
+        target_speed=schedule["planning_speed"],
         stopping_time=None,
         trajectories_requested=count,
         generate_planning_path=True,
@@ -4854,7 +4864,7 @@ def generate_frenet_trajectories(
     accepted = []
     reject_counts = {"short": 0, "collision": 0}
     for offset, path in zip(offsets, trajectories):
-        route = frenet_path_xy(path).astype(float).tolist()
+        route = dedupe_waypoints(frenet_path_xy(path).astype(float).tolist())
         if len(route) < 2:
             reject_counts["short"] += 1
             continue
@@ -4895,6 +4905,9 @@ def generate_frenet_trajectories(
                 f"s0={projection['s']:.3f} d0={projection['d']:.3f} "
                 f"offsets={[round(item['offset'], 3) for item in accepted]} "
                 f"nominal_length={context['length']:.3f} "
+                f"predict_time={schedule['predict_time']:.2f}s "
+                f"planning_dt={schedule['time_tick']:.3f}s "
+                f"sample_spacing={schedule['sample_spacing']:.3f} "
                 f"route_source={context.get('route_source')} "
                 f"rejects={reject_counts}"
             )
@@ -5840,9 +5853,11 @@ def simulate(args, delivery_log=None):
             cached_path_debug = (
                 getattr(args, "_last_specialk_debug", None)
                 if str(args.trajectory_generator).lower() == "specialk"
-                else getattr(args, "_last_frenet_debug", None)
-                if str(args.trajectory_generator).lower() == "frenet"
-                else None
+                else (
+                    getattr(args, "_last_frenet_debug", None)
+                    if str(args.trajectory_generator).lower() == "frenet"
+                    else None
+                )
             )
             timing["trajectories"] = perf_counter() - section_start
 
