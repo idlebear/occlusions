@@ -59,6 +59,46 @@ def sample_spline_route(csp, *, spacing=0.1, start_s=0.0, end_s=None):
     return dedupe_waypoints(route)
 
 
+def frenet_prediction_schedule(
+    *,
+    remaining_s,
+    target_speed,
+    current_s_speed,
+    control_dt,
+    resolution,
+    control_horizon,
+):
+    remaining_s = max(0.0, float(remaining_s))
+    target_speed = max(0.0, float(target_speed))
+    current_s_speed = max(0.0, float(current_s_speed))
+    control_dt = max(float(control_dt), 1.0e-6)
+    control_horizon = max(1, int(control_horizon))
+    resolution = float(resolution) if resolution is not None else 0.1
+
+    sample_spacing = max(
+        min(max(resolution, 1.0e-6) * 0.5, 0.1),
+        target_speed * control_dt,
+        0.03,
+    )
+    planning_speed = max(target_speed, current_s_speed, 0.05)
+    average_planning_speed = max(
+        0.5 * (current_s_speed + planning_speed),
+        0.05,
+    )
+    predict_time = max(
+        control_horizon * control_dt,
+        remaining_s / average_planning_speed,
+        1.0,
+    )
+    time_tick = max(sample_spacing / planning_speed, control_dt, 1.0e-3)
+    return {
+        "predict_time": float(predict_time),
+        "time_tick": float(time_tick),
+        "sample_spacing": float(sample_spacing),
+        "planning_speed": float(planning_speed),
+    }
+
+
 def project_pose_to_spline_frenet(csp, pose, *, min_s=0.0, search_step=0.05):
     pose = np.asarray(pose, dtype=float)
     point = pose[:2]
