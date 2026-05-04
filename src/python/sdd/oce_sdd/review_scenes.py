@@ -233,6 +233,9 @@ def write_markov_model_json(
 
     scene_out_root = models_out_root / f"scene_{scene_id:03d}"
     scene_out_root.mkdir(parents=True, exist_ok=True)
+    for pattern in ("class_*_heatmap.json", "class_*_transition.json"):
+        for stale_path in scene_out_root.glob(pattern):
+            stale_path.unlink()
     destination_data = json.loads(destination_path.read_text())
     state_space = json.loads(state_space_path.read_text())
 

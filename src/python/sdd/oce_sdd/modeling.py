@@ -59,6 +59,10 @@ class DestinationClasses:
     member_endpoints: tuple[np.ndarray, ...]
     member_state_ids: tuple[np.ndarray, ...]
     track_to_class: dict[int, int]
+    class_radii: np.ndarray | None = None
+    merge_epsilon: float | None = None
+    merge_epsilon_meters: float | None = None
+    pre_merge_class_count: int | None = None
 
 
 def main() -> None:
@@ -113,6 +117,8 @@ def main() -> None:
             min_samples=args.destination_min_samples,
             snap_distance=args.endpoint_snap_distance,
         )
+        pre_merge_class_count = len(destination_classes.centers)
+        destination_merge_epsilon = None
         track_to_class = assign_destination_classes(
             scene,
             state_space,
@@ -126,8 +132,24 @@ def main() -> None:
             train_counts=destination_classes.train_counts,
             member_endpoints=destination_classes.member_endpoints,
             member_state_ids=destination_classes.member_state_ids,
+            class_radii=destination_classes.class_radii,
             track_to_class=track_to_class,
+            merge_epsilon=destination_classes.merge_epsilon,
+            merge_epsilon_meters=destination_classes.merge_epsilon_meters,
+            pre_merge_class_count=destination_classes.pre_merge_class_count,
         )
+        if args.merge_adjacent_destination_classes:
+            destination_merge_epsilon = destination_merge_epsilon_scene_units(args, scale)
+            destination_classes = merge_adjacent_destination_classes(
+                destination_classes,
+                epsilon=destination_merge_epsilon,
+                epsilon_meters=(
+                    destination_merge_epsilon / scale
+                    if scale > 0
+                    else args.destination_merge_epsilon_meters
+                ),
+            )
+            track_to_class = destination_classes.track_to_class
 
         transition_model = learn_transition_model(
             state_space=state_space,
@@ -167,6 +189,14 @@ def main() -> None:
                 "cell_size": cell_size,
                 "destination_radius_meters": args.destination_radius_meters,
                 "destination_radius": destination_radius,
+                "destination_merge_enabled": args.merge_adjacent_destination_classes,
+                "destination_merge_epsilon_meters": (
+                    destination_merge_epsilon / scale
+                    if destination_merge_epsilon is not None and scale > 0
+                    else None
+                ),
+                "destination_merge_epsilon": destination_merge_epsilon,
+                "pre_merge_destination_classes": pre_merge_class_count,
                 "state_count": len(state_space.state_ids),
                 "rows": state_space.rows,
                 "cols": state_space.cols,
@@ -226,6 +256,27 @@ def parse_args() -> argparse.Namespace:
         help="Minimum train endpoints required to keep a destination class.",
     )
     parser.add_argument(
+        "--merge-adjacent-destination-classes",
+        action="store_true",
+        help=(
+            "Merge destination classes whose endpoint goal regions are adjacent under "
+            "the class-merge graph."
+        ),
+    )
+    merge_group = parser.add_mutually_exclusive_group()
+    merge_group.add_argument(
+        "--destination-merge-epsilon",
+        type=float,
+        default=None,
+        help="Adjacent destination-class merge tolerance epsilon_c in scene units.",
+    )
+    merge_group.add_argument(
+        "--destination-merge-epsilon-meters",
+        type=float,
+        default=0.5,
+        help="Adjacent destination-class merge tolerance epsilon_c in meters.",
+    )
+    parser.add_argument(
         "--endpoint-snap-distance",
         type=float,
         default=None,
@@ -276,6 +327,14 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.destination_radius is None and args.destination_radius_meters is None:
         args.destination_radius_meters = 2.0
+    if args.destination_merge_epsilon is not None:
+        if not np.isfinite(args.destination_merge_epsilon) or args.destination_merge_epsilon < 0:
+            parser.error("--destination-merge-epsilon must be finite and non-negative")
+    elif (
+        not np.isfinite(args.destination_merge_epsilon_meters)
+        or args.destination_merge_epsilon_meters < 0
+    ):
+        parser.error("--destination-merge-epsilon-meters must be finite and non-negative")
     if args.transition_min_support <= 0:
         parser.error("--transition-min-support must be positive")
     if not np.isfinite(args.global_goal_tau_meters) or args.global_goal_tau_meters <= 0:
@@ -324,6 +383,23 @@ def destination_radius_scene_units(
     if not np.isfinite(radius) or radius <= 0:
         raise ValueError("destination radius must be finite and positive")
     return radius
+
+
+def destination_merge_epsilon_scene_units(args: argparse.Namespace, scale: float) -> float:
+    if args.destination_merge_epsilon is not None:
+        epsilon = float(args.destination_merge_epsilon)
+    else:
+        value_meters = float(args.destination_merge_epsilon_meters)
+        scale = float(scale)
+        if not np.isfinite(value_meters) or value_meters < 0:
+            raise ValueError("destination merge epsilon meters must be finite and non-negative")
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError("scene scale must be finite and positive")
+        epsilon = value_meters * scale
+
+    if not np.isfinite(epsilon) or epsilon < 0:
+        raise ValueError("destination merge epsilon must be finite and non-negative")
+    return epsilon
 
 
 def grid_shape_for_cell_size(
@@ -621,6 +697,7 @@ def fit_destination_classes(
             train_counts=np.zeros(0, dtype=np.int64),
             member_endpoints=tuple(),
             member_state_ids=tuple(),
+            class_radii=np.zeros(0, dtype=float),
             track_to_class=track_to_class,
         )
 
@@ -646,6 +723,7 @@ def fit_destination_classes(
             train_counts=np.zeros(0, dtype=np.int64),
             member_endpoints=tuple(),
             member_state_ids=tuple(),
+            class_radii=np.zeros(0, dtype=float),
             track_to_class=track_to_class,
         )
 
@@ -720,11 +798,14 @@ def fit_destination_classes(
     counts = np.zeros(len(ordered), dtype=np.int64)
     member_endpoints = []
     member_state_ids = []
+    class_radii = np.zeros(len(ordered), dtype=float)
     for old_label, pts in ordered:
         new_label = remap[old_label]
         endpoints_for_label = np.asarray(pts, dtype=float).reshape((-1, 2))
-        centers.append(np.mean(endpoints_for_label, axis=0))
+        center = np.mean(endpoints_for_label, axis=0)
+        centers.append(center)
         counts[new_label] = len(pts)
+        class_radii[new_label] = endpoint_radius(endpoints_for_label, center)
         member_endpoints.append(endpoints_for_label)
         member_state_ids.append(np.asarray(label_to_states[old_label], dtype=np.int64))
 
@@ -740,7 +821,186 @@ def fit_destination_classes(
         train_counts=counts,
         member_endpoints=tuple(member_endpoints),
         member_state_ids=tuple(member_state_ids),
+        class_radii=class_radii,
         track_to_class=track_to_class,
+        pre_merge_class_count=len(ordered_centers),
+    )
+
+
+def endpoint_radius(endpoints: np.ndarray, center: np.ndarray) -> float:
+    endpoints = np.asarray(endpoints, dtype=float).reshape((-1, 2))
+    if endpoints.shape[0] == 0:
+        return 0.0
+    center = np.asarray(center, dtype=float).reshape((1, 2))
+    return float(np.max(np.linalg.norm(endpoints - center, axis=1)))
+
+
+def merge_adjacent_destination_classes(
+    destination_classes: DestinationClasses,
+    *,
+    epsilon: float,
+    epsilon_meters: float | None,
+) -> DestinationClasses:
+    if not np.isfinite(epsilon) or epsilon < 0:
+        raise ValueError("destination merge epsilon must be finite and non-negative")
+
+    class_count = len(destination_classes.centers)
+    pre_merge_class_count = (
+        destination_classes.pre_merge_class_count
+        if destination_classes.pre_merge_class_count is not None
+        else class_count
+    )
+    class_radii = destination_class_radii(destination_classes)
+    if class_count <= 1:
+        return DestinationClasses(
+            radius=destination_classes.radius,
+            centers=destination_classes.centers,
+            train_counts=destination_classes.train_counts,
+            member_endpoints=destination_classes.member_endpoints,
+            member_state_ids=destination_classes.member_state_ids,
+            track_to_class=dict(destination_classes.track_to_class),
+            class_radii=class_radii,
+            merge_epsilon=float(epsilon),
+            merge_epsilon_meters=epsilon_meters,
+            pre_merge_class_count=pre_merge_class_count,
+        )
+
+    components = destination_class_merge_components(
+        centers=destination_classes.centers,
+        radii=class_radii,
+        max_radius=destination_classes.radius,
+        epsilon=epsilon,
+    )
+
+    if all(len(component) == 1 and component[0] == i for i, component in enumerate(components)):
+        return DestinationClasses(
+            radius=destination_classes.radius,
+            centers=destination_classes.centers,
+            train_counts=destination_classes.train_counts,
+            member_endpoints=destination_classes.member_endpoints,
+            member_state_ids=destination_classes.member_state_ids,
+            class_radii=class_radii,
+            track_to_class=dict(destination_classes.track_to_class),
+            merge_epsilon=float(epsilon),
+            merge_epsilon_meters=epsilon_meters,
+            pre_merge_class_count=pre_merge_class_count,
+        )
+
+    merged = []
+    old_to_component: dict[int, int] = {}
+    for component_id, component in enumerate(components):
+        endpoints = np.vstack([destination_classes.member_endpoints[i] for i in component])
+        states = np.concatenate([destination_classes.member_state_ids[i] for i in component])
+        center = np.mean(endpoints, axis=0)
+        merged.append(
+            {
+                "component_id": component_id,
+                "old_class_ids": component,
+                "center": center,
+                "radius": endpoint_radius(endpoints, center),
+                "count": int(sum(destination_classes.train_counts[i] for i in component)),
+                "endpoints": endpoints,
+                "states": states.astype(np.int64, copy=False),
+            }
+        )
+        for old_class_id in component:
+            old_to_component[old_class_id] = component_id
+
+    merged.sort(key=lambda item: (item["center"][0], item["center"][1]))
+    component_to_new = {
+        int(item["component_id"]): new_class_id
+        for new_class_id, item in enumerate(merged)
+    }
+    track_to_class = {}
+    for track_id, old_class_id in destination_classes.track_to_class.items():
+        if old_class_id < 0:
+            track_to_class[track_id] = -1
+        else:
+            track_to_class[track_id] = component_to_new[old_to_component[int(old_class_id)]]
+
+    return DestinationClasses(
+        radius=destination_classes.radius,
+        centers=np.asarray([item["center"] for item in merged], dtype=float).reshape((-1, 2)),
+        train_counts=np.asarray([item["count"] for item in merged], dtype=np.int64),
+        member_endpoints=tuple(item["endpoints"] for item in merged),
+        member_state_ids=tuple(item["states"] for item in merged),
+        class_radii=np.asarray([item["radius"] for item in merged], dtype=float),
+        track_to_class=track_to_class,
+        merge_epsilon=float(epsilon),
+        merge_epsilon_meters=epsilon_meters,
+        pre_merge_class_count=pre_merge_class_count,
+    )
+
+
+def destination_class_radii(destination_classes: DestinationClasses) -> np.ndarray:
+    if (
+        destination_classes.class_radii is not None
+        and destination_classes.class_radii.shape == (len(destination_classes.centers),)
+    ):
+        return destination_classes.class_radii.astype(float, copy=True)
+    return np.asarray(
+        [
+            endpoint_radius(endpoints, center)
+            for endpoints, center in zip(
+                destination_classes.member_endpoints,
+                destination_classes.centers,
+            )
+        ],
+        dtype=float,
+    )
+
+
+def destination_class_merge_components(
+    *,
+    centers: np.ndarray,
+    radii: np.ndarray,
+    max_radius: float,
+    epsilon: float,
+) -> list[list[int]]:
+    if not np.isfinite(max_radius) or max_radius < 0:
+        raise ValueError("destination merge max_radius must be finite and non-negative")
+    if not np.isfinite(epsilon) or epsilon < 0:
+        raise ValueError("destination merge epsilon must be finite and non-negative")
+    class_count = len(centers)
+    parent = list(range(class_count))
+    capped_radii = np.minimum(np.asarray(radii, dtype=float), float(max_radius))
+    if capped_radii.shape != (class_count,) or not np.all(np.isfinite(capped_radii)):
+        raise ValueError("destination merge radii must be finite and match centers")
+
+    def find(class_id: int) -> int:
+        while parent[class_id] != class_id:
+            parent[class_id] = parent[parent[class_id]]
+            class_id = parent[class_id]
+        return class_id
+
+    def union(a: int, b: int) -> None:
+        root_a = find(a)
+        root_b = find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    centers = np.asarray(centers, dtype=float).reshape((-1, 2))
+    for i in range(class_count):
+        for j in range(i + 1, class_count):
+            center_distance = float(np.linalg.norm(centers[i] - centers[j]))
+            region_gap = center_distance - capped_radii[i] - capped_radii[j]
+            tolerance = np.finfo(np.float64).eps * max(
+                1.0,
+                abs(center_distance),
+                abs(float(capped_radii[i])),
+                abs(float(capped_radii[j])),
+                abs(float(epsilon)),
+            )
+            if region_gap <= epsilon + tolerance:
+                union(i, j)
+
+    root_to_members: dict[int, list[int]] = {}
+    for class_id in range(class_count):
+        root_to_members.setdefault(find(class_id), []).append(class_id)
+
+    return sorted(
+        (members for members in root_to_members.values()),
+        key=lambda members: (centers[members].mean(axis=0)[0], centers[members].mean(axis=0)[1]),
     )
 
 
@@ -1173,16 +1433,25 @@ def write_splits(splits: dict[str, list[int]], path: Path) -> None:
 
 def write_destination_classes(destination_classes: DestinationClasses, path: Path) -> None:
     records = []
+    class_radii = destination_class_radii(destination_classes)
     for class_id, center in enumerate(destination_classes.centers):
         records.append(
             {
                 "class_id": class_id,
                 "center": center.tolist(),
+                "radius": float(class_radii[class_id]),
                 "train_count": int(destination_classes.train_counts[class_id]),
             }
         )
     payload = {
         "radius": destination_classes.radius,
+        "merge": {
+            "enabled": destination_classes.merge_epsilon is not None,
+            "epsilon": destination_classes.merge_epsilon,
+            "epsilon_meters": destination_classes.merge_epsilon_meters,
+            "pre_merge_class_count": destination_classes.pre_merge_class_count,
+            "post_merge_class_count": int(len(destination_classes.centers)),
+        },
         "classes": records,
         "track_to_class": {
             str(track_id): int(class_id)
@@ -1195,6 +1464,8 @@ def write_destination_classes(destination_classes: DestinationClasses, path: Pat
 def write_transition_model(transition_model: dict[str, Any], output_root: Path) -> None:
     transitions_root = output_root / "transitions"
     transitions_root.mkdir(exist_ok=True)
+    for stale_path in transitions_root.glob("class_*.npz"):
+        stale_path.unlink()
     sparse.save_npz(transitions_root / "global_counts.npz", transition_model["global_counts"])
     sparse.save_npz(transitions_root / "global_transition.npz", transition_model["global_transition"])
     np.savez_compressed(
@@ -1252,6 +1523,10 @@ def write_model_metadata(
                 else None
             ),
             "radius": destination_classes.radius,
+            "merge_enabled": destination_classes.merge_epsilon is not None,
+            "merge_epsilon_meters": destination_classes.merge_epsilon_meters,
+            "merge_epsilon": destination_classes.merge_epsilon,
+            "pre_merge_class_count": destination_classes.pre_merge_class_count,
             "class_count": int(len(destination_classes.centers)),
             "unassigned_track_count": int(
                 sum(1 for class_id in destination_classes.track_to_class.values() if class_id < 0)
@@ -1298,6 +1573,10 @@ def write_summary(rows: list[dict[str, Any]], path: Path) -> None:
         "cell_size",
         "destination_radius_meters",
         "destination_radius",
+        "destination_merge_enabled",
+        "destination_merge_epsilon_meters",
+        "destination_merge_epsilon",
+        "pre_merge_destination_classes",
         "state_count",
         "rows",
         "cols",
