@@ -300,8 +300,7 @@ class Simulation:
         tracks=None,
         data_source=None,
         scenario=None,
-        sdd_processed_root="outputs/sdd_processed",
-        sdd_scene_id=None,
+        data_args=None,
         limit_tracks=None,
         ego_start=None,
         ego_heading=0,
@@ -322,10 +321,7 @@ class Simulation:
         self.scenario = scenario
         if self.scenario is None and data_source is not None:
             self.scenario = load_scenario(
-                data_source,
-                tracks=tracks,
-                sdd_processed_root=sdd_processed_root,
-                sdd_scene_id=sdd_scene_id,
+                data_source, tracks=tracks, **(data_args or {})
             )
         elif self.scenario is None and tracks is not None:
             self.scenario = load_eth_scenario(tracks)
@@ -398,9 +394,18 @@ class Simulation:
             origin=(0, 0),
         )
 
-        self.ego_start = ego_start
-        self.ego_goal = ego_goal
-        self.ego_heading = ego_heading
+        if self.scenario is not None and self.scenario.data_source == "sdd":
+            # for SDD, we allow the scenario config to specify the ego start and goal locations
+            if self.scenario.metadata.get("robot_start_zone") is not None:
+                self.ego_start = self.scenario.metadata["robot_start_zone"]
+            if self.scenario.metadata.get("robot_goal") is not None:
+                self.ego_goal = self.scenario.metadata["robot_goal"]
+            # BUGBUG - the config does not have a heading yet -- default to point at goal
+            self.ego_heading = None
+        else:
+            self.ego_start = ego_start
+            self.ego_goal = ego_goal
+            self.ego_heading = ego_heading
 
         colours = XKCD_ColourPicker()
         self.colours = colours.values(30, "red")
@@ -494,6 +499,30 @@ class Simulation:
                 + self.display_offset
             ), True
 
+        if isinstance(spec, np.ndarray):
+            if spec.ndim > 1:
+                # spec is a polygon defined by a list of vertices -- sample uniformly from the bounding box until we get a point in the polygon
+                polygon = Polygon(spec)
+                if not polygon.is_valid:
+                    polygon = polygon.buffer(0)
+                if polygon.is_empty:
+                    raise ValueError(
+                        "Invalid polygon specification for location sampling"
+                    )
+                minx, miny, maxx, maxy = polygon.bounds
+                for _ in range(100):
+                    x = self._random_unit() * (maxx - minx) + minx
+                    y = self._random_unit() * (maxy - miny) + miny
+                    if polygon.contains(Point(x, y)):
+                        return np.asarray([x, y], dtype=float), True
+                raise RuntimeError(
+                    "Unable to sample a point in the specified polygon after 100 attempts"
+                )
+            else:
+                # spec is a single point
+                return np.asarray(spec, dtype=float), False
+
+        # otherwise, spec should be a tuple of (lo, hi) for each axis
         x, x_random = self._sample_axis_value(spec[0], self.display_offset[0])
         y, y_random = self._sample_axis_value(spec[1], self.display_offset[1])
         return np.asarray([x, y], dtype=float), bool(x_random or y_random)
@@ -560,6 +589,10 @@ class Simulation:
         sx, sy = self._sample_free_location(self.ego_start, "ego start")
         gx, gy = self._sample_free_location(self.ego_goal, "ego goal")
 
+        # if ego_heading is not specified, default to pointing at the goal
+        if self.ego_heading is None:
+            self.ego_heading = np.arctan2(gy - sy, gx - sx)
+
         self.ego = DeliveryBot(
             id=0,
             x=np.array([sx, sy, 0, self.ego_heading, 0]),
@@ -613,14 +646,19 @@ class Simulation:
     # Plotting and drawing functions
     ############################################################################
 
+    def _actor_centerline_exclusion_radius(self, actor):
+        ego = getattr(self, "ego", None)
+        ego_radius = float(getattr(ego, "width", 0.0)) / 2.0 if ego is not None else 0.0
+        return actor.get_extent() + ego_radius + MIN_SEPARATION * self.scene_scale
+
     def _draw_actor(self, actor, draw_extent=True):
         actor_image = actor.get_image()
         if draw_extent:
-            # draw collision radius
+            # Draw the ego-center exclusion radius used by MPPI clearance checks.
             self.window.draw_circle(
                 actor.x[:2],
                 colour=actor.colour,
-                radius=actor.get_extent() + MIN_SEPARATION * self.scene_scale,
+                radius=self._actor_centerline_exclusion_radius(actor),
             )
         if actor_image is not None:
             actor_pos = actor.get_pos()
@@ -1273,10 +1311,10 @@ class Simulation:
             self._draw_visibility()
             self._draw_status()
 
-            # BUGBUG - make screen saving optional
-            # if prefix_str is None:
-            #     prefix_str = "pedestrian"
-            # self.window.save_screen(f"results/{prefix_str}_{self.ticks:05}.png")
+            if self.record_data:
+                if prefix_str is None:
+                    prefix_str = "pedestrian"
+                self.window.save_screen(f"results/{prefix_str}_{self.ticks:05}.png")
 
         if DEBUG:
             pass

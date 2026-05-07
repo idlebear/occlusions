@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from controller.ModelParameters.Ackermann import Ackermann4
+from datasources.scenario import StaticPolygon
 from warp_mppi.legacy import PyCudaMPPI as MPPI
 from warp_mppi.legacy import evaluate_trajectories_by_entropy_gpu
 from warp_mppi.legacy import evaluate_discrete_oce_gpu
@@ -295,6 +296,46 @@ def mppi_static_clearance_margin(robot_model, clearance_margin):
     return float(clearance_margin) * scene_scale(robot_model)
 
 
+def summarize_rollout_display_alignment(mppi, trajectories, trajectory_indices):
+    gpu_rollouts = getattr(mppi, "last_rollout_states", None)
+    if gpu_rollouts is None or trajectories is None:
+        return None
+
+    gpu_rollouts = np.asarray(gpu_rollouts, dtype=float)
+    host_rollouts = np.asarray(trajectories, dtype=float)
+    indices = np.asarray(trajectory_indices, dtype=int).reshape(-1)
+
+    if (
+        gpu_rollouts.ndim != 3
+        or host_rollouts.ndim != 3
+        or indices.size == 0
+        or host_rollouts.shape[0] != indices.size
+    ):
+        return None
+
+    valid = (indices >= 0) & (indices < gpu_rollouts.shape[0])
+    if not np.any(valid):
+        return None
+
+    host_rollouts = host_rollouts[valid]
+    gpu_rollouts = gpu_rollouts[indices[valid]]
+    steps = min(gpu_rollouts.shape[1], max(0, host_rollouts.shape[1] - 1))
+    if steps <= 0:
+        return None
+
+    # Host display trajectories include the initial state; CUDA rollout states
+    # start after the first applied control.
+    delta_xy = host_rollouts[:, 1 : steps + 1, :2] - gpu_rollouts[:, :steps, :2]
+    errors = np.linalg.norm(delta_xy, axis=2)
+    return {
+        "samples": int(errors.shape[0]),
+        "steps": int(errors.shape[1]),
+        "max_xy_error": float(np.max(errors)),
+        "mean_xy_error": float(np.mean(errors)),
+        "p95_xy_error": float(np.percentile(errors, 95.0)),
+    }
+
+
 def host_safety_horizon(args):
     horizon = int(getattr(args, "host_safety_horizon", 10))
     return None if horizon <= 0 else horizon
@@ -332,6 +373,57 @@ def build_dynamic_obstacles_for_mppi(
             }
         )
     return obstacles, debug
+
+
+def circle_polygon_points(center, radius, segments=16):
+    angles = np.linspace(0.0, 2.0 * np.pi, int(segments), endpoint=False)
+    center = np.asarray(center, dtype=float).reshape(2)
+    return np.column_stack(
+        [
+            center[0] + float(radius) * np.cos(angles),
+            center[1] + float(radius) * np.sin(angles),
+        ]
+    )
+
+
+def dynamic_agent_planning_polygons(
+    agents,
+    agent_predictions,
+    horizon,
+    robot_model,
+    hard_clearance_margin,
+    soft_clearance_margin,
+    *,
+    step_stride=5,
+):
+    polygons = []
+    # hard_clearance = mppi_dynamic_collision_buffer(robot_model, hard_clearance_margin)
+    # soft_clearance = mppi_dynamic_clearance_margin(robot_model, soft_clearance_margin)
+    # for agent in agents or []:
+    #     states, source = _agent_prediction_sequence(agent, agent_predictions, horizon)
+    #     if states.size == 0:
+    #         continue
+    #     extent = float(agent.get("extent", 0.0))
+    #     radius = extent + hard_clearance + soft_clearance
+    #     stride = max(1, int(step_stride))
+    #     step_indices = list(range(0, min(int(horizon), states.shape[0]), stride))
+    #     if states.shape[0] > 0 and (states.shape[0] - 1) not in step_indices:
+    #         step_indices.append(states.shape[0] - 1)
+    #     for step_idx in step_indices:
+    #         polygons.append(
+    #             StaticPolygon(
+    #                 polygon_class="DynamicAgent",
+    #                 points=circle_polygon_points(states[step_idx, :2], radius),
+    #                 blocking=True,
+    #                 metadata={
+    #                     "agent_id": agent.get("id"),
+    #                     "prediction_source": source,
+    #                     "step": int(step_idx),
+    #                     "radius": float(radius),
+    #                 },
+    #             )
+    #         )
+    return polygons
 
 
 def dynamic_agent_collision_threshold(agent, robot_model, clearance):
@@ -559,6 +651,32 @@ def control_sequence_collision_summary(
     }
 
 
+def recovery_control_sequences(u_nom):
+    controls = []
+    u_nom = np.asarray(u_nom, dtype=float)
+    if u_nom.ndim != 2 or u_nom.shape[1] < 2:
+        return controls
+
+    max_accel = float(CONTROL_LIMITS[0])
+    max_delta = float(CONTROL_LIMITS[1])
+    accel_options = [-max_accel, -0.5 * max_accel, 0.0]
+    steer_options = [
+        -max_delta,
+        max_delta,
+        -0.75 * max_delta,
+        0.75 * max_delta,
+        -0.5 * max_delta,
+        0.5 * max_delta,
+    ]
+    for accel in accel_options:
+        for steer in steer_options:
+            candidate = u_nom.copy()
+            candidate[:, 0] = accel
+            candidate[:, 1] = steer
+            controls.append(candidate)
+    return controls
+
+
 def find_safe_control_candidate(
     *,
     robot_model,
@@ -578,6 +696,10 @@ def find_safe_control_candidate(
     dynamic_safety_horizon=None,
 ):
     candidates = [("nominal", None, np.asarray(u_nom, dtype=float))]
+    candidates.extend(
+        ("recovery", index, controls)
+        for index, controls in enumerate(recovery_control_sequences(u_nom))
+    )
     if u_variations is not None and len(u_variations):
         sampled_controls = np.asarray(u_nom, dtype=float)[
             np.newaxis, :, :
@@ -588,6 +710,8 @@ def find_safe_control_candidate(
         weights_arr = np.asarray(weights, dtype=float).reshape(-1)
         if weights_arr.shape[0] == sampled_controls.shape[0]:
             order = np.argsort(weights_arr)[::-1]
+            if float(np.sum(weights_arr)) <= 0.0:
+                max_candidates = sampled_controls.shape[0]
         else:
             order = np.arange(sampled_controls.shape[0])
         for sample_idx in order[: min(int(max_candidates), sampled_controls.shape[0])]:
@@ -600,6 +724,7 @@ def find_safe_control_candidate(
             )
 
     best_collision = None
+    best_score = -np.inf
     for source, sample_idx, controls in candidates:
         summary = control_sequence_collision_summary(
             robot_model=robot_model,
@@ -628,8 +753,13 @@ def find_safe_control_candidate(
                 }
             )
             return summary
-        if best_collision is None:
+        dynamic_summary = summary.get("dynamic_summary") or {}
+        score = float(dynamic_summary.get("min_clearance", -np.inf))
+        if summary.get("static_collision", False):
+            score -= 1.0e6
+        if best_collision is None or score > best_score:
             best_collision = summary
+            best_score = score
     return best_collision
 
 
@@ -5114,9 +5244,9 @@ def get_control(
     if getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
         print(
             "[dynamic-obstacles] "
-            f"tick={debug_tick} visible={len(agents)} horizon={args.horizon} "
+            f"tick={debug_tick} agents={len(agents)} horizon={args.horizon} "
             f"lookahead={args.horizon * args.tick_time:.2f}s "
-            f"agents={dynamic_actor_debug}"
+            f"obstacles={dynamic_actor_debug}"
         )
 
     section_start = perf_counter()
@@ -5159,6 +5289,7 @@ def get_control(
     # feasible passages can deadlock with every recovery candidate marked unsafe.
     static_collision_clearance = 0.0
     safety_horizon = host_safety_horizon(args)
+    dynamic_safety_horizon = args.horizon
     if static_polygons and args.host_static_sample_filter:
         section_start = perf_counter()
         u_weights, static_union, static_debug = filter_static_collision_samples(
@@ -5273,7 +5404,7 @@ def get_control(
             horizon=args.horizon,
             dynamic_clearance=dynamic_hard_clearance,
             static_safety_horizon=safety_horizon,
-            dynamic_safety_horizon=safety_horizon,
+            dynamic_safety_horizon=dynamic_safety_horizon,
         )
         if recovery is not None and recovery.get("safe", False):
             u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -5313,7 +5444,7 @@ def get_control(
                 horizon=args.horizon,
                 dynamic_clearance=dynamic_hard_clearance,
                 static_safety_horizon=safety_horizon,
-                dynamic_safety_horizon=safety_horizon,
+                dynamic_safety_horizon=dynamic_safety_horizon,
             )
             if recovery is not None and recovery.get("safe", False):
                 u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -5344,7 +5475,7 @@ def get_control(
             horizon=args.horizon,
             robot_model=robot_model,
             clearance=dynamic_hard_clearance,
-            max_steps=safety_horizon,
+            max_steps=dynamic_safety_horizon,
         )
         if dynamic_summary["collision"]:
             closest = dynamic_summary["closest"] or {}
@@ -5362,7 +5493,7 @@ def get_control(
                 horizon=args.horizon,
                 dynamic_clearance=dynamic_hard_clearance,
                 static_safety_horizon=safety_horizon,
-                dynamic_safety_horizon=safety_horizon,
+                dynamic_safety_horizon=dynamic_safety_horizon,
             )
             if recovery is not None and recovery.get("safe", False):
                 u = np.asarray(recovery["controls"], dtype=float).copy()
@@ -5464,6 +5595,13 @@ def get_control(
         return_indices=True,
     )
     trajectory_weights = np.asarray(u_weights, dtype=float)[trajectory_indices]
+    rollout_alignment = summarize_rollout_display_alignment(
+        mppi,
+        trajectories,
+        trajectory_indices,
+    )
+    if args.debug_mppi and rollout_alignment is not None:
+        print(f"[rollout-display-audit] {rollout_alignment}")
     # positive_display = trajectory_weights > 0.0
     # if np.any(positive_display):
     #     static_display_collisions = 0
@@ -5512,7 +5650,7 @@ def get_control(
     return u, trajectories, trajectory_weights
 
 
-def load_sdd_models(model_root, scene_id):
+def load_sdd_models(model_root, scene_id, scenario_config=None):
     scene_root = Path(model_root) / f"scene_{scene_id:03d}"
 
     state_space = np.load(scene_root / "state_space.npz")
@@ -5596,8 +5734,14 @@ def simulate(args, delivery_log=None):
             model_root=args.sdd_model_root,
             scene_id=args.sdd_scene_id,
         )
+        data_args = {
+            "sdd_processed_root": args.sdd_processed_root,
+            "sdd_scene_id": args.sdd_scene_id,
+            "sdd_scenario_config": args.sdd_scenario_config,
+        }
     else:
         sdd_models = None
+        data_args = {}
 
     sim = Simulation(
         generator_name=args.generator,
@@ -5605,8 +5749,7 @@ def simulate(args, delivery_log=None):
         num_actors=args.actors,
         tracks=args.tracks,
         data_source=args.data_source,
-        sdd_processed_root=args.sdd_processed_root,
-        sdd_scene_id=args.sdd_scene_id,
+        data_args=data_args,
         limit_tracks=args.limit_tracks,
         pois_lambda=args.lambd,
         screen=surface if args.show_sim or args.record_data else None,
@@ -5619,6 +5762,7 @@ def simulate(args, delivery_log=None):
         ego_heading=np.pi / 2.0,
         # ego_goal=[0.95, 0.85],  #
         ego_goal=[[0.05, 0.95], [0.7, 1]],
+        record_data=args.record_data,
     )
     args.tick_time = sim.tick_time
     sim.debug_tick_timing = bool(args.debug_timing)
@@ -5793,6 +5937,7 @@ def simulate(args, delivery_log=None):
             visible_agents = [
                 actor for actor in info["actors"] if actor["visible"] == True
             ]
+            collision_agents = list(info["actors"])
             if discrete_oce_tracker is not None:
                 hmm_update_start = perf_counter()
                 discrete_oce_tracker.update(info["actors"], sim.ticks)
@@ -5829,6 +5974,18 @@ def simulate(args, delivery_log=None):
         section_start = perf_counter()
 
         replan_interval = max(1, int(args.replan_interval))
+        dynamic_planning_polygons = dynamic_agent_planning_polygons(
+            collision_agents,
+            agent_predictions,
+            args.horizon,
+            robot,
+            args.dynamic_hard_clearance_margin,
+            args.dynamic_clearance_margin,
+        )
+        planning_static_polygons = [
+            *(sim.static_polygons or []),
+            *dynamic_planning_polygons,
+        ]
         should_replan_routes = (
             cached_paths is None
             or next_route_replan_tick is None
@@ -5840,7 +5997,7 @@ def simulate(args, delivery_log=None):
                 start,
                 end,
                 args,
-                static_polygons=sim.static_polygons,
+                static_polygons=planning_static_polygons,
                 display_offset=sim.display_offset,
                 display_diff=sim.display_diff,
                 vehicle_length=robot.L,
@@ -5872,6 +6029,7 @@ def simulate(args, delivery_log=None):
                 print(
                     "[paths] "
                     f"tick={sim.ticks} replanned paths={len(paths)} "
+                    f"dynamic_obstacles={len(dynamic_planning_polygons)} "
                     f"routes={route_count} "
                     f"points={route_points} "
                     f"lengths={route_lengths} "
@@ -5994,7 +6152,7 @@ def simulate(args, delivery_log=None):
             initial_state=info["ego"]["pos"][: ActorStateEnum.DELTA],
             goal=[*info["ego"]["goal"], 0, 0],
             path=paths[control_trajectory]["path"],
-            agents=visible_agents,
+            agents=collision_agents,
             agent_predictions=agent_predictions,
             static_polygons=sim.static_polygons,
             args=args,
@@ -6206,6 +6364,11 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Processed scene id for --data-source sdd.",
+    )
+    argparser.add_argument(
+        "--sdd-scenario-config",
+        default=None,
+        help="Additional configuration information for scenario playback.",
     )
     argparser.add_argument(
         "--max-time", default=None, type=float, help="Maximum Length of Simulation"
