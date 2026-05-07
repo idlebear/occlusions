@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 oce-sdd-review = "oce_sdd.review_scenes:main"
+oce-sdd-design-scenarios = "oce_sdd.scenario_designer:main"
 oce-sdd-preprocess = "oce_sdd.preprocess:main"
 oce-sdd-build-models = "oce_sdd.modeling:main"
 

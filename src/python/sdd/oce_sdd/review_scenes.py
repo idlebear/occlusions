@@ -666,7 +666,7 @@ def _review_html() -> str:
       state.index = await response.json();
       populateSceneSelect();
       bindControls();
-      await loadScene(0);
+      await loadScene(initialSceneIndexFromUrl());
       requestAnimationFrame(animationTick);
     }
 
@@ -678,6 +678,22 @@ def _review_html() -> str:
         option.textContent = `Scene ${scene.sceneId} (${scene.trackCount} tracks)`;
         el.sceneSelect.appendChild(option);
       });
+    }
+
+    function initialSceneIndexFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("sceneIndex")) {
+        const sceneIndex = Number(params.get("sceneIndex"));
+        if (Number.isInteger(sceneIndex) && sceneIndex >= 0 && sceneIndex < state.index.scenes.length) {
+          return sceneIndex;
+        }
+      }
+      if (params.has("scene")) {
+        const sceneId = Number(params.get("scene"));
+        const index = state.index.scenes.findIndex(scene => Number(scene.sceneId) === sceneId);
+        if (index >= 0) return index;
+      }
+      return 0;
     }
 
     function bindControls() {

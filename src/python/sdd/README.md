@@ -36,6 +36,41 @@ Launch with:
 python -m http.server 8000 --directory outputs/sdd_scene_review
 ```
 
+## Scenario designer
+
+Generate a browser-based scenario designer from the same constrained-SDD artifacts:
+
+```bash
+PYTHONPATH=src/python/sdd /home/bjgilhul/miniconda3/envs/ppo/bin/python -m oce_sdd.scenario_designer \
+  --data-root src/thirdParty/sdd/data \
+  --models-root outputs/sdd_models \
+  --out outputs/sdd_scenario_designer
+```
+
+Launch with:
+
+```text
+python -m http.server 8000 --directory outputs/sdd_scenario_designer
+```
+
+Then open:
+
+```text
+http://localhost:8000/
+```
+
+The designer exports `oce_sdd_scenario_design.v1` JSON in normalized scene coordinates when scene transform metadata is available. Older image-pixel exports are still identified by `coordinateFrame: constrained_sdd_image_pixels`. Each design contains:
+
+- `robotStartZone`: a rectangular polygon
+- `targetGoalZones`: user-drawn polygons for alternate target-destination clustering
+- `selectedTrackIds`: tracks eligible to spawn as targets or moving occlusions
+- `robotGoal`: a point in the same coordinate frame
+- `sourceSceneJson`: the generated scene-data JSON used by the browser
+
+Designs are autosaved in browser local storage per scene, and can be exported/imported as JSON from the page.
+
+The designer includes a time slider/playback bar for scrubbing tracks from start to end. In `Tracks` mode, click toggles a single track and dragging a rectangle selects all visible tracks whose current time-bar position is inside the rectangle. Use the `Viewer` link in the header to open the scene-reviewer view for the current scene from the same generated site.
+
 
 ## Coordinate frames and bounds
 
