@@ -7,6 +7,11 @@ from random import shuffle
 
 from scipy import signal
 from threading import Lock
+try:
+    from shapely.geometry import Point, Polygon
+except Exception:  # pragma: no cover - shapely is optional outside SDD runs
+    Point = None
+    Polygon = None
 
 try:
     from Grid.OccupancyGrid import bresenham
@@ -36,7 +41,19 @@ shifted according to its class.
 
 
 class OccupancyGrid:
-    def __init__(self, dim, resolution=1, origin=(0, 0), invertY=False, pUnk=0.5, pOcc=0.7, pFree=0.3):
+    def __init__(
+        self,
+        dim,
+        resolution=1,
+        origin=(0, 0),
+        invertY=False,
+        pUnk=0.5,
+        pOcc=0.7,
+        pFree=0.3,
+        static_polygons=None,
+        origin_mode="center",
+        static_p_occ=1.0 - 1.0e-6,
+    ):
         self.dim = dim
         self.resolution = resolution
         self.pOcc = pOcc
@@ -44,8 +61,15 @@ class OccupancyGrid:
         self.pUnk = pUnk
         self.l0 = log(pUnk / (1 - pUnk))
         self.origin = origin
+        if origin_mode not in {"center", "lower_left"}:
+            raise ValueError("origin_mode must be 'center' or 'lower_left'")
+        self.origin_mode = origin_mode
         self.grid_size = int(dim / resolution)
-        self.grid = np.ones([self.grid_size, self.grid_size]) * self.l0
+        self.base_grid = np.ones([self.grid_size, self.grid_size]) * self.l0
+        self.static_p_occ = float(static_p_occ)
+        self.static_polygons = list(static_polygons or [])
+        self._rasterize_static_polygons()
+        self.grid = np.array(self.base_grid)
 
         # included because either ROS or Carla is wierd and inverts the expected y axis
         self.invertY = -1 if invertY else 1
@@ -54,15 +78,92 @@ class OccupancyGrid:
         self.mutex = Lock()
 
     def reset(self, origin=(0.0, 0.0)):
-        self.grid = np.ones([self.grid_size, self.grid_size]) * self.l0
+        self.grid = np.array(self.base_grid)
         self.origin = origin
 
     def copy(self):
         dup = OccupancyGrid(
-            self.dim, self.resolution, (self.origin[0], self.origin[1]), self.invertY, self.pUnk, self.pOcc, self.pFree
+            self.dim,
+            self.resolution,
+            (self.origin[0], self.origin[1]),
+            self.invertY == -1,
+            self.pUnk,
+            self.pOcc,
+            self.pFree,
+            static_polygons=[],
+            origin_mode=self.origin_mode,
+            static_p_occ=self.static_p_occ,
         )
+        dup.base_grid = np.array(self.base_grid)
         dup.grid = np.array(self.grid)
+        dup.static_polygons = list(self.static_polygons)
         return dup
+
+    def world_to_cell(self, point):
+        x, y = float(point[0]), float(point[1])
+        if self.origin_mode == "lower_left":
+            ix = int(floor((x - self.origin[0]) / self.resolution))
+            iy = int(floor((y - self.origin[1]) / self.resolution))
+        else:
+            ix = int(floor((x - self.origin[0]) / self.resolution + self.grid_size // 2))
+            iy = int(floor((y - self.origin[1]) / self.resolution + self.grid_size // 2))
+        return ix, iy
+
+    def cell_center_to_world(self, ix, iy):
+        if self.origin_mode == "lower_left":
+            return (
+                self.origin[0] + (float(ix) + 0.5) * self.resolution,
+                self.origin[1] + (float(iy) + 0.5) * self.resolution,
+            )
+        return (
+            self.origin[0] + (float(ix) + 0.5 - self.grid_size // 2) * self.resolution,
+            self.origin[1] + (float(iy) + 0.5 - self.grid_size // 2) * self.resolution,
+        )
+
+    def _polygon_points(self, static_polygon):
+        if hasattr(static_polygon, "blocking") and not getattr(static_polygon, "blocking", True):
+            return None
+        if isinstance(static_polygon, dict):
+            if not bool(static_polygon.get("blocking", True)):
+                return None
+            for key in ("points", "polygon", "vertices"):
+                if key in static_polygon:
+                    return static_polygon[key]
+            return None
+        return getattr(static_polygon, "points", static_polygon)
+
+    def _rasterize_static_polygons(self):
+        if not self.static_polygons:
+            return
+        if Polygon is None or Point is None:
+            raise ImportError("shapely is required to rasterize static polygons")
+
+        occ = np.clip(self.static_p_occ, 1.0e-9, 1.0 - 1.0e-9)
+        occ_log_odds = log(occ / (1.0 - occ))
+        for static_polygon in self.static_polygons:
+            points = self._polygon_points(static_polygon)
+            if points is None:
+                continue
+            points = np.asarray(points, dtype=float)
+            if points.ndim != 2 or points.shape[0] < 3 or points.shape[1] < 2:
+                continue
+            polygon = Polygon(points[:, :2])
+            if not polygon.is_valid:
+                polygon = polygon.buffer(0)
+            if polygon.is_empty:
+                continue
+
+            minx, miny, maxx, maxy = polygon.bounds
+            min_cell = self.world_to_cell((minx, miny))
+            max_cell = self.world_to_cell((maxx, maxy))
+            min_ix = max(0, min(min_cell[0], max_cell[0]) - 1)
+            max_ix = min(self.grid_size - 1, max(min_cell[0], max_cell[0]) + 1)
+            min_iy = max(0, min(min_cell[1], max_cell[1]) - 1)
+            max_iy = min(self.grid_size - 1, max(min_cell[1], max_cell[1]) + 1)
+            for iy in range(min_iy, max_iy + 1):
+                for ix in range(min_ix, max_ix + 1):
+                    if polygon.covers(Point(*self.cell_center_to_world(ix, iy))):
+                        self.base_grid[iy, ix] = occ_log_odds
 
     def decay(self, rate):
         self.mutex.acquire()

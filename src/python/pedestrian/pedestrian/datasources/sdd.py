@@ -25,6 +25,7 @@ def load_sdd_scenario(
     processed_root: str | Path,
     scene_id: int,
     scenario_config: str | None = None,
+    state_space_metadata: dict | None = None,
 ) -> Scenario:
     processed_root = Path(processed_root)
     scene_root = processed_root / f"scene_{scene_id:03d}"
@@ -64,6 +65,13 @@ def load_sdd_scenario(
         selected_track_ids = {
             int(track_id) for track_id in scenario_design.get("selectedTrackIds", [])
         }
+        if "targetsOfInterestTrackIds" in scenario_design:
+            targets_of_interest_track_ids = {
+                int(track_id)
+                for track_id in scenario_design.get("targetsOfInterestTrackIds", [])
+            }
+        else:
+            targets_of_interest_track_ids = None
         coordinate_frame = scenario_design.get("coordinateFrame")
         robot_start_zone = scenario_design.get("robotStartZone")
         if robot_start_zone is not None:
@@ -94,6 +102,7 @@ def load_sdd_scenario(
         scenario_design = {}
         coordinate_frame = None
         selected_track_ids = None
+        targets_of_interest_track_ids = None
         robot_start_zone = None
         target_goal_zones = []
         robot_goal = None
@@ -132,6 +141,13 @@ def load_sdd_scenario(
             )
         )
 
+    grid_metadata = scenario_grid_from_metadata(
+        metadata,
+        display_diff=display_diff,
+        scale=scale,
+        state_space_metadata=state_space_metadata,
+    )
+
     return Scenario(
         name=f"sdd_scene_{scene_id:03d}",
         data_source="sdd",
@@ -150,19 +166,98 @@ def load_sdd_scenario(
             "frame_rate_hz": metadata["source"]["frame_rate_hz"],
             "metric_calibration": metric_calibration,
             "scene_scale": scale,
-            "grid": {
-                "width": display_diff,
-                "height": display_diff,
-                "resolution": GRID_RESOLUTION * scale,
-                "resolution_meters": GRID_RESOLUTION,
-            },
+            "grid": grid_metadata,
             "scenario_config": scenario_design,
             "scenario_coordinate_frame": coordinate_frame,
             "robot_start_zone": robot_start_zone,
+            "targets_of_interest_track_ids": (
+                None
+                if targets_of_interest_track_ids is None
+                else sorted(targets_of_interest_track_ids)
+            ),
             "target_goal_zones": target_goal_zones,
             "robot_goal": robot_goal,
         },
     )
+
+
+def finite_positive(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) and value > 0 else None
+
+
+def _grid_metadata_from_state_space(
+    state_space_metadata: dict | None,
+    *,
+    display_diff: float,
+) -> dict | None:
+    if not isinstance(state_space_metadata, dict):
+        return None
+    grid = state_space_metadata.get("grid")
+    if not isinstance(grid, dict):
+        grid = {}
+    resolution = finite_positive(
+        state_space_metadata.get("cell_size", grid.get("cell_size"))
+    )
+    if resolution is None:
+        resolution = finite_positive(grid.get("resolution"))
+    if resolution is None:
+        return None
+    resolution_meters = finite_positive(
+        state_space_metadata.get(
+            "grid_size_meters",
+            grid.get("grid_size_meters", grid.get("resolution_meters")),
+        )
+    )
+    rows = state_space_metadata.get("rows", grid.get("rows"))
+    cols = state_space_metadata.get("cols", grid.get("cols"))
+    state_count = state_space_metadata.get("state_count", grid.get("state_count"))
+    return {
+        "width": float(display_diff),
+        "height": float(display_diff),
+        "resolution": float(resolution),
+        "resolution_meters": resolution_meters,
+        "transition_cell_size": float(resolution),
+        "transition_rows": None if rows is None else int(rows),
+        "transition_cols": None if cols is None else int(cols),
+        "transition_state_count": None if state_count is None else int(state_count),
+        "source": "sdd_transition_model",
+    }
+
+
+def scenario_grid_from_metadata(
+    metadata: dict,
+    *,
+    display_diff: float,
+    scale: float,
+    state_space_metadata: dict | None = None,
+) -> dict:
+    grid = _grid_metadata_from_state_space(
+        state_space_metadata,
+        display_diff=display_diff,
+    )
+    if grid is not None:
+        return grid
+
+    for key in ("transition_grid", "grid"):
+        grid = _grid_metadata_from_state_space(
+            metadata.get(key),
+            display_diff=display_diff,
+        )
+        if grid is not None:
+            grid["source"] = f"sdd_processed_{key}"
+            return grid
+
+    return {
+        "width": float(display_diff),
+        "height": float(display_diff),
+        "resolution": GRID_RESOLUTION * scale,
+        "resolution_meters": GRID_RESOLUTION,
+        "source": "legacy_default_grid_resolution",
+    }
 
 
 def scene_scale_from_metadata(metadata: dict) -> float:

@@ -17,5 +17,6 @@ def load_scenario(data_source, *, tracks=None, **data_args):
             processed_root=data_args.get("sdd_processed_root"),
             scene_id=data_args.get("sdd_scene_id"),
             scenario_config=data_args.get("sdd_scenario_config"),
+            state_space_metadata=data_args.get("sdd_state_space_metadata"),
         )
     raise ValueError(f"Unknown data source: {data_source}")

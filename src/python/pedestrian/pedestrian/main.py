@@ -56,9 +56,15 @@ from trajectory_planner.frenet_candidate import (
     sample_spline_route,
 )
 from trajectory_planner.trajectory_eval import evaluate
+from Grid.OccupancyGrid import OccupancyGrid
+from Grid.predicted_occupancy import (
+    build_transition_occupancy_horizon,
+    line_is_occluded_by_occupancy,
+    save_oce_debug_review_png,
+)
 
 from Actor import STATE as ActorStateEnum
-from entropy import evaluate_method
+from entropy import calc_entropy, evaluate_method
 from hmm import HMM
 from specialk import (
     buffered_obstacle_union as specialk_buffered_obstacle_union,
@@ -397,32 +403,32 @@ def dynamic_agent_planning_polygons(
     step_stride=5,
 ):
     polygons = []
-    # hard_clearance = mppi_dynamic_collision_buffer(robot_model, hard_clearance_margin)
-    # soft_clearance = mppi_dynamic_clearance_margin(robot_model, soft_clearance_margin)
-    # for agent in agents or []:
-    #     states, source = _agent_prediction_sequence(agent, agent_predictions, horizon)
-    #     if states.size == 0:
-    #         continue
-    #     extent = float(agent.get("extent", 0.0))
-    #     radius = extent + hard_clearance + soft_clearance
-    #     stride = max(1, int(step_stride))
-    #     step_indices = list(range(0, min(int(horizon), states.shape[0]), stride))
-    #     if states.shape[0] > 0 and (states.shape[0] - 1) not in step_indices:
-    #         step_indices.append(states.shape[0] - 1)
-    #     for step_idx in step_indices:
-    #         polygons.append(
-    #             StaticPolygon(
-    #                 polygon_class="DynamicAgent",
-    #                 points=circle_polygon_points(states[step_idx, :2], radius),
-    #                 blocking=True,
-    #                 metadata={
-    #                     "agent_id": agent.get("id"),
-    #                     "prediction_source": source,
-    #                     "step": int(step_idx),
-    #                     "radius": float(radius),
-    #                 },
-    #             )
-    #         )
+    hard_clearance = mppi_dynamic_collision_buffer(robot_model, hard_clearance_margin)
+    soft_clearance = mppi_dynamic_clearance_margin(robot_model, soft_clearance_margin)
+    for agent in agents or []:
+        states, source = _agent_prediction_sequence(agent, agent_predictions, horizon)
+        if states.size == 0:
+            continue
+        extent = float(agent.get("extent", 0.0))
+        radius = extent + hard_clearance + soft_clearance
+        stride = max(1, int(step_stride))
+        step_indices = list(range(0, min(int(horizon), states.shape[0]), stride))
+        if states.shape[0] > 0 and (states.shape[0] - 1) not in step_indices:
+            step_indices.append(states.shape[0] - 1)
+        for step_idx in step_indices:
+            polygons.append(
+                StaticPolygon(
+                    polygon_class="DynamicAgent",
+                    points=circle_polygon_points(states[step_idx, :2], radius),
+                    blocking=True,
+                    metadata={
+                        "agent_id": agent.get("id"),
+                        "prediction_source": source,
+                        "step": int(step_idx),
+                        "radius": float(radius),
+                    },
+                )
+            )
     return polygons
 
 
@@ -1344,6 +1350,150 @@ def append_timing_csv(
         writer.writerow(row)
 
 
+def _empty_csv_value(value):
+    try:
+        if value is None or not np.isfinite(float(value)):
+            return ""
+    except (TypeError, ValueError):
+        return value
+    return value
+
+
+def experiment_target_fieldnames(class_ids):
+    return [
+        "tick",
+        "time_s",
+        "track_id",
+        "tracked",
+        "visible",
+        "x",
+        "y",
+        "theta",
+        "speed",
+        "true_state_id",
+        "true_class_id",
+        "state_entropy",
+        "mode_entropy",
+        "true_class_probability",
+        *[f"mode_prob_{class_id}" for class_id in class_ids],
+    ]
+
+
+EXPERIMENT_SUMMARY_FIELDS = [
+    "tick",
+    "time_s",
+    "tracked_count",
+    "visible_tracked_count",
+    "sum_state_entropy",
+    "mean_state_entropy",
+    "sum_mode_entropy",
+    "mean_mode_entropy",
+    "total_uncertainty",
+    "mean_true_class_probability",
+]
+
+
+def append_csv_row(path, fieldnames, row):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists()
+    with path.open("a", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow({key: _empty_csv_value(row.get(key, "")) for key in fieldnames})
+
+
+def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models):
+    if log_dir is None or tracker is None:
+        return
+    log_dir = Path(log_dir)
+    class_ids = [str(class_id) for class_id in tracker.class_ids]
+    class_id_to_mode_index = {
+        str(class_id): index for index, class_id in enumerate(tracker.class_ids)
+    }
+    target_fields = experiment_target_fieldnames(class_ids)
+    target_path = log_dir / "target_beliefs.csv"
+    summary_path = log_dir / "uncertainty_summary.csv"
+    track_to_class = {
+        str(track_id): int(class_id)
+        for track_id, class_id in (sdd_models or {}).get("track_to_class", {}).items()
+    }
+
+    tracked_actors = [
+        actor for actor in actors if actor.get("tracked", True) and "id" in actor
+    ]
+    state_entropies = []
+    mode_entropies = []
+    true_class_probabilities = []
+    for actor in tracked_actors:
+        track_id = str(actor["id"])
+        pos = np.asarray(actor.get("pos", []), dtype=float).reshape(-1)
+        true_state_id = tracker.position_to_state(pos) if pos.size >= 2 else None
+        true_class_id = track_to_class.get(track_id, -1)
+        hmm = tracker.agent_hmms.get(actor["id"], tracker.agent_hmms.get(track_id))
+
+        state_entropy = np.nan
+        mode_entropy = np.nan
+        true_class_probability = np.nan
+        mode_distribution = np.full((len(class_ids),), np.nan, dtype=float)
+        if hmm is not None:
+            state_distribution = np.asarray(hmm.state_distribution, dtype=float)
+            mode_distribution = np.asarray(hmm.mode_distribution, dtype=float)
+            state_entropy = float(calc_entropy(state_distribution))
+            mode_entropy = float(calc_entropy(mode_distribution))
+            state_entropies.append(state_entropy)
+            mode_entropies.append(mode_entropy)
+            mode_index = class_id_to_mode_index.get(str(true_class_id))
+            if mode_index is not None and mode_index < mode_distribution.shape[0]:
+                true_class_probability = float(mode_distribution[mode_index])
+                true_class_probabilities.append(true_class_probability)
+
+        row = {
+            "tick": int(tick),
+            "time_s": float(time_s),
+            "track_id": track_id,
+            "tracked": bool(actor.get("tracked", True)),
+            "visible": bool(actor.get("visible", False)),
+            "x": float(pos[0]) if pos.size > 0 else np.nan,
+            "y": float(pos[1]) if pos.size > 1 else np.nan,
+            "theta": float(pos[3]) if pos.size > 3 else np.nan,
+            "speed": float(pos[2]) if pos.size > 2 else np.nan,
+            "true_state_id": -1 if true_state_id is None else int(true_state_id),
+            "true_class_id": int(true_class_id),
+            "state_entropy": state_entropy,
+            "mode_entropy": mode_entropy,
+            "true_class_probability": true_class_probability,
+        }
+        for class_id, probability in zip(class_ids, mode_distribution):
+            row[f"mode_prob_{class_id}"] = float(probability)
+        append_csv_row(target_path, target_fields, row)
+
+    summary = {
+        "tick": int(tick),
+        "time_s": float(time_s),
+        "tracked_count": len(tracked_actors),
+        "visible_tracked_count": sum(
+            1 for actor in tracked_actors if actor.get("visible", False)
+        ),
+        "sum_state_entropy": float(np.sum(state_entropies)) if state_entropies else 0.0,
+        "mean_state_entropy": (
+            float(np.mean(state_entropies)) if state_entropies else np.nan
+        ),
+        "sum_mode_entropy": float(np.sum(mode_entropies)) if mode_entropies else 0.0,
+        "mean_mode_entropy": (
+            float(np.mean(mode_entropies)) if mode_entropies else np.nan
+        ),
+        "total_uncertainty": float(np.sum(mode_entropies)) if mode_entropies else 0.0,
+        "mean_true_class_probability": (
+            float(np.mean(true_class_probabilities))
+            if true_class_probabilities
+            else np.nan
+        ),
+    }
+    append_csv_row(summary_path, EXPERIMENT_SUMMARY_FIELDS, summary)
+
+
 def uniform_prediction_probabilities(predictions):
     probabilities = {}
     for agent_id, prediction in predictions.items():
@@ -1567,6 +1717,8 @@ class DiscreteOCETracker:
     def update(self, actors, tick):
         visible_observations = {}
         for actor in actors:
+            if not actor.get("tracked", True):
+                continue
             if not actor.get("visible", False) or "id" not in actor:
                 continue
             state = self.position_to_state(actor["pos"])
@@ -1762,6 +1914,8 @@ def build_path_occlusion_schedule(
     static_union,
     horizon,
     scan_range,
+    occupancy_horizon=None,
+    target_agent_id=None,
 ):
     path_points = frenet_path_xy(path)
     if path_points.shape[0] == 0:
@@ -1769,12 +1923,33 @@ def build_path_occlusion_schedule(
 
     schedule = []
     max_step = min(int(horizon), max(0, path_points.shape[0] - 1))
+    target_owner_bit = None
+    if occupancy_horizon is not None and target_agent_id is not None:
+        bit_index = occupancy_horizon.agent_bit_indices.get(target_agent_id)
+        if bit_index is not None:
+            target_owner_bit = np.uint64(1) << np.uint64(bit_index)
     for step in range(max_step + 1):
         observer = path_points[step]
         deltas = state_centers - observer.reshape(1, 2)
         distances = np.linalg.norm(deltas, axis=1)
         occluded = distances > float(scan_range)
-        if static_union is not None and not static_union.is_empty:
+        if occupancy_horizon is not None:
+            grid_step = min(step, occupancy_horizon.horizon)
+            probability_grid = occupancy_horizon.probability_grids[grid_step]
+            owner_mask_grid = occupancy_horizon.owner_mask_grids[grid_step]
+            for state_idx in np.where(~occluded)[0]:
+                if line_is_occluded_by_occupancy(
+                    start=observer,
+                    end=state_centers[state_idx],
+                    probability_grid=probability_grid,
+                    owner_mask_grid=owner_mask_grid,
+                    target_owner_bit=target_owner_bit,
+                    origin=occupancy_horizon.origin,
+                    resolution=occupancy_horizon.resolution,
+                    threshold=occupancy_horizon.visibility_threshold,
+                ):
+                    occluded[state_idx] = True
+        elif static_union is not None and not static_union.is_empty:
             for state_idx in np.where(~occluded)[0]:
                 line = LineString([observer, state_centers[state_idx]])
                 if line.intersects(static_union):
@@ -1796,6 +1971,7 @@ def evaluate_candidate_paths_by_discrete_oce(
     backend="auto",
     return_debug_tensors=False,
     debug=False,
+    occupancy_horizon=None,
 ):
     if tracker is None or not tracker.agent_hmms or not paths:
         return 0, None, None
@@ -1827,23 +2003,40 @@ def evaluate_candidate_paths_by_discrete_oce(
                 path_arrays.append(xy)
             packed_paths = np.stack(path_arrays, axis=0).astype(np.float32)
             agent_ids, beliefs = tracker.agent_belief_matrix()
+            agent_owner_bits = np.zeros((len(agent_ids),), dtype=np.uint64)
+            if occupancy_horizon is not None:
+                for idx, agent_id in enumerate(agent_ids):
+                    bit_index = occupancy_horizon.agent_bit_indices.get(agent_id)
+                    if bit_index is not None:
+                        agent_owner_bits[idx] = np.uint64(1) << np.uint64(bit_index)
             (
                 transition_data,
                 transition_indices,
                 transition_indptr,
                 prefix_beliefs,
             ) = tracker.agent_mixed_transition_csr(agent_ids, eval_horizon)
+            if occupancy_horizon is not None:
+                gpu_static_grid = np.zeros(
+                    occupancy_horizon.probability_grids.shape[1:],
+                    dtype=np.uint8,
+                )
+                gpu_grid_origin = occupancy_horizon.origin
+                gpu_grid_resolution = occupancy_horizon.resolution
+            else:
+                gpu_static_grid = tracker.static_occupancy_grid
+                gpu_grid_origin = (
+                    float(tracker.bounds["min_x"]),
+                    float(tracker.bounds["min_y"]),
+                )
+                gpu_grid_resolution = tracker.cell_size
             timing["pack"] = perf_counter() - pack_start
 
             result = evaluate_discrete_oce_gpu(
                 paths=packed_paths,
                 state_centers=tracker.state_centers_sim,
-                static_grid=tracker.static_occupancy_grid,
-                grid_origin=(
-                    float(tracker.bounds["min_x"]),
-                    float(tracker.bounds["min_y"]),
-                ),
-                grid_resolution=tracker.cell_size,
+                static_grid=gpu_static_grid,
+                grid_origin=gpu_grid_origin,
+                grid_resolution=gpu_grid_resolution,
                 transition_data=transition_data,
                 transition_indices=transition_indices,
                 transition_indptr=transition_indptr,
@@ -1852,6 +2045,22 @@ def evaluate_candidate_paths_by_discrete_oce(
                 horizon=eval_horizon,
                 scan_range=scan_range,
                 return_visibility=return_debug_tensors,
+                occupancy_probability_grids=(
+                    occupancy_horizon.probability_grids
+                    if occupancy_horizon is not None
+                    else None
+                ),
+                occupancy_owner_mask_grids=(
+                    occupancy_horizon.owner_mask_grids
+                    if occupancy_horizon is not None
+                    else None
+                ),
+                agent_owner_bits=agent_owner_bits,
+                occupancy_threshold=(
+                    occupancy_horizon.visibility_threshold
+                    if occupancy_horizon is not None
+                    else 0.25
+                ),
             )
             timing["backend"] = getattr(result, "execution_path", "cuda_discrete_exact")
             timing["gpu_total"] = perf_counter() - gpu_start
@@ -1898,22 +2107,23 @@ def evaluate_candidate_paths_by_discrete_oce(
     path_results = []
 
     for path_idx, candidate in enumerate(paths):
-        visibility_start = perf_counter()
-        I_s = build_path_occlusion_schedule(
-            path=candidate,
-            state_centers=tracker.state_centers_sim,
-            static_union=static_union,
-            horizon=eval_horizon,
-            scan_range=scan_range,
-        )
-        timing["visibility"] += perf_counter() - visibility_start
-        if len(I_s) <= 1:
-            path_results.append({})
-            continue
-
-        k = min(eval_horizon, len(I_s) - 1)
         agent_results = {}
         for agent_id, hmm in tracker.agent_hmms.items():
+            visibility_start = perf_counter()
+            I_s = build_path_occlusion_schedule(
+                path=candidate,
+                state_centers=tracker.state_centers_sim,
+                static_union=static_union,
+                horizon=eval_horizon,
+                scan_range=scan_range,
+                occupancy_horizon=occupancy_horizon,
+                target_agent_id=agent_id,
+            )
+            timing["visibility"] += perf_counter() - visibility_start
+            if len(I_s) <= 1:
+                agent_results[str(agent_id)] = {}
+                continue
+            k = min(eval_horizon, len(I_s) - 1)
             entropy_start = perf_counter()
             result = evaluate_method(
                 method,
@@ -2001,6 +2211,7 @@ def build_static_planning_grid(
     vehicle_length,
     vehicle_width,
     resolution=None,
+    occupancy_blocked=None,
 ):
     obstacle_union = buffered_static_obstacle_union(
         static_polygons,
@@ -2022,6 +2233,18 @@ def build_static_planning_grid(
             for col in range(cols):
                 x = min_x + (col + 0.5) * resolution
                 is_blocked[row, col] = obstacle_union.covers(Point(x, y))
+    if occupancy_blocked is not None:
+        occupancy_blocked = np.asarray(occupancy_blocked, dtype=bool)
+        if occupancy_blocked.shape == is_blocked.shape:
+            is_blocked |= occupancy_blocked
+        else:
+            src_rows, src_cols = occupancy_blocked.shape
+            for row in range(rows):
+                src_row = min(src_rows - 1, max(0, int(row * src_rows / rows)))
+                for col in range(cols):
+                    src_col = min(src_cols - 1, max(0, int(col * src_cols / cols)))
+                    if occupancy_blocked[src_row, src_col]:
+                        is_blocked[row, col] = True
 
     def point_to_cell(point):
         col = int(np.clip(np.floor((point[0] - min_x) / resolution), 0, cols - 1))
@@ -3097,23 +3320,33 @@ def build_frenet_nominal_context(
     vehicle_scale=1.0,
     max_steer=np.deg2rad(30.0),
     resolution=None,
+    occupancy_blocked=None,
 ):
-    route, roadmap_debug, route_source = roadmap_nominal_route_for_frenet(
-        start,
-        end,
-        args,
+    max_heading_error = np.deg2rad(
+        getattr(args, "max_initial_route_heading_error_deg", 35.0)
+    )
+    route = plan_static_route(
+        start[:2],
+        end[:2],
         static_polygons=static_polygons,
         display_offset=display_offset,
         display_diff=display_diff,
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
-        vehicle_scale=vehicle_scale,
-        max_steer=max_steer,
         resolution=resolution,
+        start_heading=start[ActorStateEnum.THETA],
+        max_heading_error=max_heading_error,
+        occupancy_blocked=occupancy_blocked,
+    )
+    roadmap_debug = None
+    route_source = (
+        "shortest_occupancy_grid"
+        if occupancy_blocked is not None
+        else "shortest_static_grid"
     )
     if route is None:
         route = fallback_forward_nominal_route(start, resolution=resolution)
-        route_source = "forward_recovery_no_roadmap"
+        route_source = "forward_recovery_no_shortest_route"
     route = dedupe_waypoints(route)
     if len(route) < 2:
         route = fallback_forward_nominal_route(start, resolution=resolution)
@@ -3175,24 +3408,9 @@ def get_frenet_nominal_context(
     vehicle_scale=1.0,
     max_steer=np.deg2rad(30.0),
     resolution=None,
+    occupancy_blocked=None,
 ):
-    goal = np.asarray(end[:2], dtype=float)
-    context = getattr(args, "_frenet_nominal_context", None)
     goal_tolerance = max(float(resolution or GRID_RESOLUTION), 1.0e-3)
-    context_goal = (
-        np.asarray(context.get("goal"), dtype=float)
-        if isinstance(context, dict) and "goal" in context
-        else None
-    )
-    if (
-        isinstance(context, dict)
-        and context.get("established", False)
-        and context_goal is not None
-        and np.linalg.norm(context_goal - goal) <= goal_tolerance
-        and context.get("csp") is not None
-    ):
-        return context
-
     context = build_frenet_nominal_context(
         start,
         end,
@@ -3205,8 +3423,9 @@ def get_frenet_nominal_context(
         vehicle_scale=vehicle_scale,
         max_steer=max_steer,
         resolution=resolution,
+        occupancy_blocked=occupancy_blocked,
     )
-    context["established"] = bool(context.get("route_source") == "roadmap")
+    context["established"] = False
     context["goal_tolerance"] = goal_tolerance
     args._frenet_nominal_context = context
     return context
@@ -4459,9 +4678,11 @@ def plan_static_route(
     start_heading=None,
     heading_lookahead=None,
     max_heading_error=np.deg2rad(35.0),
+    occupancy_blocked=None,
 ):
     obstacle_union = blocking_static_polygon_union(static_polygons)
-    if obstacle_union is None or obstacle_union.is_empty:
+    has_occupancy = occupancy_blocked is not None
+    if (obstacle_union is None or obstacle_union.is_empty) and not has_occupancy:
         return apply_initial_heading_constraint(
             [list(start_xy), list(goal_xy)],
             start_heading=start_heading,
@@ -4476,53 +4697,56 @@ def plan_static_route(
     robot_clearance = (
         max(float(vehicle_length), float(vehicle_width)) / 2.0 + MIN_SEPARATION
     )
-    obstacle_union = obstacle_union.buffer(robot_clearance)
-    if not LineString([start_xy, goal_xy]).intersects(obstacle_union):
-        return apply_initial_heading_constraint(
-            [list(start_xy), list(goal_xy)],
-            start_heading=start_heading,
-            obstacle_union=obstacle_union,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            resolution=resolution,
-            heading_lookahead=heading_lookahead,
-            max_heading_error=max_heading_error,
-        )
+    obstacle_union = (
+        obstacle_union.buffer(robot_clearance)
+        if obstacle_union is not None and not obstacle_union.is_empty
+        else None
+    )
+    if (
+        obstacle_union is None
+        or obstacle_union.is_empty
+        or not LineString([start_xy, goal_xy]).intersects(obstacle_union)
+    ):
+        if not has_occupancy:
+            return apply_initial_heading_constraint(
+                [list(start_xy), list(goal_xy)],
+                start_heading=start_heading,
+                obstacle_union=obstacle_union,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                resolution=resolution,
+                heading_lookahead=heading_lookahead,
+                max_heading_error=max_heading_error,
+            )
 
-    resolution = float(resolution or GRID_RESOLUTION)
-    min_x = float(display_offset[0])
-    min_y = float(display_offset[1])
-    max_x = min_x + float(display_diff)
-    max_y = min_y + float(display_diff)
-    cols = int(np.ceil((max_x - min_x) / resolution))
-    rows = int(np.ceil((max_y - min_y) / resolution))
+    grid = build_static_planning_grid(
+        static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        resolution=resolution,
+        occupancy_blocked=occupancy_blocked,
+    )
+    is_blocked = grid["is_blocked"]
+    cols = grid["cols"]
+    rows = grid["rows"]
 
-    is_blocked = np.zeros((rows, cols), dtype=bool)
-    for row in range(rows):
-        y = min_y + (row + 0.5) * resolution
-        for col in range(cols):
-            x = min_x + (col + 0.5) * resolution
-            is_blocked[row, col] = obstacle_union.covers(Point(x, y))
-
-    def point_to_cell(point):
-        col = int(np.clip(np.floor((point[0] - min_x) / resolution), 0, cols - 1))
-        row = int(np.clip(np.floor((point[1] - min_y) / resolution), 0, rows - 1))
-        return col, row
-
-    def cell_to_point(cell):
-        col, row = cell
-        return [
-            min(max(min_x + (col + 0.5) * resolution, min_x), max_x),
-            min(max(min_y + (row + 0.5) * resolution, min_y), max_y),
-        ]
-
-    start_cell = find_nearest_free_cell(point_to_cell(start_xy), is_blocked, cols, rows)
-    goal_cell = find_nearest_free_cell(point_to_cell(goal_xy), is_blocked, cols, rows)
+    start_cell = find_nearest_free_cell(
+        grid["point_to_cell"](start_xy),
+        is_blocked,
+        cols,
+        rows,
+    )
+    goal_cell = find_nearest_free_cell(
+        grid["point_to_cell"](goal_xy),
+        is_blocked,
+        cols,
+        rows,
+    )
     if start_cell is None or goal_cell is None:
-        print(
-            "WARNING: No free cell found for static route planning; using direct route."
-        )
+        print("WARNING: No free cell found for route planning; using direct route.")
         return apply_initial_heading_constraint(
             [list(start_xy), list(goal_xy)],
             start_heading=start_heading,
@@ -4537,7 +4761,7 @@ def plan_static_route(
 
     grid_path = astar_grid(start_cell, goal_cell, is_blocked)
     if grid_path is None:
-        print("WARNING: No static-obstacle route found; using direct route.")
+        print("WARNING: No obstacle-aware route found; using direct route.")
         return apply_initial_heading_constraint(
             [list(start_xy), list(goal_xy)],
             start_heading=start_heading,
@@ -4551,9 +4775,12 @@ def plan_static_route(
         )
 
     route = [list(start_xy)]
-    route.extend(cell_to_point(cell) for cell in grid_path[1:-1])
+    route.extend(grid["cell_to_point"](cell) for cell in grid_path[1:-1])
     route.append(list(goal_xy))
-    route = prune_line_of_sight_route(route, obstacle_union)
+    if not has_occupancy:
+        route = prune_line_of_sight_route(route, obstacle_union)
+    else:
+        route = simplify_route_collinear(route)
     return apply_initial_heading_constraint(
         route,
         start_heading=start_heading,
@@ -4676,6 +4903,7 @@ def generate_k_path_trajectories(
     vehicle_scale=1.0,
     max_steer=np.deg2rad(30.0),
     resolution=None,
+    occupancy_blocked=None,
 ):
 
     speed = args.robot_speed
@@ -4706,6 +4934,7 @@ def generate_k_path_trajectories(
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
         resolution=search_resolution,
+        occupancy_blocked=occupancy_blocked,
     )
     static_union = blocking_static_polygon_union(static_polygons)
     collision_region = (
@@ -4913,6 +5142,7 @@ def generate_frenet_trajectories(
     vehicle_scale=1.0,
     max_steer=np.deg2rad(30.0),
     resolution=None,
+    occupancy_blocked=None,
 ):
     speed = float(getattr(args, "robot_speed", 0.5))
     dt = float(getattr(args, "tick_time", 0.01))
@@ -4935,6 +5165,7 @@ def generate_frenet_trajectories(
         vehicle_scale=vehicle_scale,
         max_steer=max_steer,
         resolution=resolution,
+        occupancy_blocked=occupancy_blocked,
     )
     csp = context["csp"]
     projection = project_pose_to_spline_frenet(
@@ -5101,6 +5332,7 @@ def generate_trajectories(
     vehicle_scale=1.0,
     max_steer=np.deg2rad(30.0),
     resolution=None,
+    occupancy_blocked=None,
 ):
     generator = str(getattr(args, "trajectory_generator", "kpaths")).lower()
 
@@ -5117,6 +5349,7 @@ def generate_trajectories(
             vehicle_scale=vehicle_scale,
             max_steer=max_steer,
             resolution=resolution,
+            occupancy_blocked=occupancy_blocked,
         )
     elif generator == "specialk":
         return generate_specialk_trajectories(
@@ -5145,6 +5378,7 @@ def generate_trajectories(
             vehicle_scale=vehicle_scale,
             max_steer=max_steer,
             resolution=resolution,
+            occupancy_blocked=occupancy_blocked,
         )
     else:
         raise ValueError(f"Unsupported trajectory generator: {generator}")
@@ -5179,6 +5413,7 @@ def get_control(
     static_polygons=None,
     u_prev=None,
     debug_tick=None,
+    occupancy_horizon=None,
 ):
     """
     Given the current state (x,y,v,theta) and the path, return the control
@@ -5220,33 +5455,41 @@ def get_control(
         x_nom[pts_to_update:, 3] = path.yaw[pts_to_update - 1]
 
     actors = []
-    for polygon in static_polygons or []:
-        if not getattr(polygon, "blocking", True):
-            continue
-        points = np.asarray(getattr(polygon, "points", []), dtype=np.float32)
-        if points.ndim == 2 and points.shape[0] >= 3 and points.shape[1] >= 2:
-            actors.append(
-                {
-                    "polygon": points[:, :2],
-                    "static": True,
-                    "polygon_class": getattr(polygon, "polygon_class", "polygon"),
-                }
-            )
+    dynamic_actor_debug = []
+    if occupancy_horizon is None:
+        for polygon in static_polygons or []:
+            if not getattr(polygon, "blocking", True):
+                continue
+            points = np.asarray(getattr(polygon, "points", []), dtype=np.float32)
+            if points.ndim == 2 and points.shape[0] >= 3 and points.shape[1] >= 2:
+                actors.append(
+                    {
+                        "polygon": points[:, :2],
+                        "static": True,
+                        "polygon_class": getattr(polygon, "polygon_class", "polygon"),
+                    }
+                )
 
-    dynamic_actor_obstacles, dynamic_actor_debug = build_dynamic_obstacles_for_mppi(
-        agents,
-        agent_predictions,
-        args.horizon,
-        robot_model=robot_model,
-        hard_clearance_margin=args.dynamic_hard_clearance_margin,
-    )
-    actors.extend(dynamic_actor_obstacles)
-    if getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
+        dynamic_actor_obstacles, dynamic_actor_debug = build_dynamic_obstacles_for_mppi(
+            agents,
+            agent_predictions,
+            args.horizon,
+            robot_model=robot_model,
+            hard_clearance_margin=args.dynamic_hard_clearance_margin,
+        )
+        actors.extend(dynamic_actor_obstacles)
+        if getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
+            print(
+                "[dynamic-obstacles] "
+                f"tick={debug_tick} agents={len(agents)} horizon={args.horizon} "
+                f"lookahead={args.horizon * args.tick_time:.2f}s "
+                f"obstacles={dynamic_actor_debug}"
+            )
+    elif getattr(args, "debug_mppi", False) or getattr(args, "debug_steering", False):
         print(
             "[dynamic-obstacles] "
-            f"tick={debug_tick} agents={len(agents)} horizon={args.horizon} "
-            f"lookahead={args.horizon * args.tick_time:.2f}s "
-            f"obstacles={dynamic_actor_debug}"
+            f"tick={debug_tick} using occupancy horizon; "
+            "legacy MPPI obstacle geometry disabled"
         )
 
     section_start = perf_counter()
@@ -5260,6 +5503,7 @@ def get_control(
         u_nom=u_nom,
         obstacles=actors,
         dt=args.tick_time,
+        occupancy_grids=occupancy_horizon,
     )
     control_timing["mppi"] = perf_counter() - section_start
     u_mppi = np.asarray(u, dtype=float).copy()
@@ -5697,9 +5941,33 @@ def load_sdd_models(model_root, scene_id, scenario_config=None):
         "state_space": state_space,
         "state_space_metadata": state_space_metadata,
         "model_metadata": model_metadata,
+        "destination_classes": destination_classes,
+        "track_to_class": {
+            str(track_id): int(class_id)
+            for track_id, class_id in destination_classes.get(
+                "track_to_class", {}
+            ).items()
+        },
         "classes": classes,
         "models": models,
     }
+
+
+def validate_sdd_transition_grid(sim, sdd_models):
+    if sdd_models is None:
+        return
+    metadata = sdd_models.get("state_space_metadata", {})
+    model_resolution = float(metadata.get("cell_size", 0.0))
+    if not np.isfinite(model_resolution) or model_resolution <= 0:
+        raise ValueError("SDD state_space.json is missing a valid cell_size")
+    sim_resolution = float(sim.grid_resolution)
+    if not np.isclose(sim_resolution, model_resolution, rtol=1.0e-6, atol=1.0e-9):
+        raise ValueError(
+            "SDD simulation grid resolution must match transition model cell_size: "
+            f"simulation={sim_resolution:.12g}, transition={model_resolution:.12g}. "
+            "Pass the loaded state_space metadata into the SDD scenario loader or "
+            "regenerate processed scene metadata with oce_sdd.modeling."
+        )
 
 
 def simulate(args, delivery_log=None):
@@ -5738,6 +6006,7 @@ def simulate(args, delivery_log=None):
             "sdd_processed_root": args.sdd_processed_root,
             "sdd_scene_id": args.sdd_scene_id,
             "sdd_scenario_config": args.sdd_scenario_config,
+            "sdd_state_space_metadata": sdd_models["state_space_metadata"],
         }
     else:
         sdd_models = None
@@ -5751,6 +6020,7 @@ def simulate(args, delivery_log=None):
         data_source=args.data_source,
         data_args=data_args,
         limit_tracks=args.limit_tracks,
+        limit_tracked_targets=args.limit_tracked_targets,
         pois_lambda=args.lambd,
         screen=surface if args.show_sim or args.record_data else None,
         tick_time=args.tick_time,
@@ -5764,6 +6034,7 @@ def simulate(args, delivery_log=None):
         ego_goal=[[0.05, 0.95], [0.7, 1]],
         record_data=args.record_data,
     )
+    validate_sdd_transition_grid(sim, sdd_models)
     args.tick_time = sim.tick_time
     sim.debug_tick_timing = bool(args.debug_timing)
 
@@ -5853,6 +6124,7 @@ def simulate(args, delivery_log=None):
         static_clearance_weight=args.static_clearance_weight,
         static_collision_cost=args.static_collision_cost,
         static_hard_clearance_margin=static_hard_clearance_margin,
+        mppi_occupancy_weight=args.mppi_occupancy_weight,
     )
 
     # self.controlNN = ControlPredictor("./models/tesla_car.model")
@@ -5865,12 +6137,18 @@ def simulate(args, delivery_log=None):
         u_dist_limits=[1, np.pi / 2],
     )
 
-    # for now, assume an empty map -- we can add objects later
     grid_origin = sim.display_offset
     grid_resolution = sim.grid_resolution
     grid_rows = int(np.ceil(sim.grid_height / grid_resolution))
     grid_cols = int(np.ceil(sim.grid_width / grid_resolution))
     local_map = np.zeros((grid_rows, grid_cols))
+    static_occupancy_grid = OccupancyGrid(
+        dim=max(grid_rows, grid_cols) * grid_resolution,
+        resolution=grid_resolution,
+        origin=sim.display_offset,
+        static_polygons=sim.static_polygons,
+        origin_mode="lower_left",
+    )
     discrete_oce_tracker = None
     if args.oce_eval_method == "discrete":
         if sdd_models is None:
@@ -5941,17 +6219,52 @@ def simulate(args, delivery_log=None):
             if discrete_oce_tracker is not None:
                 hmm_update_start = perf_counter()
                 discrete_oce_tracker.update(info["actors"], sim.ticks)
-                timing["hmm_update"] = perf_counter() - hmm_update_start
-
-            u_nom = np.zeros((args.horizon, 2))
-            for agent in visible_agents:
-                u_nom[:, 0] = agent["pos"][2]  # constant velocity control
-                # u_nom[:, 1] = 0               # zero steering angle
-                agent_predictions[agent["id"]] = control_variations.predict(
-                    x_init=agent["pos"][:4],
-                    u_nom=u_nom,
-                    dt=args.tick_time,
+                active_agent_ids = [
+                    actor["id"]
+                    for actor in info["actors"]
+                    if "id" in actor and actor.get("tracked", True)
+                ]
+                append_experiment_logs(
+                    args.experiment_log_dir,
+                    tick=sim.ticks,
+                    time_s=info.get("time", sim.ticks * args.tick_time),
+                    actors=info["actors"],
+                    tracker=discrete_oce_tracker,
+                    sdd_models=sdd_models,
                 )
+                occupancy_horizon = build_transition_occupancy_horizon(
+                    tracker=discrete_oce_tracker,
+                    active_agent_ids=active_agent_ids,
+                    horizon=max(args.horizon, args.discrete_oce_horizon or 0),
+                    origin=sim.display_offset,
+                    resolution=grid_resolution,
+                    rows=grid_rows,
+                    cols=grid_cols,
+                    base_grid=static_occupancy_grid,
+                )
+                if args.debug_discrete_oce:
+                    save_oce_debug_review_png(
+                        occupancy_horizon,
+                        Path(args.discrete_oce_debug_dir)
+                        / f"oce_debug_{int(sim.ticks):05d}.png",
+                        robot_state=info["ego"]["pos"],
+                        targets=info["actors"],
+                        static_polygons=sim.static_polygons,
+                        step_stride=5,
+                    )
+                timing["hmm_update"] = perf_counter() - hmm_update_start
+            else:
+                occupancy_horizon = None
+
+            # u_nom = np.zeros((args.horizon, 2))
+            # for agent in visible_agents:
+            #     u_nom[:, 0] = agent["pos"][2]  # constant velocity control
+            #     # u_nom[:, 1] = 0               # zero steering angle
+            #     agent_predictions[agent["id"]] = control_variations.predict(
+            #         x_init=agent["pos"][:4],
+            #         u_nom=u_nom,
+            #         dt=args.tick_time,
+            #     )
 
             # # Update the tracker
             # agent_predictions = tracker.step(
@@ -5974,13 +6287,20 @@ def simulate(args, delivery_log=None):
         section_start = perf_counter()
 
         replan_interval = max(1, int(args.replan_interval))
-        dynamic_planning_polygons = dynamic_agent_planning_polygons(
-            collision_agents,
-            agent_predictions,
-            args.horizon,
-            robot,
-            args.dynamic_hard_clearance_margin,
-            args.dynamic_clearance_margin,
+        occupancy_blocked = (
+            occupancy_horizon.current_blocked if occupancy_horizon is not None else None
+        )
+        dynamic_planning_polygons = (
+            []
+            if occupancy_blocked is not None
+            else dynamic_agent_planning_polygons(
+                collision_agents,
+                agent_predictions,
+                args.horizon,
+                robot,
+                args.dynamic_hard_clearance_margin,
+                args.dynamic_clearance_margin,
+            )
         )
         planning_static_polygons = [
             *(sim.static_polygons or []),
@@ -6005,6 +6325,7 @@ def simulate(args, delivery_log=None):
                 vehicle_scale=robot.scale,
                 max_steer=robot.max_delta,
                 resolution=grid_resolution,
+                occupancy_blocked=occupancy_blocked,
             )
             cached_paths = paths
             cached_path_debug = (
@@ -6072,6 +6393,7 @@ def simulate(args, delivery_log=None):
                         backend=args.discrete_oce_backend,
                         return_debug_tensors=args.debug_discrete_oce,
                         debug=args.debug_oce_eval,
+                        occupancy_horizon=occupancy_horizon,
                     )
                 )
             else:
@@ -6157,6 +6479,7 @@ def simulate(args, delivery_log=None):
             static_polygons=sim.static_polygons,
             args=args,
             debug_tick=sim.ticks,
+            occupancy_horizon=occupancy_horizon,
         )
         timing["control"] = perf_counter() - section_start
 
@@ -6344,6 +6667,15 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
+        "--limit-tracked-targets",
+        default=None,
+        type=int,
+        help=(
+            "Maximum number of targets tracked by OCE/experiment logging. Randomly "
+            "selects from scenario targets of interest when there are more."
+        ),
+    )
+    argparser.add_argument(
         "--data-source",
         choices=["eth", "sdd", "random"],
         default=None,
@@ -6401,6 +6733,13 @@ if __name__ == "__main__":
         help=(
             "Write per-tick timing data to a CSV file. This is more useful than "
             "cProfile for the monolithic simulation loop."
+        ),
+    )
+    argparser.add_argument(
+        "--experiment-log-dir",
+        default=None,
+        help=(
+            "Write target class-identification experiment CSVs into this directory."
         ),
     )
     argparser.add_argument(
@@ -6959,6 +7298,15 @@ if __name__ == "__main__":
         type=float,
         default=DEFAULT_METHOD_WEIGHT,
         help="Quadratic MPPI cost weight for dynamic-agent clearance violations.",
+    )
+    argparser.add_argument(
+        "--mppi-occupancy-weight",
+        type=float,
+        default=None,
+        help=(
+            "Linear MPPI cost weight for transition-matrix occupancy probability. "
+            "Defaults to --dynamic-clearance-weight."
+        ),
     )
     argparser.add_argument(
         "--dynamic-collision-cost",
