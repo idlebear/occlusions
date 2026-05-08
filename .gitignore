@@ -385,3 +385,13 @@ outputs/
 
 
 *.png
+
+*.json
+
+*.csv
+
+*.mp4
+
+*.prof
+
+src/python/pedestrian/pedestrian/results/simulation.prof.txt
