@@ -25,9 +25,12 @@ from entropy_validation import (
     load_sdd_model_bundle,
     load_track_state_sequence,
     linear_robot_path,
+    gpu_oce_step_belief,
+    obstacle_aware_robot_path,
     point_is_free,
     pycuda_available,
     realized_class_belief,
+    robot_path_collides,
     run_gpu_entropy,
     run_validation,
     shapely_occlusion_schedule,
@@ -65,6 +68,40 @@ def test_default_track_class_and_robot_points_are_valid(validation_context):
     assert point_is_free(DEFAULT_ROBOT_GOAL, scenario.static_polygons)
 
 
+def test_default_obstacle_aware_robot_path_avoids_blockers(validation_context):
+    bundle, _scenario, _target_states, _initial_belief, static_union = validation_context
+    robot_path = obstacle_aware_robot_path(
+        bundle,
+        DEFAULT_ROBOT_START,
+        DEFAULT_ROBOT_GOAL,
+        DEFAULT_ROLLOUT_STEPS,
+        static_union,
+    )
+
+    assert robot_path.shape == (DEFAULT_ROLLOUT_STEPS, 2)
+    assert not robot_path_collides(robot_path, static_union)
+
+
+def test_gpu_oce_step_belief_uses_gpu_belief_sums(validation_context):
+    bundle, _scenario, target_states, initial_belief, _static_union = validation_context
+    class Result:
+        pass
+
+    result = Result()
+    result.step_belief_sums = np.zeros((1, 1, 1, initial_belief.shape[0]), dtype=float)
+    result.step_probability = np.ones((1, 1, 1), dtype=float) * 0.25
+    target_state = int(target_states[1])
+    result.step_belief_sums[0, 0, 0, target_state] = 0.25
+
+    belief = gpu_oce_step_belief(
+        result,
+        horizon_step=1,
+    )
+
+    assert belief[target_state] == 1.0
+    assert np.count_nonzero(belief) == 1
+
+
 def test_sparse_cpu_entropy_horizon_30_is_finite_and_grows(validation_context):
     bundle, _scenario, _target_states, initial_belief, static_union = validation_context
     robot_path = np.repeat(
@@ -95,10 +132,12 @@ def test_sparse_cpu_entropy_horizon_30_is_finite_and_grows(validation_context):
 
 def test_realized_class_belief_converges_after_visibility(validation_context):
     bundle, _scenario, target_states, _initial_belief, static_union = validation_context
-    rollout_path = linear_robot_path(
+    rollout_path = obstacle_aware_robot_path(
+        bundle,
         DEFAULT_ROBOT_START,
         DEFAULT_ROBOT_GOAL,
         DEFAULT_ROLLOUT_STEPS,
+        static_union,
     )
     visibility = target_visibility_over_rollout(
         rollout_path,

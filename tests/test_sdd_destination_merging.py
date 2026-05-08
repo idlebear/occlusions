@@ -9,8 +9,11 @@ sys.path.insert(0, str(ROOT / "src" / "python" / "sdd"))
 
 from oce_sdd.modeling import (  # noqa: E402
     DestinationClasses,
+    GridStateSpace,
+    ProcessedSceneRecord,
     destination_class_merge_components,
     merge_adjacent_destination_classes,
+    transition_grid_metadata,
 )
 
 
@@ -65,3 +68,46 @@ def test_merge_adjacent_destination_classes_remaps_tracks_and_members():
     assert np.array_equal(merged.member_state_ids[0], [0, 1, 2, 3, 4, 5])
     assert merged.track_to_class == {10: 0, 11: 0, 12: 0, 13: 1, 99: -1}
     assert np.allclose(merged.class_radii, [1.019803902718557, 0.2])
+
+
+def test_transition_grid_metadata_uses_state_space_cell_size():
+    scene = ProcessedSceneRecord(
+        scene_id=1,
+        root=Path("."),
+        metadata={
+            "transform": {
+                "scene_bounds": {
+                    "min_x": 0.0,
+                    "min_y": 0.0,
+                    "max_x": 4.0,
+                    "max_y": 2.0,
+                }
+            },
+            "coordinate_frames": {"scene": {"units": "scene"}},
+        },
+        trajectories={},
+        polygons={},
+    )
+    state_space = GridStateSpace(
+        scene_id=1,
+        cell_size=0.25,
+        cell_size_meters=0.5,
+        scene_scale=0.5,
+        bounds=scene.bounds,
+        rows=8,
+        cols=16,
+        state_ids=np.arange(3),
+        centers=np.zeros((3, 2)),
+        grid_indices=np.zeros((3, 2), dtype=np.int64),
+        grid_to_state=np.zeros((8, 16), dtype=np.int64),
+        walkable_mask=np.ones((8, 16), dtype=bool),
+        non_walkable_classes=("Building",),
+    )
+
+    grid = transition_grid_metadata(scene, state_space)
+
+    assert grid["resolution"] == 0.25
+    assert grid["resolution_meters"] == 0.5
+    assert grid["display_width"] == 4.0
+    assert grid["display_height"] == 4.0
+    assert grid["display_offset"] == [0.0, -1.0]

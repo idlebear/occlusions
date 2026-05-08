@@ -39,6 +39,9 @@ hmm_stub = types.ModuleType("hmm")
 hmm_stub.HMM = object
 sys.modules.setdefault("hmm", hmm_stub)
 specialk_stub = types.ModuleType("specialk")
+specialk_stub.buffered_obstacle_union = lambda *args, **kwargs: None
+specialk_stub.build_params = lambda *args, **kwargs: None
+specialk_stub.generate_route_skeletons = lambda *args, **kwargs: []
 specialk_stub.generate_specialk_trajectories = lambda *args, **kwargs: []
 sys.modules.setdefault("specialk", specialk_stub)
 sys.modules.setdefault("pandas", types.ModuleType("pandas"))
@@ -212,6 +215,31 @@ def test_dynamic_obstacle_buffer_uses_scaled_hard_clearance_without_robot_double
     assert np.isclose(physical_debug[0]["collision_buffer"], 0.0)
 
 
+def test_dynamic_agent_planning_polygons_use_hard_and_soft_clearance():
+    agent = {
+        "id": 4,
+        "pos": np.asarray([1.0, 2.0, 0.0, 0.0], dtype=float),
+        "extent": 0.2,
+    }
+    robot = StraightLineVehicle()
+    robot.size_scale = 0.5
+
+    polygons = pedestrian_main.dynamic_agent_planning_polygons(
+        [agent],
+        agent_predictions=None,
+        horizon=3,
+        robot_model=robot,
+        hard_clearance_margin=0.5,
+        soft_clearance_margin=2.0,
+        step_stride=2,
+    )
+
+    expected_radius = 0.2 + 0.5 * robot.size_scale + 2.0 * robot.size_scale
+    assert polygons
+    assert polygons[0].polygon_class == "DynamicAgent"
+    assert np.isclose(polygons[0].metadata["radius"], expected_radius)
+
+
 def test_dynamic_clearance_margin_uses_actor_dimension_scale():
     robot = StraightLineVehicle()
     robot.size_scale = 0.25
@@ -223,6 +251,52 @@ def test_dynamic_clearance_margin_uses_actor_dimension_scale():
     assert np.isclose(
         pedestrian_main.mppi_static_clearance_margin(robot, 0.5),
         0.125,
+    )
+
+
+def test_static_route_planning_uses_occupancy_blocked_cells():
+    occupancy_blocked = np.zeros((5, 5), dtype=bool)
+    occupancy_blocked[1, 2] = True
+
+    route = pedestrian_main.plan_static_route(
+        [0.5, 1.5],
+        [4.5, 1.5],
+        [],
+        display_offset=[0.0, 0.0],
+        display_diff=5.0,
+        vehicle_length=0.5,
+        vehicle_width=0.5,
+        resolution=1.0,
+        occupancy_blocked=occupancy_blocked,
+    )
+
+    cells = [
+        (int(np.floor(point[0])), int(np.floor(point[1])))
+        for point in route[1:-1]
+    ]
+    assert (2, 1) not in cells
+    assert pedestrian_main.waypoint_route_length(route) > 4.0
+
+
+def test_recovery_control_sequences_include_full_brake_and_both_turns():
+    u_nom = np.zeros((3, 2), dtype=np.float32)
+
+    candidates = pedestrian_main.recovery_control_sequences(u_nom)
+
+    first_controls = np.asarray([candidate[0] for candidate in candidates])
+    assert np.any(
+        np.isclose(
+            first_controls,
+            [-pedestrian_main.CONTROL_LIMITS[0], -pedestrian_main.CONTROL_LIMITS[1]],
+        )
+        .all(axis=1)
+    )
+    assert np.any(
+        np.isclose(
+            first_controls,
+            [-pedestrian_main.CONTROL_LIMITS[0], pedestrian_main.CONTROL_LIMITS[1]],
+        )
+        .all(axis=1)
     )
 
 
