@@ -64,12 +64,13 @@ The designer exports `oce_sdd_scenario_design.v1` JSON in normalized scene coord
 - `robotStartZone`: a rectangular polygon
 - `targetGoalZones`: user-drawn polygons for alternate target-destination clustering
 - `selectedTrackIds`: tracks eligible to spawn as targets or moving occlusions
+- `targetsOfInterestTrackIds`: selected tracks whose class-identification uncertainty is logged/tracked for experiments
 - `robotGoal`: a point in the same coordinate frame
 - `sourceSceneJson`: the generated scene-data JSON used by the browser
 
 Designs are autosaved in browser local storage per scene, and can be exported/imported as JSON from the page.
 
-The designer includes a time slider/playback bar for scrubbing tracks from start to end. In `Tracks` mode, click toggles a single track and dragging a rectangle selects all visible tracks whose current time-bar position is inside the rectangle. Use the `Viewer` link in the header to open the scene-reviewer view for the current scene from the same generated site.
+The designer includes a time slider/playback bar for scrubbing tracks from start to end. In `Tracks` mode, click toggles a single track and dragging a rectangle selects all visible tracks whose current time-bar position is inside the rectangle. Selected tracks can then be marked as tracked targets of interest in the inspector. Use the `Viewer` link in the header to open the scene-reviewer view for the current scene from the same generated site.
 
 
 ## Coordinate frames and bounds
@@ -128,3 +129,26 @@ Each model scene directory contains:
 - `transitions/global_transition.npz`
 - `transitions/class_<id>_transition.npz`
 - diagnostic transition layers under `transitions/class_<id>_*_transition.npz`
+
+## Class-identification experiment logs
+
+When running the pedestrian simulator with discrete OCE and SDD models, pass:
+
+```bash
+--experiment-log-dir results/experiment_logs/run_001
+```
+
+The simulator writes:
+
+- `target_beliefs.csv`: one row per tracked target per step, including ground-truth position/state/class, visibility, state entropy, mode entropy, true-class probability, and `mode_prob_<class_id>` columns.
+- `uncertainty_summary.csv`: one row per step, including tracked/visible counts, summed and mean state/mode entropy, `total_uncertainty` as summed mode entropy, and mean true-class probability.
+
+Only tracks listed in `targetsOfInterestTrackIds` are logged/tracked when that field is present. Older scenario designs without the field preserve legacy behavior by tracking every loaded actor.
+
+Generate standard plots with:
+
+```bash
+python processing/plot_experiment_uncertainty.py results/experiment_logs/run_001
+```
+
+The script writes `total_uncertainty.png`, `per_target_entropy.png`, `visibility_timeline.png`, and `true_class_probability.png` under `results/experiment_logs/run_001/plots`.

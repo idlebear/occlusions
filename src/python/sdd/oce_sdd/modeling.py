@@ -10,9 +10,15 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import dijkstra
-from sklearn.cluster import AgglomerativeClustering
-from shapely.geometry import MultiPolygon, Point, Polygon, box
-from shapely.ops import unary_union
+try:
+    from shapely.geometry import MultiPolygon, Point, Polygon, box
+    from shapely.ops import unary_union
+except Exception:  # pragma: no cover - optional for pure metadata helpers/tests
+    MultiPolygon = None
+    Point = None
+    Polygon = None
+    box = None
+    unary_union = None
 
 NON_WALKABLE_CLASSES = ("Building", "Obstacle", "Object", "Offroad")
 
@@ -180,6 +186,7 @@ def main() -> None:
             scene_out / "model_metadata.json",
             trajectory_stride=args.trajectory_stride,
         )
+        write_scene_transition_grid_metadata(scene, state_space)
 
         summary_rows.append(
             {
@@ -385,6 +392,46 @@ def destination_radius_scene_units(
     return radius
 
 
+def complete_linkage_distance_threshold_labels(
+    distances: np.ndarray,
+    threshold: float,
+) -> np.ndarray:
+    distances = np.asarray(distances, dtype=float)
+    if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
+        raise ValueError("complete-linkage distances must be a square matrix")
+    n = int(distances.shape[0])
+    if n == 0:
+        return np.zeros((0,), dtype=np.int64)
+    if n == 1:
+        return np.zeros((1,), dtype=np.int64)
+    threshold = float(threshold)
+    if not np.isfinite(threshold) or threshold < 0:
+        raise ValueError("complete-linkage threshold must be finite and non-negative")
+
+    clusters = [[idx] for idx in range(n)]
+    while len(clusters) > 1:
+        best_pair = None
+        best_distance = np.inf
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                complete_distance = float(
+                    np.max(distances[np.ix_(clusters[i], clusters[j])])
+                )
+                if complete_distance < best_distance:
+                    best_distance = complete_distance
+                    best_pair = (i, j)
+        if best_pair is None or best_distance > threshold:
+            break
+        i, j = best_pair
+        clusters[i] = sorted([*clusters[i], *clusters[j]])
+        del clusters[j]
+
+    labels = np.empty((n,), dtype=np.int64)
+    for label, members in enumerate(sorted(clusters, key=lambda item: item[0])):
+        labels[members] = label
+    return labels
+
+
 def destination_merge_epsilon_scene_units(args: argparse.Namespace, scale: float) -> float:
     if args.destination_merge_epsilon is not None:
         epsilon = float(args.destination_merge_epsilon)
@@ -534,6 +581,8 @@ def build_walkable_region(
     scene: ProcessedSceneRecord,
     non_walkable_classes: tuple[str, ...] = NON_WALKABLE_CLASSES,
 ) -> Polygon | MultiPolygon:
+    if box is None or Point is None or Polygon is None or unary_union is None:
+        raise ImportError("shapely is required to build SDD walkable regions")
     bounds = scene.bounds
     scene_area = box(bounds["min_x"], bounds["min_y"], bounds["max_x"], bounds["max_y"])
     non_walkable_polygons = []
@@ -756,13 +805,10 @@ def fit_destination_classes(
     if valid_endpoint_states.size == 1:
         labels = np.zeros(1, dtype=np.int64)
     else:
-        clustering = AgglomerativeClustering(
-            n_clusters=None,
-            distance_threshold=radius,
-            metric="precomputed",
-            linkage="complete",
+        labels = complete_linkage_distance_threshold_labels(
+            pairwise_distances,
+            threshold=radius,
         )
-        labels = clustering.fit_predict(pairwise_distances)
 
     label_to_endpoints: dict[int, list[np.ndarray]] = {}
     label_to_states: dict[int, list[int]] = {}
@@ -1421,6 +1467,49 @@ def write_state_space(state_space: GridStateSpace, output_root: Path) -> None:
     (output_root / "state_space.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
+def transition_grid_metadata(
+    scene: ProcessedSceneRecord,
+    state_space: GridStateSpace,
+) -> dict[str, Any]:
+    bounds = state_space.bounds
+    width = float(bounds["max_x"] - bounds["min_x"])
+    height = float(bounds["max_y"] - bounds["min_y"])
+    display_diff = float(max(width, height))
+    display_offset = [
+        float(bounds["min_x"] - (display_diff - width) / 2.0),
+        float(bounds["min_y"] - (display_diff - height) / 2.0),
+    ]
+    return {
+        "source": "sdd_transition_model",
+        "resolution": float(state_space.cell_size),
+        "resolution_meters": float(state_space.cell_size_meters),
+        "cell_size": float(state_space.cell_size),
+        "grid_size_meters": float(state_space.cell_size_meters),
+        "rows": int(state_space.rows),
+        "cols": int(state_space.cols),
+        "state_count": int(len(state_space.state_ids)),
+        "bounds": state_space.bounds,
+        "display_width": display_diff,
+        "display_height": display_diff,
+        "display_offset": display_offset,
+        "non_walkable_classes": list(state_space.non_walkable_classes),
+    }
+
+
+def write_scene_transition_grid_metadata(
+    scene: ProcessedSceneRecord,
+    state_space: GridStateSpace,
+) -> None:
+    metadata_path = scene.root / "metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text())
+    else:
+        metadata = dict(scene.metadata)
+    metadata["transition_grid"] = transition_grid_metadata(scene, state_space)
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    scene.metadata["transition_grid"] = metadata["transition_grid"]
+
+
 def write_trajectory_states(trajectory_states: dict[int, np.ndarray], path: Path) -> None:
     arrays = {f"track_{track_id}": states for track_id, states in sorted(trajectory_states.items())}
     track_ids = np.array(sorted(trajectory_states), dtype=np.int64)
@@ -1509,6 +1598,9 @@ def write_model_metadata(
         "scene_units": scene.units,
         "scene_scale": state_space.scene_scale,
         "grid": {
+            "source": "sdd_transition_model",
+            "resolution": state_space.cell_size,
+            "resolution_meters": state_space.cell_size_meters,
             "grid_size_meters": state_space.cell_size_meters,
             "cell_size": state_space.cell_size,
             "rows": state_space.rows,

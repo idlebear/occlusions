@@ -302,6 +302,7 @@ class Simulation:
         scenario=None,
         data_args=None,
         limit_tracks=None,
+        limit_tracked_targets=None,
         ego_start=None,
         ego_heading=0,
         ego_goal=None,
@@ -327,6 +328,11 @@ class Simulation:
             self.scenario = load_eth_scenario(tracks)
 
         if self.scenario is not None:
+            self.scenario = self._limited_scenario_tracked_targets(
+                self.scenario,
+                limit_tracked_targets,
+                seed=generator_args.get("seed") if generator_args else None,
+            )
             self.scenario = self._limited_scenario_tracks(
                 self.scenario,
                 limit_tracks,
@@ -339,6 +345,14 @@ class Simulation:
             self.display_diff = self.scenario.display_diff
             self.static_polygons = self.scenario.static_polygons
             self.scene_scale = self.scenario.metadata.get("scene_scale", 1.0)
+            targets_of_interest = self.scenario.metadata.get(
+                "targets_of_interest_track_ids"
+            )
+            self.tracked_track_ids = (
+                None
+                if targets_of_interest is None
+                else {self._track_key(track_id) for track_id in targets_of_interest}
+            )
         else:
             self.track_data = None
             self.tracks = None
@@ -346,6 +360,7 @@ class Simulation:
             self.display_offset = [0, 0]
             self.static_polygons = []
             self.scene_scale = 1.0
+            self.tracked_track_ids = None
 
         self.record_data = record_data
         self.tick_time = self._resolve_tick_time(tick_time)
@@ -422,6 +437,62 @@ class Simulation:
 
         self.reset()
 
+    def _track_key(self, track_id):
+        try:
+            return str(int(track_id))
+        except (TypeError, ValueError):
+            return str(track_id)
+
+    def _metadata_track_id(self, track_id):
+        try:
+            return int(track_id)
+        except (TypeError, ValueError):
+            return track_id
+
+    def _limited_scenario_tracked_targets(
+        self, scenario, limit_tracked_targets, seed=None
+    ):
+        if limit_tracked_targets is None:
+            return scenario
+
+        limit_tracked_targets = int(limit_tracked_targets)
+        if limit_tracked_targets < 0:
+            raise ValueError("--limit-tracked-targets must be >= 0")
+
+        metadata = dict(scenario.metadata)
+        track_items = list(scenario.tracks.items())
+        raw_targets = metadata.get("targets_of_interest_track_ids")
+        if raw_targets is None:
+            candidate_items = track_items
+        else:
+            target_keys = {self._track_key(track_id) for track_id in raw_targets}
+            candidate_items = [
+                item for item in track_items if self._track_key(item[0]) in target_keys
+            ]
+
+        if limit_tracked_targets >= len(candidate_items):
+            selected_items = candidate_items
+        elif limit_tracked_targets == 0:
+            selected_items = []
+        else:
+            rng = random_module.Random(seed) if seed is not None else random_module
+            selected_items = rng.sample(candidate_items, limit_tracked_targets)
+
+        selected_items = sorted(selected_items, key=lambda item: str(item[0]))
+        metadata["tracked_target_limit"] = limit_tracked_targets
+        metadata["tracked_target_limit_raw_count"] = len(candidate_items)
+        metadata["tracked_target_limit_selected_count"] = len(selected_items)
+        metadata["targets_of_interest_track_ids"] = [
+            self._metadata_track_id(track_id) for track_id, _ in selected_items
+        ]
+
+        print(
+            "Tracking "
+            f"{len(selected_items)} / {len(candidate_items)} targets"
+            f" for scenario {scenario.name}"
+        )
+        return replace(scenario, metadata=metadata)
+
     def _limited_scenario_tracks(self, scenario, limit_tracks, seed=None):
         if limit_tracks is None:
             return scenario
@@ -432,8 +503,28 @@ class Simulation:
 
         track_items = list(scenario.tracks.items())
         raw_track_count = len(track_items)
+        metadata = dict(scenario.metadata)
+        targets_of_interest = metadata.get("targets_of_interest_track_ids")
+
+        target_keys = set()
+        if targets_of_interest is not None:
+            target_keys = {self._track_key(track_id) for track_id in targets_of_interest}
+
         if limit_tracks >= raw_track_count:
             selected_items = track_items
+        elif targets_of_interest is not None:
+            rng = random_module.Random(seed) if seed is not None else random_module
+            target_items = [
+                item for item in track_items if self._track_key(item[0]) in target_keys
+            ]
+            remainder_items = [
+                item for item in track_items if self._track_key(item[0]) not in target_keys
+            ]
+            random_fill_count = max(0, limit_tracks - len(target_items))
+            random_fill_count = min(random_fill_count, len(remainder_items))
+            selected_items = list(target_items)
+            if random_fill_count:
+                selected_items.extend(rng.sample(remainder_items, random_fill_count))
         elif limit_tracks == 0:
             selected_items = []
         else:
@@ -441,13 +532,23 @@ class Simulation:
             selected_items = rng.sample(track_items, limit_tracks)
 
         selected_items = sorted(selected_items, key=lambda item: str(item[0]))
-        metadata = dict(scenario.metadata)
         metadata["track_limit"] = limit_tracks
         metadata["track_limit_raw_count"] = raw_track_count
         metadata["track_limit_selected_count"] = len(selected_items)
         metadata["track_limit_selected_ids"] = [
             track_id for track_id, _ in selected_items
         ]
+        if targets_of_interest is not None:
+            available_target_keys = {
+                self._track_key(track_id)
+                for track_id, _ in track_items
+                if self._track_key(track_id) in target_keys
+            }
+            metadata["targets_of_interest_track_ids"] = [
+                self._metadata_track_id(track_id)
+                for track_id in targets_of_interest
+                if self._track_key(track_id) in available_target_keys
+            ]
 
         print(
             "Loaded "
@@ -932,6 +1033,11 @@ class Simulation:
                             dt=self.tick_time,
                         )
                     )
+                    self.actor_list[-1].tracked = (
+                        True
+                        if self.tracked_track_ids is None
+                        else self._track_key(id) in self.tracked_track_ids
+                    )
                     activated.append(id)
             for id in activated:
                 del self.tracks[id]
@@ -1001,6 +1107,7 @@ class Simulation:
         for actor in self.actor_list:
             if actor.distance_to(self.ego.x) <= SCAN_RANGE:
                 actor_state = actor.get_state()
+                actor_state["tracked"] = bool(getattr(actor, "tracked", True))
                 poly = actor.get_poly()
                 min_angle = np.pi / 2
                 min_pt = None

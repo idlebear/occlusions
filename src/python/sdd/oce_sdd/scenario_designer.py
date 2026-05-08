@@ -334,7 +334,7 @@ def _designer_html() -> str:
     }
     .track-item, .zone-item {
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 8px;
       padding: 6px;
@@ -342,6 +342,12 @@ def _designer_html() -> str:
       border-radius: 4px;
       background: white;
       font-size: 13px;
+    }
+    .track-interest {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
     }
     .swatch {
       width: 12px;
@@ -438,6 +444,8 @@ def _designer_html() -> str:
         <div class="row">
           <button id="selectVisible">Select Visible Tracks</button>
           <button id="clearTracks">Clear Track Selection</button>
+          <button id="trackSelected">Track Selected</button>
+          <button id="clearTrackedTargets">Clear Tracked Targets</button>
           <button id="clearStart">Clear Start</button>
           <button id="clearGoal">Clear Goal</button>
           <button id="clearZones">Clear Target Zones</button>
@@ -475,6 +483,7 @@ def _designer_html() -> str:
       </div>
       <div class="section">
         <p class="metric"><strong>Selected Tracks</strong> <span id="trackStatus" class="muted"></span></p>
+        <p class="metric"><strong>Tracked Targets</strong> <span id="interestStatus" class="muted"></span></p>
         <div id="selectedTracks" class="track-list"></div>
       </div>
       <div class="section">
@@ -544,6 +553,8 @@ def _designer_html() -> str:
       pointerLabel: document.getElementById("pointerLabel"),
       selectVisible: document.getElementById("selectVisible"),
       clearTracks: document.getElementById("clearTracks"),
+      trackSelected: document.getElementById("trackSelected"),
+      clearTrackedTargets: document.getElementById("clearTrackedTargets"),
       clearStart: document.getElementById("clearStart"),
       clearGoal: document.getElementById("clearGoal"),
       clearZones: document.getElementById("clearZones"),
@@ -560,6 +571,7 @@ def _designer_html() -> str:
       goalStatus: document.getElementById("goalStatus"),
       zoneStatus: document.getElementById("zoneStatus"),
       trackStatus: document.getElementById("trackStatus"),
+      interestStatus: document.getElementById("interestStatus"),
       selectedTracks: document.getElementById("selectedTracks"),
       zoneList: document.getElementById("zoneList"),
       exportJson: document.getElementById("exportJson"),
@@ -610,7 +622,12 @@ def _designer_html() -> str:
       });
       el.selectVisible.addEventListener("click", selectVisibleTracks);
       el.clearTracks.addEventListener("click", () => {
-        state.design.selectedTrackIds = [];
+        state.design.selectedTrackIds = numericSortedTrackIds(state.design.targetsOfInterestTrackIds || []);
+        persistDesign();
+      });
+      el.trackSelected.addEventListener("click", trackSelectedTracks);
+      el.clearTrackedTargets.addEventListener("click", () => {
+        state.design.targetsOfInterestTrackIds = [];
         persistDesign();
       });
       el.clearStart.addEventListener("click", () => {
@@ -707,6 +724,7 @@ def _designer_html() -> str:
         robotStartZone: null,
         targetGoalZones: [],
         selectedTrackIds: [],
+        targetsOfInterestTrackIds: [],
         robotGoal: null
       };
     }
@@ -804,14 +822,43 @@ def _designer_html() -> str:
       return state.scene.tracks.filter(track => state.classVisible.get(classKeyForTrack(track)));
     }
 
+    function numericSortedTrackIds(values) {
+      return Array.isArray(values)
+        ? [...new Set(values.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
+        : [];
+    }
+
+    function designTrackSelectionWithInterest() {
+      return numericSortedTrackIds([
+        ...(state.design.selectedTrackIds || []),
+        ...(state.design.targetsOfInterestTrackIds || [])
+      ]);
+    }
+
+    function normalizeDesignTrackSubsets() {
+      state.design.targetsOfInterestTrackIds = numericSortedTrackIds(state.design.targetsOfInterestTrackIds || []);
+      state.design.selectedTrackIds = designTrackSelectionWithInterest();
+    }
+
     function selectedTrackSet() {
-      return new Set(state.design.selectedTrackIds.map(Number));
+      return new Set(designTrackSelectionWithInterest());
+    }
+
+    function targetInterestSet() {
+      return new Set(numericSortedTrackIds(state.design.targetsOfInterestTrackIds || []));
     }
 
     function selectVisibleTracks() {
       const ids = new Set(state.design.selectedTrackIds.map(Number));
       visibleTracks().forEach(track => ids.add(Number(track.trackId)));
       state.design.selectedTrackIds = [...ids].sort((a, b) => a - b);
+      persistDesign();
+    }
+
+    function trackSelectedTracks() {
+      const ids = new Set((state.design.targetsOfInterestTrackIds || []).map(Number));
+      state.design.selectedTrackIds.map(Number).forEach(trackId => ids.add(trackId));
+      state.design.targetsOfInterestTrackIds = [...ids].sort((a, b) => a - b);
       persistDesign();
     }
 
@@ -931,6 +978,27 @@ def _designer_html() -> str:
       persistDesign();
     }
 
+    function toggleTargetInterest(trackId) {
+      const id = Number(trackId);
+      const ids = new Set((state.design.targetsOfInterestTrackIds || []).map(Number));
+      setTargetInterest(trackId, !ids.has(id));
+    }
+
+    function setTargetInterest(trackId, enabled) {
+      const id = Number(trackId);
+      const ids = new Set((state.design.targetsOfInterestTrackIds || []).map(Number));
+      const selected = new Set((state.design.selectedTrackIds || []).map(Number));
+      if (enabled) {
+        ids.add(id);
+        selected.add(id);
+      } else {
+        ids.delete(id);
+      }
+      state.design.targetsOfInterestTrackIds = [...ids].sort((a, b) => a - b);
+      state.design.selectedTrackIds = [...selected].sort((a, b) => a - b);
+      persistDesign();
+    }
+
     function finishTargetZone() {
       if (state.draft.length < 3) return;
       const zoneId = nextZoneId();
@@ -1047,12 +1115,14 @@ def _designer_html() -> str:
     function drawTracks() {
       const classes = classesForScene();
       const selected = selectedTrackSet();
+      const trackedTargets = targetInterestSet();
       state.scene.tracks.forEach(track => {
         const classKey = classKeyForTrack(track);
         if (!state.classVisible.get(classKey)) return;
         const classIndex = classes.findIndex(item => item.key === classKey);
         const baseColor = colorForClass(classKey, classIndex);
         const isSelected = selected.has(Number(track.trackId));
+        const isTrackedTarget = trackedTargets.has(Number(track.trackId));
         const isHovered = Number(state.hoveredTrackId) === Number(track.trackId);
         const stroke = isSelected ? "#111111" : baseColor;
         const currentIndex = Math.min(state.frame, track.points.length - 1);
@@ -1069,6 +1139,13 @@ def _designer_html() -> str:
         ctx.lineWidth = isSelected || isHovered ? 1.8 : 1.1;
         ctx.fill();
         ctx.stroke();
+        if (isTrackedTarget) {
+          ctx.beginPath();
+          ctx.arc(end[0], end[1], isSelected || isHovered ? 8.5 : 6.8, 0, Math.PI * 2);
+          ctx.strokeStyle = "#d62728";
+          ctx.lineWidth = 2.2;
+          ctx.stroke();
+        }
       });
     }
 
@@ -1193,8 +1270,10 @@ def _designer_html() -> str:
       el.goalStatus.textContent = goal ? `${goal.x.toFixed(1)}, ${goal.y.toFixed(1)}` : "not set";
       el.zoneStatus.textContent = `${state.design.targetGoalZones.length}`;
       el.trackStatus.textContent = `${state.design.selectedTrackIds.length}`;
+      el.interestStatus.textContent = `${(state.design.targetsOfInterestTrackIds || []).length}`;
       el.selectedTracks.innerHTML = "";
       const selected = new Set(state.design.selectedTrackIds.map(Number));
+      const trackedTargets = targetInterestSet();
       state.scene.tracks
         .filter(track => selected.has(Number(track.trackId)))
         .sort((a, b) => Number(a.trackId) - Number(b.trackId))
@@ -1207,7 +1286,17 @@ def _designer_html() -> str:
           const remove = document.createElement("button");
           remove.textContent = "Remove";
           remove.addEventListener("click", () => toggleTrack(track.trackId));
-          item.append(swatch, `Track ${track.trackId}`, remove);
+          const trackId = Number(track.trackId);
+          const interestLabel = document.createElement("label");
+          interestLabel.className = "track-interest";
+          const interestCheckbox = document.createElement("input");
+          interestCheckbox.type = "checkbox";
+          interestCheckbox.checked = trackedTargets.has(trackId);
+          interestCheckbox.addEventListener("change", event => {
+            setTargetInterest(track.trackId, event.target.checked);
+          });
+          interestLabel.append(interestCheckbox, "Target of interest");
+          item.append(swatch, `Track ${track.trackId}`, interestLabel, remove);
           el.selectedTracks.appendChild(item);
         });
       el.zoneList.innerHTML = "";
@@ -1231,6 +1320,8 @@ def _designer_html() -> str:
 
     function currentDesignPayload() {
       const transform = transformForCurrentScene();
+      const selectedTrackIds = designTrackSelectionWithInterest();
+      const targetsOfInterestTrackIds = numericSortedTrackIds(state.design.targetsOfInterestTrackIds || []);
 
       function transformPoint(p) {
         if (!transform) return p;
@@ -1270,7 +1361,8 @@ def _designer_html() -> str:
         pointStride: state.scene.tracks[0]?.pointStride || 1,
         robotStartZone: transformZone(state.design.robotStartZone),
         targetGoalZones: state.design.targetGoalZones.map(transformZone),
-        selectedTrackIds: state.design.selectedTrackIds,
+        selectedTrackIds,
+        targetsOfInterestTrackIds,
         robotGoal: transformGoal(state.design.robotGoal),
         sourceSceneJson: `scenes/scene_${padSceneId(state.scene.sceneId)}.json`,
         updatedAt: new Date().toISOString(),
@@ -1297,6 +1389,7 @@ def _designer_html() -> str:
 
     function saveDesignToLocalStorage() {
       if (!state.scene || !state.design) return;
+      normalizeDesignTrackSubsets();
       localStorage.setItem(storageKey(), JSON.stringify(state.design));
     }
 
@@ -1313,13 +1406,17 @@ def _designer_html() -> str:
 
     function normalizeDesign(raw) {
       const fallback = emptyDesign();
+      const targetsOfInterestTrackIds = numericSortedTrackIds(raw.targetsOfInterestTrackIds || []);
+      const selectedTrackIds = numericSortedTrackIds([
+        ...(Array.isArray(raw.selectedTrackIds) ? raw.selectedTrackIds : []),
+        ...targetsOfInterestTrackIds
+      ]);
       return {
         name: String(raw.name || fallback.name),
         robotStartZone: raw.robotStartZone || null,
         targetGoalZones: Array.isArray(raw.targetGoalZones) ? raw.targetGoalZones : [],
-        selectedTrackIds: Array.isArray(raw.selectedTrackIds)
-          ? raw.selectedTrackIds.map(Number).filter(Number.isFinite).sort((a, b) => a - b)
-          : [],
+        selectedTrackIds,
+        targetsOfInterestTrackIds,
         robotGoal: raw.robotGoal || null
       };
     }
