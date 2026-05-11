@@ -473,10 +473,10 @@ class DeliveryBot(Actor):
             size_scale=size_scale,
         )
 
-        self.max_v = 1.2
-        self.min_v = -1.0
-        self.max_brake = CONTROL_LIMITS[0]
-        self.max_accel = CONTROL_LIMITS[0]
+        self.max_v = 1.2 * self.size_scale
+        self.min_v = -1.0 * self.size_scale
+        self.max_brake = CONTROL_LIMITS[0] * self.size_scale
+        self.max_accel = CONTROL_LIMITS[0] * self.size_scale
         self.max_omega = np.pi / 4.0
         self.max_delta = CONTROL_LIMITS[1]
 
