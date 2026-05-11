@@ -87,6 +87,7 @@ def rollout_trajectories(
         sorted_indexes = np.argsort(weights)
         indexes = sorted_indexes[-TRAJECTORIES_TO_VISUALIZE:]
     else:
+        # BUGBUG -- random generation is unseeded but does not matter here as this is just for visualization.
         indexes = np.random.choice(
             n_samples, min(n_samples, TRAJECTORIES_TO_VISUALIZE), replace=False
         )

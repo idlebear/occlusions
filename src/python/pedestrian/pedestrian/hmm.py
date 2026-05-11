@@ -13,7 +13,7 @@ Attributes:
 Methods:
     forward_algorithm(observations): Computes the probability of the observation sequence using the forward algorithm.
     viterbi_algorithm(observations): Computes the most likely sequence of hidden states using the Viterbi algorithm.
-    predict_next_state(current_state): Predicts the next state given the current state.
+    sample_next_state(current_state): Samples the next state given the current state.
     fit(observations): Fits the model parameters to the given sequence of observations.
 """
 
@@ -23,12 +23,14 @@ from typing import List, Dict
 try:
     from util.dotdict import DotDict
 except ImportError:
+
     class DotDict(dict):
         def __getattr__(self, key):
             try:
                 return self[key]
             except KeyError as exc:
                 raise AttributeError(key) from exc
+
 
 # Tolerance for numerical stability
 tolerance = 1e-10  # Avoid division by zero and log of zero errors
@@ -73,7 +75,9 @@ class HMM:
             num_states,
             num_observations,
         )
-        self.transition_matrices = transitions.copy() if copy_transitions else transitions
+        self.transition_matrices = (
+            transitions.copy() if copy_transitions else transitions
+        )
         if emission_probabilities is None:
             # no probabilities supplied - default to uniform
             self.emission_matrix = (
@@ -206,11 +210,9 @@ class HMM:
 
         return next_state_distribution
 
-    def predict_next_state(self, mode, state: int) -> int:
-        # Predict the next state based on the transition probabilities
-        return np.random.choice(
-            self.num_states, p=self.transition_matrices[mode, state]
-        )
+    def sample_next_state(self, mode, state: int, rng: np.random.Generator) -> int:
+        # Sample the next state based on the transition probabilities
+        return rng.choice(self.num_states, p=self.transition_matrices[mode, state])
 
     def forward(
         self, observations: List[int], emission_probabilities: np.ndarray = None

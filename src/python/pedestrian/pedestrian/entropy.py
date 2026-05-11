@@ -206,6 +206,9 @@ def _random_entropy(trial, k, P, b, I_s, **kwargs):
     # random is well, random and must be different between paths - repeating the same
     # seed for each path gives identical results and P0 is always chosen
 
+    # BUGBUG -- using np.random.uniform() here, unseeded.  Since this is a baseline it
+    #           generates a result, but does not need to share that randomness with any
+    #           other method.
     results = []
     aggregate_entropy = 0
     for step in range(1, k + 1):  # skip current step/position
@@ -2975,12 +2978,14 @@ def _mc_entropy(trial, k, P, b, I_s, **kwargs):
         p=0.95,
         min_samples=int(0.1 * num_mc_trials if num_mc_trials else 10),
         model_x=np.zeros(k, dtype=float),
+        seed=seed,
     )
     occluded_stats = MonteCarloIntegration(
         delta_abs=error,
         p=0.95,
         min_samples=int(0.1 * num_mc_trials if num_mc_trials else 10),
         model_x=np.zeros(k, dtype=float),
+        seed=seed,
     )
 
     # construct the observation probabilities if a noisy observer is used.
@@ -3247,12 +3252,14 @@ def _noisy_mode_mc(trial: int, k: int, hmm: HMM, I_s: List[np.ndarray], **kwargs
         p=0.95,
         min_samples=int(0.1 * num_mc_trials if num_mc_trials else 10),
         model_x=np.zeros(k, dtype=float),
+        seed=seed,
     )
     mode_entropy_stats = MonteCarloIntegration(
         delta_abs=error,
         p=0.95,
         min_samples=int(0.1 * num_mc_trials if num_mc_trials else 10),
         model_x=np.zeros(k, dtype=float),
+        seed=seed,
     )
 
     # construct the observation probabilities
@@ -3437,6 +3444,7 @@ def _noisy_steps_mc(trial: int, k: int, hmm: HMM, I_s: List[np.ndarray], **kwarg
         min_samples=max(2, int(0.01 * num_mc_trials)),
         max_samples=num_mc_trials,
         model_x=0.0,
+        seed=seed,
     )
 
     grid_height = kwargs.get("grid_height")
