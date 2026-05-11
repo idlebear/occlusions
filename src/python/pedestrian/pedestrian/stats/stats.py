@@ -63,12 +63,15 @@ class MixtureOfVariances:
 
 
 class OnlineStats:
-    def __init__(self, window_size=None, inclusion_probability=1.0, model_x=0.0):
+    def __init__(
+        self, window_size=None, inclusion_probability=1.0, model_x=0.0, seed=None
+    ):
         self.prob = inclusion_probability
         self.window_size = window_size
         if window_size is not None:
             self.data = deque(maxlen=window_size)
         self.model_x = model_x
+        self.seed = seed
         self.reset()
 
     def reset(self):
@@ -84,6 +87,8 @@ class OnlineStats:
         else:
             raise ValueError(f"Unsupported type: {_type}")
 
+        self.rng = np.random.default_rng(self.seed)
+
         if self.window_size is not None:
             self.data.clear()
 
@@ -91,7 +96,7 @@ class OnlineStats:
         if not isinstance(x, type(self.model_x)):
             raise ValueError(f"Type mismatch: {type(x)} != {type(self.model_x)}")
 
-        if np.random.rand() > self.prob:
+        if self.rng.random() > self.prob:
             return
 
         if self.window_size is not None:
@@ -176,7 +181,9 @@ class MonteCarloIntegration:
         **kwargs,
     ):
         self.max_samples = max_samples
-        self.sample = OnlineStats(window_size=max_samples, model_x=model_x)
+        self.sample = OnlineStats(
+            window_size=max_samples, model_x=model_x, seed=kwargs.get("seed")
+        )
         self.delta_abs = delta_abs
         self.p = p
         self.inflation = inflation

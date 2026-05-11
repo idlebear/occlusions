@@ -9,7 +9,42 @@ from heapq import heappop, heappush
 from pathlib import Path
 from random import seed
 from simulation import Simulation
-from config import *
+from config import (
+    CONTROL_LIMITS,
+    EPSILON,
+    ROBOT_SPEED,
+    ROBOT_ACCELERATION,
+    ROBOT_MAX_SPEED,
+    MIN_SEPARATION,
+    SCAN_RANGE,
+    GRID_RESOLUTION,
+    GENERATOR_ARGS,
+    FINAL_X_WEIGHT,
+    FINAL_V_WEIGHT,
+    FINAL_THETA_WEIGHT,
+    MPPI_SAMPLES,
+    CONTROL_VARIATION_LIMITS,
+    SCREEN_HEIGHT,
+    SCREEN_WIDTH,
+    SCREEN_MARGIN,
+    LAMBDA_TASKS,
+    NUM_ACTORS,
+    DEFAULT_POLICY_NAME,
+    SIMULATION_SPEED,
+    TICK_TIME,
+    DEFAULT_GENERATOR_NAME,
+    DEFAULT_LAMBDA,
+    DEFAULT_METHOD_WEIGHT,
+    STATIC_OBSTACLE_CLEARANCE,
+    STATIC_OBSTACLE_HARD_CLEARANCE,
+    X_WEIGHT,
+    Y_WEIGHT,
+    V_WEIGHT,
+    THETA_WEIGHT,
+    DELTA_WEIGHT,
+    A_WEIGHT,
+)
+
 import pygame
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
@@ -278,12 +313,32 @@ def _agent_prediction_sequence(agent, agent_predictions, horizon):
 def scene_scale(robot_model=None):
     if robot_model is None:
         return 1.0
+    if isinstance(robot_model, (int, float, np.floating)):
+        return float(robot_model)
     return float(
         getattr(
             robot_model,
             "scene_scale",
             getattr(robot_model, "size_scale", getattr(robot_model, "scale", 1.0)),
         )
+    )
+
+
+def scene_linear_speed(value_mps, robot_model=None):
+    return float(value_mps) * scene_scale(robot_model)
+
+
+def scene_linear_acceleration(value_mps2, robot_model=None):
+    return float(value_mps2) * scene_scale(robot_model)
+
+
+def scene_control_limits(robot_model=None):
+    return np.asarray(
+        [
+            scene_linear_acceleration(CONTROL_LIMITS[0], robot_model),
+            float(CONTROL_LIMITS[1]),
+        ],
+        dtype=float,
     )
 
 
@@ -657,14 +712,15 @@ def control_sequence_collision_summary(
     }
 
 
-def recovery_control_sequences(u_nom):
+def recovery_control_sequences(u_nom, robot_model=None):
     controls = []
     u_nom = np.asarray(u_nom, dtype=float)
     if u_nom.ndim != 2 or u_nom.shape[1] < 2:
         return controls
 
-    max_accel = float(CONTROL_LIMITS[0])
-    max_delta = float(CONTROL_LIMITS[1])
+    control_limits = scene_control_limits(robot_model)
+    max_accel = float(control_limits[0])
+    max_delta = float(control_limits[1])
     accel_options = [-max_accel, -0.5 * max_accel, 0.0]
     steer_options = [
         -max_delta,
@@ -704,7 +760,7 @@ def find_safe_control_candidate(
     candidates = [("nominal", None, np.asarray(u_nom, dtype=float))]
     candidates.extend(
         ("recovery", index, controls)
-        for index, controls in enumerate(recovery_control_sequences(u_nom))
+        for index, controls in enumerate(recovery_control_sequences(u_nom, robot_model))
     )
     if u_variations is not None and len(u_variations):
         sampled_controls = np.asarray(u_nom, dtype=float)[
@@ -885,9 +941,12 @@ def nominal_controls_to_path(robot_model, initial_state, path, args):
     u_nom = np.zeros((args.horizon, 2), dtype=float)
     state = np.asarray(initial_state[:4], dtype=float).copy()
     progress_index = closest_path_index(path, state)
+    robot_speed = scene_linear_speed(args.robot_speed, robot_model)
+    robot_max_speed = scene_linear_speed(ROBOT_MAX_SPEED, robot_model)
+    control_limits = scene_control_limits(robot_model)
     lookahead_distance = max(
         1.5 * float(robot_model.L),
-        args.robot_speed * args.tick_time * 4.0,
+        robot_speed * args.tick_time * 4.0,
         0.05,
     )
 
@@ -916,15 +975,15 @@ def nominal_controls_to_path(robot_model, initial_state, path, args):
             / (np.pi / 2.0),
             1.0,
         )
-        target_speed = args.robot_speed * (1.0 - 0.75 * turn_severity)
-        target_speed = max(0.15, target_speed)
+        target_speed = robot_speed * (1.0 - 0.75 * turn_severity)
+        target_speed = min(robot_max_speed, target_speed)
         accel = (target_speed - state[2]) / args.tick_time
 
-        accel = np.clip(accel, -CONTROL_LIMITS[0], CONTROL_LIMITS[0])
-        delta = np.clip(delta, -CONTROL_LIMITS[1], CONTROL_LIMITS[1])
+        accel = np.clip(accel, -control_limits[0], control_limits[0])
+        delta = np.clip(delta, -control_limits[1], control_limits[1])
         u_nom[i] = [accel, delta]
 
-        step = robot_model.ode(state.copy(), u_nom[i].copy())
+        step = robot_model.ode(state, u_nom[i])
         state = state + step * args.tick_time
 
     return u_nom
@@ -945,9 +1004,11 @@ def print_planned_steering_debug(
     emergency_stop,
 ):
     state = np.asarray(initial_state[:4], dtype=float)
+    robot_speed = scene_linear_speed(args.robot_speed, robot_model)
+    control_limits = scene_control_limits(robot_model)
     lookahead_distance = max(
         1.5 * float(robot_model.L),
-        args.robot_speed * args.tick_time * 4.0,
+        robot_speed * args.tick_time * 4.0,
         0.05,
     )
     target_index = path_index_at_lookahead(
@@ -1030,7 +1091,7 @@ def print_planned_steering_debug(
         f"u_final=[a={u_final[0,0]:.3f}, steer={deg(u_final[0,1]):.1f}deg] "
         f"expected_dtheta_nom={deg(nom_delta_theta):.2f}deg/tick "
         f"expected_dtheta_final={deg(final_delta_theta):.2f}deg/tick "
-        f"limits=[a={CONTROL_LIMITS[0]:.2f}, steer={deg(CONTROL_LIMITS[1]):.1f}deg] "
+        f"limits=[a={control_limits[0]:.2f}, steer={deg(control_limits[1]):.1f}deg] "
         f"model=[L={robot_model.L:.3f}, W={robot_model.W:.3f}, "
         f"max_steer={deg(robot_model.max_delta):.1f}deg]"
     )
@@ -1277,6 +1338,9 @@ def print_sim_observation_timing_debug(tick, timing):
 
 
 TIMING_CSV_FIELDS = [
+    "prefix",
+    "experiment",
+    "method",
     "tick",
     "actors",
     "visible_actors",
@@ -1300,14 +1364,64 @@ TIMING_CSV_FIELDS = [
 ]
 
 
-def append_timing_csv(
-    path, tick, timing, control_timing=None, *, actors=0, visible_actors=0
+def log_token(value, default="run"):
+    text = "" if value is None else str(value).strip()
+    if not text:
+        text = str(default)
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text)
+    return text.strip("._-") or str(default)
+
+
+def experiment_method_stem(*, experiment=0, method="", prefix=None):
+    parts = []
+    if prefix is not None and str(prefix).strip():
+        parts.append(log_token(prefix, default="prefix"))
+    parts.append(f"{int(experiment)}")
+    parts.append(log_token(method, default="method"))
+    return "_".join(parts)
+
+
+def experiment_method_log_path(
+    log_dir, suffix, *, experiment=0, method="", prefix=None
 ):
+    return (
+        Path(log_dir)
+        / f"{experiment_method_stem(experiment=experiment, method=method, prefix=prefix)}_{suffix}.csv"
+    )
+
+
+def experiment_method_output_path(path, *, experiment=0, method="", prefix=None):
     path = Path(path)
+    stem = experiment_method_stem(experiment=experiment, method=method, prefix=prefix)
+    suffix = path.suffix or ".csv"
+    return path.with_name(f"{path.stem}_{stem}{suffix}")
+
+
+def append_timing_csv(
+    path,
+    tick,
+    timing,
+    control_timing=None,
+    *,
+    prefix=None,
+    experiment=0,
+    method="",
+    actors=0,
+    visible_actors=0,
+):
+    path = experiment_method_output_path(
+        path,
+        experiment=experiment,
+        method=method,
+        prefix=prefix,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
     control_timing = control_timing or {}
     row = {
+        "prefix": "" if prefix is None else str(prefix),
+        "experiment": int(experiment),
+        "method": str(method),
         "tick": int(tick),
         "actors": int(actors),
         "visible_actors": int(visible_actors),
@@ -1361,6 +1475,9 @@ def _empty_csv_value(value):
 
 def experiment_target_fieldnames(class_ids):
     return [
+        "prefix",
+        "experiment",
+        "method",
         "tick",
         "time_s",
         "track_id",
@@ -1380,6 +1497,9 @@ def experiment_target_fieldnames(class_ids):
 
 
 EXPERIMENT_SUMMARY_FIELDS = [
+    "prefix",
+    "experiment",
+    "method",
     "tick",
     "time_s",
     "tracked_count",
@@ -1390,6 +1510,8 @@ EXPERIMENT_SUMMARY_FIELDS = [
     "mean_mode_entropy",
     "total_uncertainty",
     "mean_true_class_probability",
+    "robot_speed",
+    "robot_distance_traveled",
 ]
 
 
@@ -1404,7 +1526,26 @@ def append_csv_row(path, fieldnames, row):
         writer.writerow({key: _empty_csv_value(row.get(key, "")) for key in fieldnames})
 
 
-def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models):
+def reset_experiment_logs(log_dir):
+    if log_dir is None:
+        return
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+
+def append_experiment_logs(
+    log_dir,
+    *,
+    tick,
+    time_s,
+    actors,
+    tracker,
+    sdd_models,
+    prefix=None,
+    experiment=0,
+    method="",
+    robot_speed=np.nan,
+    robot_distance_traveled=np.nan,
+):
     if log_dir is None or tracker is None:
         return
     log_dir = Path(log_dir)
@@ -1413,15 +1554,27 @@ def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models
         str(class_id): index for index, class_id in enumerate(tracker.class_ids)
     }
     target_fields = experiment_target_fieldnames(class_ids)
-    target_path = log_dir / "target_beliefs.csv"
-    summary_path = log_dir / "uncertainty_summary.csv"
+    target_path = experiment_method_log_path(
+        log_dir,
+        "target_beliefs",
+        experiment=experiment,
+        method=method,
+        prefix=prefix,
+    )
+    summary_path = experiment_method_log_path(
+        log_dir,
+        "uncertainty_summary",
+        experiment=experiment,
+        method=method,
+        prefix=prefix,
+    )
     track_to_class = {
         str(track_id): int(class_id)
         for track_id, class_id in (sdd_models or {}).get("track_to_class", {}).items()
     }
 
     tracked_actors = [
-        actor for actor in actors if actor.get("tracked", True) and "id" in actor
+        actor for actor in actors if bool(actor.get("tracked", False)) and "id" in actor
     ]
     state_entropies = []
     mode_entropies = []
@@ -1450,6 +1603,9 @@ def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models
                 true_class_probabilities.append(true_class_probability)
 
         row = {
+            "prefix": "" if prefix is None else str(prefix),
+            "experiment": int(experiment),
+            "method": str(method),
             "tick": int(tick),
             "time_s": float(time_s),
             "track_id": track_id,
@@ -1470,6 +1626,9 @@ def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models
         append_csv_row(target_path, target_fields, row)
 
     summary = {
+        "prefix": "" if prefix is None else str(prefix),
+        "experiment": int(experiment),
+        "method": str(method),
         "tick": int(tick),
         "time_s": float(time_s),
         "tracked_count": len(tracked_actors),
@@ -1490,6 +1649,8 @@ def append_experiment_logs(log_dir, *, tick, time_s, actors, tracker, sdd_models
             if true_class_probabilities
             else np.nan
         ),
+        "robot_speed": float(robot_speed),
+        "robot_distance_traveled": float(robot_distance_traveled),
     }
     append_csv_row(summary_path, EXPERIMENT_SUMMARY_FIELDS, summary)
 
@@ -1507,6 +1668,46 @@ def uniform_prediction_probabilities(predictions):
             dtype=np.float32,
         )
     return probabilities
+
+
+def evaluate_candidate_paths_by_visibility(
+    *,
+    time_step,
+    paths,
+    tracker=None,
+    static_polygons=None,
+    horizon=None,
+    scan_range=SCAN_RANGE,
+    occupancy_horizon=None,
+    debug=False,
+):
+    """Stub visibility selector.
+
+    Future implementation should compute each candidate's mean visibility over
+    targets of interest and return the path with the highest score. The current
+    stub assigns equal visibility to every path, so argmax selects path 0.
+    """
+    if not paths:
+        return 0, None, {"timing": {"backend": "visibility_stub"}}
+
+    scores = np.zeros(len(paths), dtype=float)
+    best_trajectory = int(np.argmax(scores))
+    result = {
+        "timing": {"backend": "visibility_stub"},
+        "target_count": (
+            0
+            if tracker is None or getattr(tracker, "agent_hmms", None) is None
+            else len(tracker.agent_hmms)
+        ),
+        "horizon": None if horizon is None else int(horizon),
+    }
+    if debug:
+        print(
+            "[visibility-eval] "
+            f"tick={time_step} best={best_trajectory} "
+            f"mean_visibility={scores.tolist()} timing={result['timing']}"
+        )
+    return best_trajectory, scores, result
 
 
 def agent_records_by_id(agents):
@@ -4846,10 +5047,14 @@ def generate_trajectory_for_waypoints(
 
     heading_error = route_initial_heading_error(waypoints, start[3])
     reference_initial_v = initial_v
+    target_speed = scene_linear_speed(args.robot_speed, vehicle_scale)
     if heading_error > max_heading_error:
         reference_initial_v = min(
             initial_v,
-            getattr(args, "heading_mismatch_reference_speed", 0.05),
+            scene_linear_speed(
+                getattr(args, "heading_mismatch_reference_speed", 0.05),
+                vehicle_scale,
+            ),
         )
         if getattr(args, "debug_steering", False):
             print(
@@ -4862,7 +5067,7 @@ def generate_trajectory_for_waypoints(
     initial_heading = start[3]
     final_heading = waypoint_segment_heading(waypoints, initial_heading)
     path.np_trajectory(
-        [reference_initial_v, args.robot_speed],
+        [reference_initial_v, target_speed],
         initial_heading,
         final_heading,
         cubic_fn=Cubic.np_polynomial_time_scaling_3rd_order,
@@ -4873,7 +5078,7 @@ def generate_trajectory_for_waypoints(
     if path.shape[0] < 2:
         fallback = np.asarray([start_xy, waypoints[-1]], dtype=float)
         headings = np.full((2, 1), float(start[3]))
-        speeds = np.asarray([[initial_v], [args.robot_speed]], dtype=float)
+        speeds = np.asarray([[initial_v], [target_speed]], dtype=float)
         path = np.hstack([fallback, speeds, headings])
 
     from trajectory_planner.trajectory_planner import TrajectoryPlanner
@@ -4883,7 +5088,7 @@ def generate_trajectory_for_waypoints(
     trajectories = planner.generate_trajectories(
         pos=start_xy,
         initial_v=initial_v,
-        target_v=args.robot_speed,
+        target_v=target_speed,
         trajectories_requested=max(1, int(trajectories_requested)),
         planning_horizon=args.horizon,
     )
@@ -4906,7 +5111,7 @@ def generate_k_path_trajectories(
     occupancy_blocked=None,
 ):
 
-    speed = args.robot_speed
+    speed = scene_linear_speed(args.robot_speed, vehicle_scale)
     dt = args.tick_time
     horizon = args.horizon
     k = max(1, int(args.trajectory_count))
@@ -5144,7 +5349,7 @@ def generate_frenet_trajectories(
     resolution=None,
     occupancy_blocked=None,
 ):
-    speed = float(getattr(args, "robot_speed", 0.5))
+    speed = scene_linear_speed(float(getattr(args, "robot_speed", 0.5)), vehicle_scale)
     dt = float(getattr(args, "tick_time", 0.01))
     horizon = int(getattr(args, "horizon", 1))
     count = max(1, int(getattr(args, "trajectory_count", 1)))
@@ -5206,8 +5411,8 @@ def generate_frenet_trajectories(
         csp,
         projection["s"],
         s_dot,
-        projection["d"],
-        d_dot,
+        0,  # projection["d"],
+        0,  # d_dot,
         0.0,
         0.0,
         planner_args,
@@ -5414,6 +5619,7 @@ def get_control(
     u_prev=None,
     debug_tick=None,
     occupancy_horizon=None,
+    discrete_oce_tracker=None,
 ):
     """
     Given the current state (x,y,v,theta) and the path, return the control
@@ -5422,6 +5628,7 @@ def get_control(
     control_timing = {}
     tic = perf_counter()
     section_start = perf_counter()
+    control_limits = scene_control_limits(robot_model)
     if True:  # u_nom is None:
         u_nom = nominal_controls_to_path(robot_model, initial_state, path, args)
     else:
@@ -5431,10 +5638,10 @@ def get_control(
 
     # Apply clipping to u_nom (fix: assign back the clipped values)
     u_nom[:, 0] = np.clip(
-        u_nom[:, 0], a_min=-CONTROL_LIMITS[0], a_max=CONTROL_LIMITS[0]
+        u_nom[:, 0], a_min=-control_limits[0], a_max=control_limits[0]
     )
     u_nom[:, 1] = np.clip(
-        u_nom[:, 1], a_min=-CONTROL_LIMITS[1], a_max=CONTROL_LIMITS[1]
+        u_nom[:, 1], a_min=-control_limits[1], a_max=control_limits[1]
     )
 
     if getattr(args, "debug_steering", False):
@@ -5492,6 +5699,29 @@ def get_control(
             "legacy MPPI obstacle geometry disabled"
         )
 
+    oce_data = None
+    if (
+        bool(getattr(args, "use_oce_trajectory_eval", True))
+        and str(getattr(args, "oce_eval_method", "")).lower() == "discrete"
+        and str(getattr(args, "discrete_oce_backend", "auto")).lower()
+        in {"auto", "gpu"}
+        and discrete_oce_tracker is not None
+        and getattr(discrete_oce_tracker, "agent_hmms", None)
+    ):
+        oce_data = {
+            "type": "discrete",
+            "tracker": discrete_oce_tracker,
+            "occupancy_horizon": occupancy_horizon,
+            "horizon": args.discrete_oce_horizon or args.horizon,
+            "scan_range": SCAN_RANGE,
+            "max_states": args.discrete_oce_max_states,
+            "state_probability_floor": args.discrete_oce_state_probability_floor,
+            "return_visibility_tensor": bool(
+                getattr(args, "debug_discrete_oce", False)
+            ),
+            "backend": getattr(args, "discrete_oce_backend", "auto"),
+        }
+
     section_start = perf_counter()
     u, u_var, u_weights = mppi.find_control(
         costmap=costmap,
@@ -5504,6 +5734,7 @@ def get_control(
         obstacles=actors,
         dt=args.tick_time,
         occupancy_grids=occupancy_horizon,
+        oce_data=oce_data,
     )
     control_timing["mppi"] = perf_counter() - section_start
     u_mppi = np.asarray(u, dtype=float).copy()
@@ -5555,17 +5786,17 @@ def get_control(
                 u_nom=u_nom,
                 sampled_controls=sampled_controls,
                 weights=u_weights,
-                limits=CONTROL_LIMITS,
+                limits=control_limits,
             )
             u[:, 0] = np.clip(
                 u[:, 0],
-                a_min=-CONTROL_LIMITS[0],
-                a_max=CONTROL_LIMITS[0],
+                a_min=-control_limits[0],
+                a_max=control_limits[0],
             )
             u[:, 1] = np.clip(
                 u[:, 1],
-                a_min=-CONTROL_LIMITS[1],
-                a_max=CONTROL_LIMITS[1],
+                a_min=-control_limits[1],
+                a_max=control_limits[1],
             )
         total_weight = np.sum(u_weights)
     elif static_polygons:
@@ -5594,17 +5825,17 @@ def get_control(
                 u_nom=u_nom,
                 sampled_controls=sampled_controls,
                 weights=u_weights,
-                limits=CONTROL_LIMITS,
+                limits=control_limits,
             )
             u[:, 0] = np.clip(
                 u[:, 0],
-                a_min=-CONTROL_LIMITS[0],
-                a_max=CONTROL_LIMITS[0],
+                a_min=-control_limits[0],
+                a_max=control_limits[0],
             )
             u[:, 1] = np.clip(
                 u[:, 1],
-                a_min=-CONTROL_LIMITS[1],
-                a_max=CONTROL_LIMITS[1],
+                a_min=-control_limits[1],
+                a_max=control_limits[1],
             )
         total_weight = np.sum(u_weights)
 
@@ -5721,39 +5952,39 @@ def get_control(
             clearance=dynamic_hard_clearance,
             max_steps=dynamic_safety_horizon,
         )
-        if dynamic_summary["collision"]:
-            closest = dynamic_summary["closest"] or {}
-            recovery = find_safe_control_candidate(
-                robot_model=robot_model,
-                initial_state=initial_state,
-                u_nom=u_nom,
-                u_variations=u_var,
-                weights=u_weights,
-                dt=args.tick_time,
-                static_union=static_union,
-                static_clearance=static_collision_clearance,
-                agents=agents,
-                agent_predictions=agent_predictions,
-                horizon=args.horizon,
-                dynamic_clearance=dynamic_hard_clearance,
-                static_safety_horizon=safety_horizon,
-                dynamic_safety_horizon=dynamic_safety_horizon,
-            )
-            if recovery is not None and recovery.get("safe", False):
-                u = np.asarray(recovery["controls"], dtype=float).copy()
-                print(
-                    "RECOVERY: selected MPPI average intersects a dynamic agent; "
-                    f"using {recovery.get('source')} control "
-                    f"sample={recovery.get('sample_idx')}"
-                )
-            else:
-                print(
-                    "EMERGENCY STOP: Selected MPPI control intersects a dynamic agent "
-                    f"agent={closest.get('agent_id')} step={closest.get('step')} "
-                    f"dist={dynamic_summary['min_distance']:.3f} "
-                    f"threshold={closest.get('threshold'):.3f}"
-                )
-                emergency_stop = True
+        # if dynamic_summary["collision"]:
+        #     closest = dynamic_summary["closest"] or {}
+        #     recovery = find_safe_control_candidate(
+        #         robot_model=robot_model,
+        #         initial_state=initial_state,
+        #         u_nom=u_nom,
+        #         u_variations=u_var,
+        #         weights=u_weights,
+        #         dt=args.tick_time,
+        #         static_union=static_union,
+        #         static_clearance=static_collision_clearance,
+        #         agents=agents,
+        #         agent_predictions=agent_predictions,
+        #         horizon=args.horizon,
+        #         dynamic_clearance=dynamic_hard_clearance,
+        #         static_safety_horizon=safety_horizon,
+        #         dynamic_safety_horizon=dynamic_safety_horizon,
+        #     )
+        #     if recovery is not None and recovery.get("safe", False):
+        #         u = np.asarray(recovery["controls"], dtype=float).copy()
+        #         print(
+        #             "RECOVERY: selected MPPI average intersects a dynamic agent; "
+        #             f"using {recovery.get('source')} control "
+        #             f"sample={recovery.get('sample_idx')}"
+        #         )
+        #     else:
+        #         print(
+        #             "EMERGENCY STOP: Selected MPPI control intersects a dynamic agent "
+        #             f"agent={closest.get('agent_id')} step={closest.get('step')} "
+        #             f"dist={dynamic_summary['min_distance']:.3f} "
+        #             f"threshold={closest.get('threshold'):.3f}"
+        #         )
+        #         emergency_stop = True
         control_timing["dynamic_final_check"] = perf_counter() - section_start
 
     if emergency_stop:
@@ -5761,8 +5992,8 @@ def get_control(
         fallback_steer = float(u_nom[0, 1]) if u_nom is not None else 0.0
         fallback_steer = np.clip(
             fallback_steer,
-            -CONTROL_LIMITS[1],
-            CONTROL_LIMITS[1],
+            -control_limits[1],
+            control_limits[1],
         )
         u[0] = [
             -initial_state[ActorStateEnum.VELOCITY] / args.tick_time,
@@ -6082,6 +6313,14 @@ def simulate(args, delivery_log=None):
     dynamic_clearance_margin = mppi_dynamic_clearance_margin(
         robot, args.dynamic_clearance_margin
     )
+    control_limits = scene_control_limits(robot)
+    control_variation_limits = np.asarray(
+        [
+            scene_linear_acceleration(CONTROL_VARIATION_LIMITS[0], robot),
+            float(CONTROL_VARIATION_LIMITS[1]),
+        ],
+        dtype=float,
+    )
     static_clearance_margin = mppi_static_clearance_margin(
         robot, args.static_clearance_margin
     )
@@ -6107,8 +6346,8 @@ def simulate(args, delivery_log=None):
         vehicle_width=robot.W,
         samples=MPPI_SAMPLES,
         seed=args.seed,
-        u_limits=CONTROL_LIMITS,
-        u_dist_limits=CONTROL_VARIATION_LIMITS,
+        u_limits=control_limits,
+        u_dist_limits=control_variation_limits,
         M=args.mppi_m,
         Q=Q,
         Qf=Qf,
@@ -6164,9 +6403,11 @@ def simulate(args, delivery_log=None):
                 debug_dir=debug_dir,
                 debug_top_k=args.discrete_oce_debug_top_k,
             )
+            reset_experiment_logs(args.experiment_log_dir)
 
     action = None
     previous_ego_state = np.asarray(sim.ego.x[: ActorStateEnum.DELTA], dtype=float)
+    robot_distance_traveled = 0.0
     u = None
     stable_nominal_route = None
     stable_nominal_goal = None
@@ -6187,20 +6428,28 @@ def simulate(args, delivery_log=None):
                     return
             timing["events"] = perf_counter() - section_start
 
-        applied_action = action
         section_start = perf_counter()
-        observation, reward, done, info = sim.tick(action=applied_action)
+        observation, reward, done, info = sim.tick(action=action)
         timing["tick"] = perf_counter() - section_start
         current_ego_state = np.asarray(
             info["ego"]["pos"][: ActorStateEnum.DELTA],
             dtype=float,
         )
-        if getattr(args, "debug_steering", False) and applied_action is not None:
+        if current_ego_state.size >= 2 and previous_ego_state.size >= 2:
+            robot_distance_traveled += float(
+                np.linalg.norm(current_ego_state[:2] - previous_ego_state[:2])
+            )
+        robot_speed = (
+            float(current_ego_state[ActorStateEnum.VELOCITY])
+            if current_ego_state.size > ActorStateEnum.VELOCITY
+            else np.nan
+        )
+        if getattr(args, "debug_steering", False) and action is not None:
             print_applied_steering_debug(
                 tick=sim.ticks,
                 previous_state=previous_ego_state,
                 current_state=current_ego_state,
-                action=applied_action,
+                action=action,
                 dt=args.tick_time,
                 vehicle_length=sim.ego.length,
             )
@@ -6222,7 +6471,7 @@ def simulate(args, delivery_log=None):
                 active_agent_ids = [
                     actor["id"]
                     for actor in info["actors"]
-                    if "id" in actor and actor.get("tracked", True)
+                    if "id" in actor and bool(actor.get("tracked", False))
                 ]
                 append_experiment_logs(
                     args.experiment_log_dir,
@@ -6231,6 +6480,11 @@ def simulate(args, delivery_log=None):
                     actors=info["actors"],
                     tracker=discrete_oce_tracker,
                     sdd_models=sdd_models,
+                    prefix=args.prefix,
+                    experiment=args.experiment,
+                    method=args.method,
+                    robot_speed=robot_speed,
+                    robot_distance_traveled=robot_distance_traveled,
                 )
                 occupancy_horizon = build_transition_occupancy_horizon(
                     tracker=discrete_oce_tracker,
@@ -6378,90 +6632,113 @@ def simulate(args, delivery_log=None):
         control_trajectory = cached_control_trajectory
         oce_entropies = cached_oce_entropies
         timing["oce_eval"] = 0.0
-        if should_replan_routes and args.use_oce_trajectory_eval:
-            section_start = perf_counter()
-            if args.oce_eval_method == "discrete":
-                best_trajectory, oce_entropies, _oce_results = (
-                    evaluate_candidate_paths_by_discrete_oce(
+        if should_replan_routes:
+            if args.method == "oce":
+                section_start = perf_counter()
+                _oce_results = None
+                if args.oce_eval_method == "discrete":
+                    best_trajectory, oce_entropies, _oce_results = (
+                        evaluate_candidate_paths_by_discrete_oce(
+                            time_step=sim.ticks,
+                            paths=[path["path"] for path in paths],
+                            tracker=discrete_oce_tracker,
+                            static_polygons=sim.static_polygons,
+                            horizon=args.discrete_oce_horizon or args.horizon,
+                            method=args.discrete_oce_method,
+                            scan_range=SCAN_RANGE,
+                            backend=args.discrete_oce_backend,
+                            return_debug_tensors=args.debug_discrete_oce,
+                            debug=args.debug_oce_eval,
+                            occupancy_horizon=occupancy_horizon,
+                        )
+                    )
+                else:
+                    best_trajectory, oce_entropies, _oce_results = (
+                        evaluate_candidate_paths_by_oce(
+                            time_step=sim.ticks,
+                            grid=local_map,
+                            origin=grid_origin,
+                            resolution=grid_resolution,
+                            paths=[path["path"] for path in paths],
+                            agents=visible_agents,
+                            predictions=agent_predictions,
+                            prediction_interval=args.tick_time,
+                            dt=args.tick_time,
+                            debug=args.debug_oce_eval,
+                        )
+                    )
+                timing["oce_eval"] = perf_counter() - section_start
+                if args.debug_oce_eval:
+                    print(
+                        "[oce-eval] "
+                        f"method={args.method} backend={args.oce_eval_method} "
+                        f"tick={sim.ticks} best={best_trajectory} "
+                        f"entropies={np.asarray(oce_entropies).tolist() if oce_entropies is not None else None} "
+                        f"timing={_oce_results['timing'] if isinstance(_oce_results, dict) and 'timing' in _oce_results else None}"
+                    )
+                    if isinstance(_oce_results, dict) and "timing" in _oce_results:
+                        print(f"[oce-eval-detail] {_oce_results['timing']}")
+
+                control_trajectory = choose_control_path_index(
+                    paths,
+                    best_trajectory,
+                    start_heading=start[ActorStateEnum.THETA],
+                    max_heading_error=np.deg2rad(
+                        args.max_control_path_heading_error_deg
+                    ),
+                    debug=args.debug_steering or args.debug_oce_eval,
+                )
+                if args.debug_oce_eval and control_trajectory != best_trajectory:
+                    print(
+                        "[oce-eval] "
+                        f"best_trajectory={best_trajectory} control_trajectory={control_trajectory}"
+                    )
+                cached_best_trajectory = best_trajectory
+                cached_control_trajectory = control_trajectory
+                cached_oce_entropies = oce_entropies
+            elif args.method == "visibility":
+                section_start = perf_counter()
+                best_trajectory, oce_entropies, _visibility_results = (
+                    evaluate_candidate_paths_by_visibility(
                         time_step=sim.ticks,
                         paths=[path["path"] for path in paths],
                         tracker=discrete_oce_tracker,
                         static_polygons=sim.static_polygons,
                         horizon=args.discrete_oce_horizon or args.horizon,
-                        method=args.discrete_oce_method,
                         scan_range=SCAN_RANGE,
-                        backend=args.discrete_oce_backend,
-                        return_debug_tensors=args.debug_discrete_oce,
-                        debug=args.debug_oce_eval,
                         occupancy_horizon=occupancy_horizon,
-                    )
-                )
-            else:
-                best_trajectory, oce_entropies, _oce_results = (
-                    evaluate_candidate_paths_by_oce(
-                        time_step=sim.ticks,
-                        grid=local_map,
-                        origin=grid_origin,
-                        resolution=grid_resolution,
-                        paths=[path["path"] for path in paths],
-                        agents=visible_agents,
-                        predictions=agent_predictions,
-                        prediction_interval=args.tick_time,
-                        dt=args.tick_time,
                         debug=args.debug_oce_eval,
                     )
                 )
-            timing["oce_eval"] = perf_counter() - section_start
-            if args.debug_oce_eval:
-                print(
-                    "[oce-eval] "
-                    f"method={args.oce_eval_method} "
-                    f"tick={sim.ticks} best={best_trajectory} "
-                    f"entropies={np.asarray(oce_entropies).tolist() if oce_entropies is not None else None}"
+                timing["oce_eval"] = perf_counter() - section_start
+                control_trajectory = choose_control_path_index(
+                    paths,
+                    best_trajectory,
+                    start_heading=start[ActorStateEnum.THETA],
+                    max_heading_error=np.deg2rad(
+                        args.max_control_path_heading_error_deg
+                    ),
+                    debug=args.debug_steering or args.debug_oce_eval,
                 )
-                if isinstance(_oce_results, dict) and "timing" in _oce_results:
-                    print(f"[oce-eval-detail] {_oce_results['timing']}")
-
-            # BUGBUG - temporarily disable OCE-based path selection to evaluate MPPI performance without OCE overhead
-            best_trajectory = 0
-
-            control_trajectory = choose_control_path_index(
-                paths,
-                best_trajectory,
-                start_heading=start[ActorStateEnum.THETA],
-                max_heading_error=np.deg2rad(args.max_control_path_heading_error_deg),
-                debug=args.debug_steering or args.debug_oce_eval,
-            )
-            if args.debug_oce_eval and control_trajectory != best_trajectory:
-                print(
-                    "[oce-eval] "
-                    f"best_trajectory={best_trajectory} control_trajectory={control_trajectory}"
-                )
-            cached_best_trajectory = best_trajectory
-            cached_control_trajectory = control_trajectory
-            cached_oce_entropies = oce_entropies
-        elif should_replan_routes:
-            best_trajectory = 0
-            control_trajectory = choose_control_path_index(
-                paths,
-                best_trajectory,
-                start_heading=start[ActorStateEnum.THETA],
-                max_heading_error=np.deg2rad(args.max_control_path_heading_error_deg),
-                debug=args.debug_steering or args.debug_oce_eval,
-            )
-            cached_best_trajectory = best_trajectory
-            cached_control_trajectory = control_trajectory
-            cached_oce_entropies = None
-        else:
-            best_trajectory = int(np.clip(best_trajectory, 0, len(paths) - 1))
-            control_trajectory = int(np.clip(control_trajectory, 0, len(paths) - 1))
-            if args.debug_oce_eval:
-                print(
-                    "[oce-eval] "
-                    f"tick={sim.ticks} reused best_trajectory={best_trajectory} "
-                    f"control_trajectory={control_trajectory} "
-                    f"next_replan_tick={next_route_replan_tick}"
-                )
+                if args.debug_oce_eval:
+                    print(
+                        "[path-eval] "
+                        f"method={args.method} tick={sim.ticks} "
+                        f"best={best_trajectory} control_trajectory={control_trajectory} "
+                        f"scores={np.asarray(oce_entropies).tolist() if oce_entropies is not None else None} "
+                        f"timing={_visibility_results['timing'] if isinstance(_visibility_results, dict) and 'timing' in _visibility_results else None}"
+                    )
+                cached_best_trajectory = best_trajectory
+                cached_control_trajectory = control_trajectory
+                cached_oce_entropies = oce_entropies
+            elif args.method == "none":
+                best_trajectory = 0
+                control_trajectory = 0
+                cached_best_trajectory = best_trajectory
+                cached_control_trajectory = control_trajectory
+                cached_oce_entropies = None
+            else:
+                raise ValueError(f"Invalid method: {args.method}")
 
         section_start = perf_counter()
         u, trajectories, trajectory_weights = get_control(
@@ -6480,6 +6757,7 @@ def simulate(args, delivery_log=None):
             args=args,
             debug_tick=sim.ticks,
             occupancy_horizon=occupancy_horizon,
+            discrete_oce_tracker=discrete_oce_tracker,
         )
         timing["control"] = perf_counter() - section_start
 
@@ -6527,6 +6805,9 @@ def simulate(args, delivery_log=None):
                 sim.ticks,
                 timing,
                 getattr(args, "_last_control_timing", {}),
+                prefix=args.prefix,
+                experiment=args.experiment,
+                method=args.method,
                 actors=len(info["actors"]),
                 visible_actors=len(visible_agents),
             )
@@ -6604,6 +6885,38 @@ def write_profile_report(
         filtered_stats.strip_dirs().sort_stats(sort_by).print_stats(limit)
 
     report_output.write_text(stream.getvalue())
+
+
+def validate_args(args):
+    method = str(getattr(args, "method", "oce")).strip().lower()
+    if method == "vis":
+        method = "visibility"
+    if method not in {"oce", "visibility", "none"}:
+        raise ValueError(
+            "--method must be one of {'oce', 'visibility', 'vis', 'none'}."
+        )
+    args.method = method
+
+    if (
+        args.method == "oce"
+        and args.oce_eval_method == "discrete"
+        and args.data_source != "sdd"
+    ):
+        raise ValueError("Discrete OCE evaluation requires --data-source sdd.")
+    if args.method == "oce" and not args.use_oce_trajectory_eval:
+        raise ValueError("--method oce requires --use-oce-trajectory-eval.")
+    if args.discrete_oce_horizon is not None and args.discrete_oce_horizon <= 0:
+        raise ValueError("--discrete-oce-horizon must be positive or None.")
+    if (
+        args.max_control_path_heading_error_deg < 0.0
+        or args.max_control_path_heading_error_deg > 180.0
+    ):
+        raise ValueError("--max-control-path-heading-error-deg must be in [0, 180].")
+
+    args.robot_speed = max(0.1, args.robot_speed)
+    args.robot_acceleration = max(0.1, args.robot_acceleration)
+
+    return args
 
 
 if __name__ == "__main__":
@@ -6706,6 +7019,22 @@ if __name__ == "__main__":
         "--max-time", default=None, type=float, help="Maximum Length of Simulation"
     )
     argparser.add_argument(
+        "--experiment",
+        default=0,
+        type=int,
+        help="Experiment identifier for this parameter set, excluding method.",
+    )
+    argparser.add_argument(
+        "--method",
+        choices=["oce", "visibility", "vis", "none"],
+        default="oce",
+        help=(
+            "Experiment method selector. 'oce' uses the configured trajectory "
+            "evaluation backend, 'visibility'/'vis' uses the visibility selector, "
+            "and 'none' always selects path 0."
+        ),
+    )
+    argparser.add_argument(
         "--record-data", action="store_true", help="Record data to disk as frames"
     )
     argparser.add_argument(
@@ -6738,9 +7067,7 @@ if __name__ == "__main__":
     argparser.add_argument(
         "--experiment-log-dir",
         default=None,
-        help=(
-            "Write target class-identification experiment CSVs into this directory."
-        ),
+        help=("Write target class-identification experiment CSVs into this directory."),
     )
     argparser.add_argument(
         "--debug-mppi",
@@ -6789,6 +7116,24 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Discrete OCE evaluation horizon. Defaults to --horizon.",
+    )
+    argparser.add_argument(
+        "--discrete-oce-max-states",
+        type=int,
+        default=384,
+        help=(
+            "Maximum high-probability HMM states used by MPPI discrete OCE scoring. "
+            "Use 0 to score the full transition grid."
+        ),
+    )
+    argparser.add_argument(
+        "--discrete-oce-state-probability-floor",
+        type=float,
+        default=1.0e-4,
+        help=(
+            "Minimum predicted state probability included before applying "
+            "--discrete-oce-max-states."
+        ),
     )
     argparser.add_argument(
         "--debug-discrete-oce",
@@ -6929,6 +7274,12 @@ if __name__ == "__main__":
         default=ROBOT_SPEED,
         type=float,
         help="Speed of the robot (m/s)",
+    )
+    argparser.add_argument(
+        "--robot-acceleration",
+        default=ROBOT_ACCELERATION,
+        type=float,
+        help="Acceleration of the robot (m/s^2)",
     )
     argparser.add_argument(
         "--steering-heading-gain",
@@ -7468,5 +7819,7 @@ if __name__ == "__main__":
     )
 
     args = argparser.parse_args()
+
+    args = validate_args(args)
 
     run_with_optional_profile(args)

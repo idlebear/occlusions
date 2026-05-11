@@ -508,7 +508,9 @@ class Simulation:
 
         target_keys = set()
         if targets_of_interest is not None:
-            target_keys = {self._track_key(track_id) for track_id in targets_of_interest}
+            target_keys = {
+                self._track_key(track_id) for track_id in targets_of_interest
+            }
 
         if limit_tracks >= raw_track_count:
             selected_items = track_items
@@ -518,7 +520,9 @@ class Simulation:
                 item for item in track_items if self._track_key(item[0]) in target_keys
             ]
             remainder_items = [
-                item for item in track_items if self._track_key(item[0]) not in target_keys
+                item
+                for item in track_items
+                if self._track_key(item[0]) not in target_keys
             ]
             random_fill_count = max(0, limit_tracks - len(target_items))
             random_fill_count = min(random_fill_count, len(remainder_items))
@@ -754,13 +758,13 @@ class Simulation:
 
     def _draw_actor(self, actor, draw_extent=True):
         actor_image = actor.get_image()
-        if draw_extent:
-            # Draw the ego-center exclusion radius used by MPPI clearance checks.
-            self.window.draw_circle(
-                actor.x[:2],
-                colour=actor.colour,
-                radius=self._actor_centerline_exclusion_radius(actor),
-            )
+        # if draw_extent:
+        #     # Draw the ego-center exclusion radius used by MPPI clearance checks.
+        #     self.window.draw_circle(
+        #         actor.x[:2],
+        #         colour=(173, 216, 240, 20),
+        #         radius=self._actor_centerline_exclusion_radius(actor),
+        #     )
         if actor_image is not None:
             actor_pos = actor.get_pos()
             # drawing with y inverted reverse the rotation to correct the display

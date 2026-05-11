@@ -3,16 +3,18 @@ from numpy import pi as PI
 # --------------------------------------------------------------------------------
 # ROBOT parameters
 # --------------------------------------------------------------------------------
+ROBOT_MAX_SPEED = 2.5
 ROBOT_SPEED = 0.5
+ROBOT_MAX_ACCELERATION = 1.0
 ROBOT_ACCELERATION = 0.5
 ROBOT_RADIUS = 0.35
 ROBOT_MAX_STEER = PI / 3.0
-CONTROL_LIMITS = [1.5, ROBOT_MAX_STEER]
+CONTROL_LIMITS = [ROBOT_MAX_ACCELERATION, ROBOT_MAX_STEER]
 CONTROL_VARIATION_LIMITS = [
-    1.5,
+    ROBOT_MAX_ACCELERATION,
     ROBOT_MAX_STEER,
 ]
-MPPI_SAMPLES = 5000
+MPPI_SAMPLES = 500
 
 # --------------------------------------------------------------------------------
 # DEBUG flags
