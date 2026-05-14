@@ -1106,6 +1106,15 @@ class Simulation:
         info["ego"] = self.ego.get_state()
         info["goal"] = self.ego.goal
         info["time"] = self.sim_time
+        info["scan"] = {
+            "ranges": np.asarray(
+                getattr(self, "scan_data", []), dtype=np.float32
+            ).copy(),
+            "valid": bool(getattr(self, "last_scan_valid", False)),
+            "angle_min": SCAN_START_ANGLE,
+            "angle_inc": SCAN_ANGLE_INCREMENT,
+            "max_range": SCAN_RANGE,
+        }
 
         actor_states = []
         for actor in self.actor_list:
@@ -1153,6 +1162,7 @@ class Simulation:
 
         # create the scan of the environment
         if not self.enable_scan:
+            self.last_scan_valid = False
             finish_scan_timing(
                 polygon_count=0,
                 vertex_count=0,
@@ -1164,6 +1174,7 @@ class Simulation:
         load_polycheck()
         mark_scan_timing("load_polycheck")
         if faux_scan is None:
+            self.last_scan_valid = False
             for actor in self.actor_list:
                 actor.set_visible(False)
             mark_scan_timing("visible_update")
@@ -1209,6 +1220,7 @@ class Simulation:
         # clear any rays that didn't hit anything
         scan_data[scan_data == -1] = SCAN_RANGE + 1
         scan_data = scan_data.astype(np.float32)
+        self.last_scan_valid = True
         mark_scan_timing("postprocess")
         finish_scan_timing(
             polygon_count=len(polygons),

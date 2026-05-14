@@ -290,6 +290,35 @@ class HMM:
         self.mode_distribution = self.alphas.sum(axis=1)
         self.state_distribution = self.alphas.sum(axis=0)
 
+    def forward_step_with_state_likelihood(self, state_likelihood, steps=1):
+        state_likelihood = np.asarray(state_likelihood, dtype=float).reshape(-1)
+        assert state_likelihood.shape == (self.num_states,)
+
+        next_alphas = np.zeros((self.num_modes, self.num_states), dtype=float)
+        if self.alphas is None:
+            for mode in range(self.num_modes):
+                prediction = self.state_distribution @ self.get_transition_matrix(
+                    mode=mode, exp=steps
+                )
+                next_alphas[mode] = (
+                    self.mode_distribution[mode] * state_likelihood * prediction
+                )
+        else:
+            for mode in range(self.num_modes):
+                next_alphas[mode] = state_likelihood * (
+                    self.alphas[mode] @ self.get_transition_matrix(mode=mode, exp=steps)
+                )
+
+        global_scaler = float(next_alphas.sum())
+        if global_scaler <= 1.0e-12:
+            self._predict_without_observation(steps=steps)
+            return False
+
+        self.alphas = next_alphas / global_scaler
+        self.mode_distribution = self.alphas.sum(axis=1)
+        self.state_distribution = self.alphas.sum(axis=0)
+        return True
+
     def viterbi_algorithm(self, mode: int, observations: List[int]) -> List[int]:
         """
         Applies the Viterbi algorithm to find the most likely sequence of hidden states given a sequence of observations.

@@ -17,6 +17,8 @@ from config import (
     ROBOT_MAX_SPEED,
     MIN_SEPARATION,
     SCAN_RANGE,
+    SCAN_START_ANGLE,
+    SCAN_ANGLE_INCREMENT,
     GRID_RESOLUTION,
     GENERATOR_ARGS,
     FINAL_X_WEIGHT,
@@ -1341,6 +1343,7 @@ TIMING_CSV_FIELDS = [
     "prefix",
     "experiment",
     "method",
+    "hw",
     "tick",
     "actors",
     "visible_actors",
@@ -1372,27 +1375,34 @@ def log_token(value, default="run"):
     return text.strip("._-") or str(default)
 
 
-def experiment_method_stem(*, experiment=0, method="", prefix=None):
+def experiment_method_stem(*, experiment=0, method="", prefix=None, hw=None):
     parts = []
     if prefix is not None and str(prefix).strip():
         parts.append(log_token(prefix, default="prefix"))
     parts.append(f"{int(experiment)}")
     parts.append(log_token(method, default="method"))
+    if hw is not None and str(hw).strip():
+        parts.append(log_token(hw, default="hw"))
     return "_".join(parts)
 
 
 def experiment_method_log_path(
-    log_dir, suffix, *, experiment=0, method="", prefix=None
+    log_dir, suffix, *, experiment=0, method="", prefix=None, hw=None
 ):
     return (
         Path(log_dir)
-        / f"{experiment_method_stem(experiment=experiment, method=method, prefix=prefix)}_{suffix}.csv"
+        / f"{experiment_method_stem(experiment=experiment, method=method, prefix=prefix, hw=hw)}_{suffix}.csv"
     )
 
 
-def experiment_method_output_path(path, *, experiment=0, method="", prefix=None):
+def experiment_method_output_path(path, *, experiment=0, method="", prefix=None, hw=None):
     path = Path(path)
-    stem = experiment_method_stem(experiment=experiment, method=method, prefix=prefix)
+    stem = experiment_method_stem(
+        experiment=experiment,
+        method=method,
+        prefix=prefix,
+        hw=hw,
+    )
     suffix = path.suffix or ".csv"
     return path.with_name(f"{path.stem}_{stem}{suffix}")
 
@@ -1406,6 +1416,7 @@ def append_timing_csv(
     prefix=None,
     experiment=0,
     method="",
+    hw="",
     actors=0,
     visible_actors=0,
 ):
@@ -1414,6 +1425,7 @@ def append_timing_csv(
         experiment=experiment,
         method=method,
         prefix=prefix,
+        hw=hw,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
@@ -1422,6 +1434,7 @@ def append_timing_csv(
         "prefix": "" if prefix is None else str(prefix),
         "experiment": int(experiment),
         "method": str(method),
+        "hw": str(hw),
         "tick": int(tick),
         "actors": int(actors),
         "visible_actors": int(visible_actors),
@@ -1478,6 +1491,7 @@ def experiment_target_fieldnames(class_ids):
         "prefix",
         "experiment",
         "method",
+        "hw",
         "tick",
         "time_s",
         "track_id",
@@ -1500,6 +1514,7 @@ EXPERIMENT_SUMMARY_FIELDS = [
     "prefix",
     "experiment",
     "method",
+    "hw",
     "tick",
     "time_s",
     "tracked_count",
@@ -1543,6 +1558,7 @@ def append_experiment_logs(
     prefix=None,
     experiment=0,
     method="",
+    hw="",
     robot_speed=np.nan,
     robot_distance_traveled=np.nan,
 ):
@@ -1560,6 +1576,7 @@ def append_experiment_logs(
         experiment=experiment,
         method=method,
         prefix=prefix,
+        hw=hw,
     )
     summary_path = experiment_method_log_path(
         log_dir,
@@ -1567,6 +1584,7 @@ def append_experiment_logs(
         experiment=experiment,
         method=method,
         prefix=prefix,
+        hw=hw,
     )
     track_to_class = {
         str(track_id): int(class_id)
@@ -1606,6 +1624,7 @@ def append_experiment_logs(
             "prefix": "" if prefix is None else str(prefix),
             "experiment": int(experiment),
             "method": str(method),
+            "hw": str(hw),
             "tick": int(tick),
             "time_s": float(time_s),
             "track_id": track_id,
@@ -1629,6 +1648,7 @@ def append_experiment_logs(
         "prefix": "" if prefix is None else str(prefix),
         "experiment": int(experiment),
         "method": str(method),
+        "hw": str(hw),
         "tick": int(tick),
         "time_s": float(time_s),
         "tracked_count": len(tracked_actors),
@@ -1681,25 +1701,172 @@ def evaluate_candidate_paths_by_visibility(
     occupancy_horizon=None,
     debug=False,
 ):
-    """Stub visibility selector.
-
-    Future implementation should compute each candidate's mean visibility over
-    targets of interest and return the path with the highest score. The current
-    stub assigns equal visibility to every path, so argmax selects path 0.
-    """
+    """Select the path with the highest expected grid-based target visibility."""
     if not paths:
-        return 0, None, {"timing": {"backend": "visibility_stub"}}
+        return 0, None, {"timing": {"backend": "visibility_cpu"}}
 
-    scores = np.zeros(len(paths), dtype=float)
+    timing = {"backend": "visibility_cpu", "pack": 0.0, "visibility": 0.0}
+    eval_horizon = max(1, int(1 if horizon is None else horizon))
+    scores = np.zeros(len(paths), dtype=np.float64)
+    target_ids = []
+    target_visibility = np.zeros((len(paths), 0, eval_horizon), dtype=np.float32)
+    step_visibility = np.zeros((len(paths), eval_horizon), dtype=np.float32)
+
+    if tracker is None or not getattr(tracker, "agent_hmms", None):
+        best_trajectory = int(np.argmax(scores))
+        result = {
+            "timing": timing,
+            "target_ids": target_ids,
+            "target_count": 0,
+            "horizon": eval_horizon,
+            "scores": scores.copy(),
+            "target_visibility": target_visibility,
+            "step_visibility": step_visibility,
+        }
+        return best_trajectory, scores, result
+
+    pack_start = perf_counter()
+    if hasattr(tracker, "agent_belief_matrix"):
+        target_ids, _beliefs = tracker.agent_belief_matrix()
+    else:
+        target_ids = list(tracker.agent_hmms.keys())
+    target_ids = list(target_ids)
+    if not target_ids:
+        best_trajectory = int(np.argmax(scores))
+        result = {
+            "timing": timing,
+            "target_ids": target_ids,
+            "target_count": 0,
+            "horizon": eval_horizon,
+            "scores": scores.copy(),
+            "target_visibility": target_visibility,
+            "step_visibility": step_visibility,
+        }
+        timing["pack"] = perf_counter() - pack_start
+        return best_trajectory, scores, result
+
+    if not hasattr(tracker, "agent_mixed_transition_csr"):
+        raise ValueError("Visibility evaluation requires a discrete OCE tracker.")
+    _data, _indices, _indptr, prefix_beliefs = tracker.agent_mixed_transition_csr(
+        target_ids,
+        eval_horizon,
+    )
+    prefix_beliefs = np.asarray(prefix_beliefs, dtype=np.float64)
+    state_centers = np.asarray(tracker.state_centers_sim, dtype=np.float64)
+    target_visibility = np.zeros(
+        (len(paths), len(target_ids), eval_horizon),
+        dtype=np.float32,
+    )
+
+    packed_paths = []
+    for candidate in paths:
+        try:
+            xy = frenet_path_xy(candidate)
+        except AttributeError:
+            xy = np.asarray(candidate, dtype=float)
+            if xy.ndim != 2 or xy.shape[1] < 2:
+                xy = np.zeros((1, 2), dtype=float)
+            else:
+                xy = xy[:, :2]
+        xy = np.asarray(xy, dtype=np.float64)
+        if xy.shape[0] == 0:
+            xy = np.zeros((1, 2), dtype=np.float64)
+        if xy.shape[0] < eval_horizon + 1:
+            pad = np.repeat(xy[-1:, :], eval_horizon + 1 - xy.shape[0], axis=0)
+            xy = np.vstack([xy, pad])
+        else:
+            xy = xy[: eval_horizon + 1]
+        packed_paths.append(xy)
+
+    static_probability_grid = None
+    static_grid_origin = None
+    static_grid_resolution = None
+    if occupancy_horizon is None and hasattr(tracker, "static_occupancy_grid"):
+        static_probability_grid = np.asarray(tracker.static_occupancy_grid, dtype=float)
+        bounds = getattr(tracker, "bounds", {}) or {}
+        static_grid_origin = (
+            float(bounds.get("min_x", 0.0)),
+            float(bounds.get("min_y", 0.0)),
+        )
+        static_grid_resolution = float(getattr(tracker, "cell_size", 1.0))
+    timing["pack"] = perf_counter() - pack_start
+
+    visibility_start = perf_counter()
+    max_range = float(scan_range)
+    for path_idx, path_xy in enumerate(packed_paths):
+        for target_idx, target_id in enumerate(target_ids):
+            target_owner_bit = None
+            if occupancy_horizon is not None:
+                bit_index = occupancy_horizon.agent_bit_indices.get(target_id)
+                if bit_index is None:
+                    bit_index = occupancy_horizon.agent_bit_indices.get(str(target_id))
+                if bit_index is not None:
+                    target_owner_bit = np.uint64(1) << np.uint64(bit_index)
+
+            for step in range(1, eval_horizon + 1):
+                observer = path_xy[step]
+                belief = prefix_beliefs[target_idx, step]
+                if belief.shape[0] != state_centers.shape[0]:
+                    raise ValueError(
+                        "Visibility belief/state shape mismatch: "
+                        f"{belief.shape[0]} beliefs for {state_centers.shape[0]} states."
+                    )
+
+                deltas = state_centers - observer.reshape(1, 2)
+                distances = np.linalg.norm(deltas, axis=1)
+                candidate_states = np.where((belief > 0.0) & (distances <= max_range))[
+                    0
+                ]
+                visible_probability = 0.0
+
+                if occupancy_horizon is not None:
+                    grid_step = min(step, occupancy_horizon.horizon)
+                    probability_grid = occupancy_horizon.probability_grids[grid_step]
+                    owner_mask_grid = occupancy_horizon.owner_mask_grids[grid_step]
+                    origin = occupancy_horizon.origin
+                    resolution = occupancy_horizon.resolution
+                    threshold = occupancy_horizon.visibility_threshold
+                else:
+                    probability_grid = static_probability_grid
+                    owner_mask_grid = None
+                    origin = static_grid_origin
+                    resolution = static_grid_resolution
+                    threshold = 0.5
+
+                for state_idx in candidate_states:
+                    state_visible = True
+                    if probability_grid is not None:
+                        state_visible = not line_is_occluded_by_occupancy(
+                            start=observer,
+                            end=state_centers[state_idx],
+                            probability_grid=probability_grid,
+                            owner_mask_grid=owner_mask_grid,
+                            target_owner_bit=target_owner_bit,
+                            origin=origin,
+                            resolution=resolution,
+                            threshold=threshold,
+                        )
+                    if state_visible:
+                        visible_probability += float(belief[state_idx])
+
+                target_visibility[path_idx, target_idx, step - 1] = float(
+                    visible_probability
+                )
+
+    step_visibility = np.mean(target_visibility, axis=1, dtype=np.float64).astype(
+        np.float32
+    )
+    scores = np.mean(step_visibility, axis=1, dtype=np.float64)
+    timing["visibility"] = perf_counter() - visibility_start
     best_trajectory = int(np.argmax(scores))
     result = {
-        "timing": {"backend": "visibility_stub"},
-        "target_count": (
-            0
-            if tracker is None or getattr(tracker, "agent_hmms", None) is None
-            else len(tracker.agent_hmms)
-        ),
-        "horizon": None if horizon is None else int(horizon),
+        "timing": timing,
+        "target_ids": target_ids,
+        "target_count": len(target_ids),
+        "horizon": eval_horizon,
+        "scores": scores.copy(),
+        "target_visibility": target_visibility,
+        "step_visibility": step_visibility,
     }
     if debug:
         print(
@@ -1915,7 +2082,76 @@ class DiscreteOCETracker:
         hmm.alphas = np.zeros((hmm.num_modes, hmm.num_states), dtype=float)
         hmm.alphas[:, observation_state] = hmm.mode_distribution
 
-    def update(self, actors, tick):
+    def _scan_observed_empty_states(self, ego, scan):
+        if ego is None or scan is None:
+            return None
+
+        if isinstance(scan, dict):
+            if not bool(scan.get("valid", True)):
+                return None
+            ranges = scan.get("ranges")
+            angle_min = float(scan.get("angle_min", SCAN_START_ANGLE))
+            angle_inc = float(scan.get("angle_inc", SCAN_ANGLE_INCREMENT))
+            max_range = float(scan.get("max_range", SCAN_RANGE))
+        else:
+            ranges = scan
+            angle_min = SCAN_START_ANGLE
+            angle_inc = SCAN_ANGLE_INCREMENT
+            max_range = SCAN_RANGE
+
+        ranges = np.asarray(ranges, dtype=float).reshape(-1)
+        if ranges.size == 0 or angle_inc <= 0.0 or max_range <= 0.0:
+            return None
+
+        ego_pos = ego.get("pos") if isinstance(ego, dict) else ego
+        ego_pos = np.asarray(ego_pos, dtype=float).reshape(-1)
+        if ego_pos.size < 2:
+            return None
+        ego_xy = ego_pos[:2]
+        ego_theta = (
+            float(ego_pos[ActorStateEnum.THETA])
+            if ego_pos.size > ActorStateEnum.THETA
+            else 0.0
+        )
+
+        deltas = self.state_centers_sim - ego_xy.reshape(1, 2)
+        distances = np.linalg.norm(deltas, axis=1)
+        bearings = np.arctan2(deltas[:, 1], deltas[:, 0]) - ego_theta
+        fov = angle_inc * float(ranges.size)
+        relative = bearings - angle_min
+        if fov >= 2.0 * np.pi - angle_inc:
+            relative = np.mod(relative, fov)
+            in_fov = np.ones(self.num_states, dtype=bool)
+        else:
+            in_fov = (relative >= 0.0) & (relative < fov)
+
+        ray_indices = np.floor(relative / angle_inc).astype(np.int64)
+        ray_indices = np.clip(ray_indices, 0, ranges.size - 1)
+        ray_ranges = ranges[ray_indices]
+        ray_ranges = np.where(np.isfinite(ray_ranges), ray_ranges, 0.0)
+        ray_ranges = np.where(ray_ranges < 0.0, max_range, ray_ranges)
+        ray_ranges = np.minimum(ray_ranges, max_range)
+
+        empty_margin = max(0.0, 0.25 * self.cell_size)
+        return in_fov & (distances <= max_range) & (
+            distances + empty_margin < ray_ranges
+        )
+
+    def _apply_missed_observation(self, hmm, observed_empty_states):
+        if observed_empty_states is None:
+            hmm.forward_step(observation=None, steps=1)
+            return
+
+        observed_empty_states = np.asarray(observed_empty_states, dtype=bool)
+        if observed_empty_states.shape != (self.num_states,):
+            hmm.forward_step(observation=None, steps=1)
+            return
+
+        state_likelihood = np.ones(self.num_states, dtype=float)
+        state_likelihood[observed_empty_states] = 0.0
+        hmm.forward_step_with_state_likelihood(state_likelihood, steps=1)
+
+    def update(self, actors, tick, ego=None, scan=None):
         visible_observations = {}
         for actor in actors:
             if not actor.get("tracked", True):
@@ -1936,9 +2172,10 @@ class DiscreteOCETracker:
                 )
             self.agent_last_observed[agent_id] = int(tick)
 
+        observed_empty_states = self._scan_observed_empty_states(ego, scan)
         for agent_id, hmm in self.agent_hmms.items():
             if agent_id not in visible_observations:
-                hmm.forward_step(observation=None, steps=1)
+                self._apply_missed_observation(hmm, observed_empty_states)
 
         if self.debug_dir is not None:
             self.write_debug(tick)
@@ -2187,7 +2424,12 @@ def evaluate_candidate_paths_by_discrete_oce(
     eval_horizon = max(1, int(horizon))
     backend = str(backend or "auto").lower()
 
-    if backend in {"auto", "gpu"} and evaluate_discrete_oce_gpu is not None:
+    gpu_supported_methods = {"discrete_exact_entropy", "exact", "approximate_entropy", "approximate"}
+    if (
+        backend in {"auto", "gpu"}
+        and evaluate_discrete_oce_gpu is not None
+        and str(method).lower() in gpu_supported_methods
+    ):
         gpu_start = perf_counter()
         try:
             pack_start = perf_counter()
@@ -2235,6 +2477,7 @@ def evaluate_candidate_paths_by_discrete_oce(
             result = evaluate_discrete_oce_gpu(
                 paths=packed_paths,
                 state_centers=tracker.state_centers_sim,
+                state_coords=tracker.state_grid_indices,
                 static_grid=gpu_static_grid,
                 grid_origin=gpu_grid_origin,
                 grid_resolution=gpu_grid_resolution,
@@ -2262,6 +2505,7 @@ def evaluate_candidate_paths_by_discrete_oce(
                     if occupancy_horizon is not None
                     else 0.25
                 ),
+                entropy_method=method,
             )
             timing["backend"] = getattr(result, "execution_path", "cuda_discrete_exact")
             timing["gpu_total"] = perf_counter() - gpu_start
@@ -2273,8 +2517,35 @@ def evaluate_candidate_paths_by_discrete_oce(
                 "step_e_state": getattr(result, "step_e_state", None),
                 "step_a_state": getattr(result, "step_a_state", None),
                 "step_oc_entropy": getattr(result, "step_oc_entropy", None),
-                "step_state_entropy": getattr(result, "step_state_entropy", None),
+                "step_total_entropy": getattr(result, "step_total_entropy", None),
+                "step_spatial_separation": getattr(
+                    result, "step_spatial_separation", None
+                ),
+                "per_agent_step_entropy": getattr(
+                    result, "per_agent_step_entropy", None
+                ),
+                "per_agent_step_probability": getattr(
+                    result, "per_agent_step_probability", None
+                ),
+                "per_agent_step_e_state": getattr(
+                    result, "per_agent_step_e_state", None
+                ),
+                "per_agent_step_a_state": getattr(
+                    result, "per_agent_step_a_state", None
+                ),
+                "per_agent_step_oc_entropy": getattr(
+                    result, "per_agent_step_oc_entropy", None
+                ),
+                "per_agent_step_total_entropy": getattr(
+                    result, "per_agent_step_total_entropy", None
+                ),
+                "per_agent_step_spatial_separation": getattr(
+                    result, "per_agent_step_spatial_separation", None
+                ),
                 "score_components": getattr(result, "score_components", None),
+                "per_agent_score_components": getattr(
+                    result, "per_agent_score_components", None
+                ),
                 "visibility_tensor": getattr(result, "visibility_tensor", None),
                 "metadata": getattr(result, "metadata", None),
             }
@@ -2302,6 +2573,8 @@ def evaluate_candidate_paths_by_discrete_oce(
                     f"WARNING: discrete OCE GPU unavailable, falling back to CPU: {exc}"
                 )
                 evaluate_candidate_paths_by_discrete_oce._warned_gpu = True
+    elif backend == "gpu" and str(method).lower() not in gpu_supported_methods:
+        raise ValueError(f"Unsupported discrete OCE GPU method: {method}")
 
     static_union = blocking_static_polygon_union(static_polygons)
     path_scores = np.zeros(len(paths), dtype=float)
@@ -2687,6 +2960,44 @@ def waypoint_route_length(route):
     if route.ndim != 2 or route.shape[0] < 2:
         return 0.0
     return float(np.sum(np.linalg.norm(np.diff(route[:, :2], axis=0), axis=1)))
+
+
+def candidate_executable_length(candidate):
+    for key in ("tracked_route", "route"):
+        route = candidate.get(key)
+        if route is not None:
+            length = waypoint_route_length(route)
+            if length > 0.0:
+                return length
+
+    path = candidate.get("path")
+    if path is not None:
+        length = waypoint_route_length(frenet_path_xy(path))
+        if length > 0.0:
+            return length
+
+    return float(candidate.get("length", np.inf))
+
+
+def order_nominal_shortest_candidates(candidates):
+    if not candidates:
+        return []
+
+    enriched = []
+    for index, candidate in enumerate(candidates):
+        length = candidate_executable_length(candidate)
+        candidate["final_length"] = float(length)
+        candidate["length"] = float(length)
+        candidate["nominal"] = False
+        shortest_rank = 0 if candidate.get("is_roadmap_shortest") else 1
+        enriched.append((shortest_rank, length, index, candidate))
+
+    ordered = [
+        candidate
+        for _shortest_rank, _length, _index, candidate in sorted(enriched)
+    ]
+    ordered[0]["nominal"] = True
+    return ordered
 
 
 def route_respects_initial_kinematics(
@@ -3662,7 +3973,13 @@ def select_best_kpath_candidates(candidates, *, k, max_overlap):
             overlaps.append(len(cells & selected_cells) / float(denom))
         return float(max(overlaps)) if overlaps else 0.0
 
-    ordered = sorted(candidates, key=lambda item: item["length"])
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            0 if item.get("is_roadmap_shortest") else 1,
+            candidate_executable_length(item),
+        ),
+    )
     selected = []
     for candidate in ordered:
         overlap = candidate_overlap(candidate, selected)
@@ -5277,9 +5594,11 @@ def generate_k_path_trajectories(
                     "path": path,
                     "route": smoothed_route,
                     "cells": cells,
-                    "length": length,
+                    "grid_length": length,
+                    "length": waypoint_route_length(smoothed_route),
                     "anchor": anchor_cell,
                     "generator": "kpaths",
+                    "is_roadmap_shortest": bool(attempt == 0 and anchor_cell is None),
                 }
             )
             candidate_cells.append(cells)
@@ -5318,6 +5637,7 @@ def generate_k_path_trajectories(
         k=k,
         max_overlap=max_overlap,
     )
+    accepted = order_nominal_shortest_candidates(accepted)
 
     if debug:
         lengths = [round(waypoint_route_length(item["route"]), 3) for item in accepted]
@@ -5459,9 +5779,7 @@ def generate_frenet_trajectories(
         )
 
     if accepted:
-        accepted.sort(
-            key=lambda item: (not item["nominal"], offsets.index(item["offset"]))
-        )
+        accepted = order_nominal_shortest_candidates(accepted)
         if getattr(args, "debug_paths", False) or getattr(
             args, "debug_steering", False
         ):
@@ -5542,48 +5860,54 @@ def generate_trajectories(
     generator = str(getattr(args, "trajectory_generator", "kpaths")).lower()
 
     if generator == "kpaths":
-        return generate_k_path_trajectories(
-            start,
-            end,
-            args,
-            static_polygons=static_polygons,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            vehicle_width=vehicle_width,
-            vehicle_scale=vehicle_scale,
-            max_steer=max_steer,
-            resolution=resolution,
-            occupancy_blocked=occupancy_blocked,
+        return order_nominal_shortest_candidates(
+            generate_k_path_trajectories(
+                start,
+                end,
+                args,
+                static_polygons=static_polygons,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                vehicle_scale=vehicle_scale,
+                max_steer=max_steer,
+                resolution=resolution,
+                occupancy_blocked=occupancy_blocked,
+            )
         )
     elif generator == "specialk":
-        return generate_specialk_trajectories(
-            start,
-            end,
-            args,
-            static_polygons=static_polygons,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            vehicle_width=vehicle_width,
-            vehicle_scale=vehicle_scale,
-            max_steer=max_steer,
-            resolution=resolution,
+        return order_nominal_shortest_candidates(
+            generate_specialk_trajectories(
+                start,
+                end,
+                args,
+                static_polygons=static_polygons,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                vehicle_scale=vehicle_scale,
+                max_steer=max_steer,
+                resolution=resolution,
+            )
         )
     elif generator == "frenet":
-        return generate_frenet_trajectories(
-            start,
-            end,
-            args,
-            static_polygons=static_polygons,
-            display_offset=display_offset,
-            display_diff=display_diff,
-            vehicle_length=vehicle_length,
-            vehicle_width=vehicle_width,
-            vehicle_scale=vehicle_scale,
-            max_steer=max_steer,
-            resolution=resolution,
-            occupancy_blocked=occupancy_blocked,
+        return order_nominal_shortest_candidates(
+            generate_frenet_trajectories(
+                start,
+                end,
+                args,
+                static_polygons=static_polygons,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                vehicle_scale=vehicle_scale,
+                max_steer=max_steer,
+                resolution=resolution,
+                occupancy_blocked=occupancy_blocked,
+            )
         )
     else:
         raise ValueError(f"Unsupported trajectory generator: {generator}")
@@ -6467,7 +6791,12 @@ def simulate(args, delivery_log=None):
             collision_agents = list(info["actors"])
             if discrete_oce_tracker is not None:
                 hmm_update_start = perf_counter()
-                discrete_oce_tracker.update(info["actors"], sim.ticks)
+                discrete_oce_tracker.update(
+                    info["actors"],
+                    sim.ticks,
+                    ego=info.get("ego"),
+                    scan=info.get("scan"),
+                )
                 active_agent_ids = [
                     actor["id"]
                     for actor in info["actors"]
@@ -6483,13 +6812,18 @@ def simulate(args, delivery_log=None):
                     prefix=args.prefix,
                     experiment=args.experiment,
                     method=args.method,
+                    hw=args.hw,
                     robot_speed=robot_speed,
                     robot_distance_traveled=robot_distance_traveled,
                 )
                 occupancy_horizon = build_transition_occupancy_horizon(
                     tracker=discrete_oce_tracker,
                     active_agent_ids=active_agent_ids,
-                    horizon=max(args.horizon, args.discrete_oce_horizon or 0),
+                    horizon=max(
+                        args.horizon,
+                        args.discrete_oce_horizon or 0,
+                        args.visibility_horizon or 0,
+                    ),
                     origin=sim.display_offset,
                     resolution=grid_resolution,
                     rows=grid_rows,
@@ -6704,7 +7038,7 @@ def simulate(args, delivery_log=None):
                         paths=[path["path"] for path in paths],
                         tracker=discrete_oce_tracker,
                         static_polygons=sim.static_polygons,
-                        horizon=args.discrete_oce_horizon or args.horizon,
+                        horizon=args.visibility_horizon,
                         scan_range=SCAN_RANGE,
                         occupancy_horizon=occupancy_horizon,
                         debug=args.debug_oce_eval,
@@ -6808,6 +7142,7 @@ def simulate(args, delivery_log=None):
                 prefix=args.prefix,
                 experiment=args.experiment,
                 method=args.method,
+                hw=args.hw,
                 actors=len(info["actors"]),
                 visible_actors=len(visible_agents),
             )
@@ -6896,6 +7231,21 @@ def validate_args(args):
             "--method must be one of {'oce', 'visibility', 'vis', 'none'}."
         )
     args.method = method
+    requested_hw = getattr(args, "hw", None)
+    hw = requested_hw
+    if hw is None:
+        backend = str(getattr(args, "discrete_oce_backend", "auto")).strip().lower()
+        hw = backend if backend in {"cpu", "gpu"} else "gpu"
+    args.hw = str(hw).strip().lower()
+    if args.hw not in {"cpu", "gpu"}:
+        raise ValueError("--hw must be one of {'cpu', 'gpu'}.")
+    if (
+        args.method == "oce"
+        and args.oce_eval_method == "discrete"
+        and requested_hw is not None
+        and str(args.discrete_oce_backend).lower() == "auto"
+    ):
+        args.discrete_oce_backend = args.hw
 
     if (
         args.method == "oce"
@@ -6907,6 +7257,8 @@ def validate_args(args):
         raise ValueError("--method oce requires --use-oce-trajectory-eval.")
     if args.discrete_oce_horizon is not None and args.discrete_oce_horizon <= 0:
         raise ValueError("--discrete-oce-horizon must be positive or None.")
+    if args.visibility_horizon is not None and args.visibility_horizon <= 0:
+        raise ValueError("--visibility-horizon must be positive or None.")
     if (
         args.max_control_path_heading_error_deg < 0.0
         or args.max_control_path_heading_error_deg > 180.0
@@ -7035,6 +7387,15 @@ if __name__ == "__main__":
         ),
     )
     argparser.add_argument(
+        "--hw",
+        choices=["cpu", "gpu"],
+        default=None,
+        help=(
+            "Hardware identifier for experiment logs. For discrete OCE runs, this "
+            "also resolves --discrete-oce-backend auto to the selected backend."
+        ),
+    )
+    argparser.add_argument(
         "--record-data", action="store_true", help="Record data to disk as frames"
     )
     argparser.add_argument(
@@ -7116,6 +7477,14 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Discrete OCE evaluation horizon. Defaults to --horizon.",
+    )
+    argparser.add_argument(
+        "--visibility-horizon",
+        "--visibility_horizon",
+        dest="visibility_horizon",
+        type=int,
+        default=10,
+        help="Visibility path evaluation horizon. Independent of --horizon.",
     )
     argparser.add_argument(
         "--discrete-oce-max-states",

@@ -171,6 +171,51 @@ def polyline_length(points):
     return float(np.sum(np.linalg.norm(np.diff(points[:, :2], axis=0), axis=1)))
 
 
+def frenet_path_length(path):
+    if path is None:
+        return 0.0
+    points = np.column_stack(
+        [np.asarray(path.x, dtype=float), np.asarray(path.y, dtype=float)]
+    )
+    return polyline_length(points)
+
+
+def candidate_executable_length(candidate):
+    for key in ("tracked_route", "route"):
+        route = candidate.get(key)
+        if route is not None:
+            length = polyline_length(route)
+            if length > 0.0:
+                return length
+
+    length = frenet_path_length(candidate.get("path"))
+    if length > 0.0:
+        return length
+
+    return float(candidate.get("length", np.inf))
+
+
+def order_nominal_shortest_candidates(candidates):
+    if not candidates:
+        return []
+
+    enriched = []
+    for index, candidate in enumerate(candidates):
+        length = candidate_executable_length(candidate)
+        candidate["final_length"] = float(length)
+        candidate["length"] = float(length)
+        candidate["nominal"] = False
+        shortest_rank = 0 if candidate.get("is_roadmap_shortest") else 1
+        enriched.append((shortest_rank, length, index, candidate))
+
+    ordered = [
+        candidate
+        for _shortest_rank, _length, _index, candidate in sorted(enriched)
+    ]
+    ordered[0]["nominal"] = True
+    return ordered
+
+
 def polyline_sample(points, spacing):
     points = np.asarray(dedupe_points(points), dtype=float)
     if points.ndim != 2 or points.shape[0] < 2:
@@ -1803,7 +1848,21 @@ def generate_specialk_trajectories(
     seen_route_cells = []
     centroids = obstacle_centroids(static_polygons)
 
-    for route in routes:
+    route_reasons = list(roadmap_debug.get("reasons", []))
+    route_costs = list(roadmap_debug.get("costs", []))
+    for route_index, route in enumerate(routes):
+        roadmap_reason = (
+            route_reasons[route_index] if route_index < len(route_reasons) else ""
+        )
+        roadmap_cost = (
+            float(route_costs[route_index])
+            if route_index < len(route_costs)
+            else polyline_length(route)
+        )
+        is_roadmap_shortest = route_index == 0 and roadmap_reason in (
+            "shortest",
+            "open",
+        )
         route_cells = route_spatial_cells(route, params)
         states = track_route_with_ackermann(start_state, route, obstacle_union, params)
         source = "tracker"
@@ -1850,7 +1909,13 @@ def generate_specialk_trajectories(
                 "tracked_route": tracked_route,
                 "roadmap_route": route,
                 "cells": cells,
-                "length": polyline_length(route),
+                "roadmap_length": polyline_length(route),
+                "roadmap_cost": roadmap_cost,
+                "roadmap_rank": int(route_index),
+                "roadmap_reason": roadmap_reason,
+                "is_roadmap_shortest": bool(is_roadmap_shortest),
+                "tracked_length": polyline_length(tracked_route),
+                "length": polyline_length(tracked_route),
                 "signature": route_signature(route, centroids),
                 "generator": "specialk",
                 "source": source,
@@ -1859,11 +1924,12 @@ def generate_specialk_trajectories(
         seen_route_cells.append(set(route_cells))
         for cell in set(cells):
             used_cells[cell] = used_cells.get(cell, 0) + 1
-        if len(accepted) >= params.count:
+        if len(accepted) >= params.route_candidates:
             break
 
     if not accepted:
         accepted.append(fallback_forward_candidate(start_state, obstacle_union, params))
+    accepted = order_nominal_shortest_candidates(accepted)
 
     if params.debug:
         elapsed_ms = (perf_counter() - started) * 1000.0
