@@ -546,20 +546,24 @@ def sparse_exact_entropy(
                 legacy_entropy += posterior_entropy * prob
                 a_state += posterior_entropy * prob / total_prob
                 sum_state += belief / total_prob
-            oc_entropy = float(calc_entropy(sum_state))
+            mixed_state_entropy = float(calc_entropy(sum_state))
+            oc_entropy = (
+                float(legacy_entropy / total_prob) if total_prob > TOLERANCE else 0.0
+            )
             result = {
                 "step": step,
                 "entropy": float(legacy_entropy),
                 "oc_entropy": oc_entropy,
-                "state_entropy": oc_entropy,
+                "state_entropy": mixed_state_entropy,
                 "prob": total_prob,
-                "E_state": float(max(0.0, oc_entropy - a_state)),
+                "E_state": float(max(0.0, mixed_state_entropy - a_state)),
                 "A_state": float(a_state),
                 "belief": sum_state,
             }
 
         cumulative_entropy += result["entropy"]
         result["cumulative_entropy"] = float(cumulative_entropy)
+        result["total_entropy"] = float(cumulative_entropy)
         result["mean_entropy"] = float(cumulative_entropy / step)
         results.append(result)
 
@@ -606,24 +610,53 @@ def run_gpu_entropy(
 def cpu_gpu_metric_arrays(
     cpu_results: list[dict], gpu_result
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    def step_values(name: str) -> np.ndarray:
+        values = np.asarray(getattr(gpu_result, name), dtype=float)
+        if values.ndim == 3:
+            return values[0, 0]
+        return values[0]
+
     return {
         "entropy": (
             np.asarray([row["entropy"] for row in cpu_results], dtype=float),
-            np.asarray(gpu_result.step_entropy[0, 0], dtype=float),
+            step_values("step_entropy"),
+        ),
+        "total_entropy": (
+            np.asarray([row["total_entropy"] for row in cpu_results], dtype=float),
+            step_values("step_total_entropy"),
+        ),
+        "oc_entropy": (
+            np.asarray([row["oc_entropy"] for row in cpu_results], dtype=float),
+            step_values("step_oc_entropy"),
+        ),
+        "spatial_separation": (
+            np.asarray(
+                [row.get("spatial_separation", 0.0) for row in cpu_results],
+                dtype=float,
+            ),
+            step_values("step_spatial_separation"),
         ),
         "prob": (
             np.asarray([row["prob"] for row in cpu_results], dtype=float),
-            np.asarray(gpu_result.step_probability[0, 0], dtype=float),
+            step_values("step_probability"),
         ),
         "E_state": (
             np.asarray([row["E_state"] for row in cpu_results], dtype=float),
-            np.asarray(gpu_result.step_e_state[0, 0], dtype=float),
+            step_values("step_e_state"),
         ),
         "A_state": (
             np.asarray([row["A_state"] for row in cpu_results], dtype=float),
-            np.asarray(gpu_result.step_a_state[0, 0], dtype=float),
+            step_values("step_a_state"),
         ),
     }
+
+
+def _gpu_step_value(gpu_result, name: str, idx: int, *, agent: int | None = None) -> float:
+    values = np.asarray(getattr(gpu_result, name), dtype=float)
+    if values.ndim == 3:
+        agent_idx = 0 if agent is None else int(agent)
+        return float(values[0, agent_idx, idx])
+    return float(values[0, idx])
 
 
 def compare_cpu_gpu(cpu_results, gpu_result, rtol: float, atol: float) -> dict:
@@ -911,8 +944,8 @@ def plot_entropy_step(
     axes[1].scatter(target_points[step, 0], target_points[step, 1], s=35, c="#16a085")
     axes[1].scatter(goal_point[0], goal_point[1], s=35, c="#c0392b")
     format_layout_axis(axes[1], scenario)
-    gpu_entropy = float(gpu_result.step_entropy[0, 0, step - 1])
-    gpu_prob = float(gpu_result.step_probability[0, 0, step - 1])
+    gpu_entropy = _gpu_step_value(gpu_result, "step_entropy", step - 1)
+    gpu_prob = _gpu_step_value(gpu_result, "step_probability", step - 1)
     max_belief = float(np.nanmax(grid))
     oce_entropy = float(cpu_row.get("oc_entropy", cpu_row["state_entropy"]))
     e_state = float(cpu_row["E_state"])
@@ -1083,7 +1116,12 @@ def gpu_oce_step_belief(gpu_result, horizon_step: int) -> np.ndarray:
     belief = np.asarray(
         gpu_result.step_belief_sums[0, 0, horizon_step - 1], dtype=float
     )
-    prob = float(gpu_result.step_probability[0, 0, horizon_step - 1])
+    probability_name = (
+        "per_agent_step_probability"
+        if getattr(gpu_result, "per_agent_step_probability", None) is not None
+        else "step_probability"
+    )
+    prob = _gpu_step_value(gpu_result, probability_name, horizon_step - 1, agent=0)
     if prob > TOLERANCE:
         belief = belief / prob
     return belief
@@ -1180,20 +1218,42 @@ def gpu_horizon_rows(
     future_target_states: list[int] | np.ndarray | None = None,
 ) -> list[dict]:
     rows = []
-    horizon = int(gpu_result.step_entropy.shape[2])
+    step_entropy = np.asarray(gpu_result.step_entropy, dtype=float)
+    step_probability = np.asarray(gpu_result.step_probability, dtype=float)
+    step_e_state = np.asarray(gpu_result.step_e_state, dtype=float)
+    step_a_state = np.asarray(gpu_result.step_a_state, dtype=float)
+    step_oc_entropy = np.asarray(gpu_result.step_oc_entropy, dtype=float)
+    step_total_entropy = np.asarray(
+        getattr(
+            gpu_result,
+            "step_total_entropy",
+            np.cumsum(step_entropy, axis=-1),
+        ),
+        dtype=float,
+    )
+    step_spatial_separation = np.asarray(
+        getattr(
+            gpu_result,
+            "step_spatial_separation",
+            np.zeros_like(step_entropy),
+        ),
+        dtype=float,
+    )
+    horizon = int(step_entropy.shape[-1])
+    def path_value(values: np.ndarray, idx: int) -> float:
+        if values.ndim == 3:
+            return float(values[0, 0, idx])
+        return float(values[0, idx])
+
     cumulative_entropy = 0.0
     for idx in range(horizon):
-        entropy = float(gpu_result.step_entropy[0, 0, idx])
-        prob = float(gpu_result.step_probability[0, 0, idx])
-        e_state = float(gpu_result.step_e_state[0, 0, idx])
-        a_state = float(gpu_result.step_a_state[0, 0, idx])
-        oce_entropy = float(
-            getattr(
-                gpu_result,
-                "step_oc_entropy",
-                gpu_result.step_state_entropy,
-            )[0, 0, idx]
-        )
+        entropy = path_value(step_entropy, idx)
+        prob = path_value(step_probability, idx)
+        e_state = path_value(step_e_state, idx)
+        a_state = path_value(step_a_state, idx)
+        oce_entropy = path_value(step_oc_entropy, idx)
+        total_entropy = path_value(step_total_entropy, idx)
+        spatial_separation = path_value(step_spatial_separation, idx)
         visibility = np.asarray(gpu_result.visibility_tensor[0, idx + 1], dtype=float)
         target_visible = None
         if future_target_states is not None:
@@ -1209,11 +1269,12 @@ def gpu_horizon_rows(
                 "visible_state_count": int(np.count_nonzero(visibility > 0.5)),
                 "target_visible": target_visible,
                 "gpu_entropy": entropy,
+                "gpu_total_entropy": total_entropy,
                 "gpu_prob": prob,
                 "gpu_E_state": e_state,
                 "gpu_A_state": a_state,
                 "gpu_oc_entropy": oce_entropy,
-                "gpu_state_entropy": oce_entropy,
+                "gpu_spatial_separation": spatial_separation,
                 "gpu_cumulative_entropy": float(cumulative_entropy),
             }
         )
@@ -1292,10 +1353,10 @@ def plot_simulation_contact_sheet(
         target_visible = float(
             gpu_result.visibility_tensor[0, int(horizon_step), target_state]
         )
-        display_entropy = float(gpu_result.step_entropy[0, 0, idx])
-        display_prob = float(gpu_result.step_probability[0, 0, idx])
-        display_e_state = float(gpu_result.step_e_state[0, 0, idx])
-        display_a_state = float(gpu_result.step_a_state[0, 0, idx])
+        display_entropy = _gpu_step_value(gpu_result, "step_entropy", idx)
+        display_prob = _gpu_step_value(gpu_result, "step_probability", idx)
+        display_e_state = _gpu_step_value(gpu_result, "step_e_state", idx)
+        display_a_state = _gpu_step_value(gpu_result, "step_a_state", idx)
         mass_occ = occluded_belief_mass(
             prefix_beliefs[int(horizon_step)],
             gpu_result.visibility_tensor,
@@ -1320,10 +1381,12 @@ def write_horizon_entropy_csv(path: Path, rows: list[dict]) -> None:
         "visible_state_count",
         "target_visible",
         "gpu_entropy",
+        "gpu_total_entropy",
         "gpu_prob",
         "gpu_E_state",
         "gpu_A_state",
         "gpu_oc_entropy",
+        "gpu_spatial_separation",
         "gpu_cumulative_entropy",
         "cpu_entropy",
         "cpu_prob",
@@ -1360,13 +1423,13 @@ def write_entropy_csv(path: Path, cpu_results, gpu_result) -> None:
                 {
                     "step": row["step"],
                     "cpu_entropy": row["entropy"],
-                    "gpu_entropy": float(gpu_result.step_entropy[0, 0, idx]),
+                    "gpu_entropy": _gpu_step_value(gpu_result, "step_entropy", idx),
                     "cpu_prob": row["prob"],
-                    "gpu_prob": float(gpu_result.step_probability[0, 0, idx]),
+                    "gpu_prob": _gpu_step_value(gpu_result, "step_probability", idx),
                     "cpu_E_state": row["E_state"],
-                    "gpu_E_state": float(gpu_result.step_e_state[0, 0, idx]),
+                    "gpu_E_state": _gpu_step_value(gpu_result, "step_e_state", idx),
                     "cpu_A_state": row["A_state"],
-                    "gpu_A_state": float(gpu_result.step_a_state[0, 0, idx]),
+                    "gpu_A_state": _gpu_step_value(gpu_result, "step_a_state", idx),
                     "cpu_cumulative_entropy": row["cumulative_entropy"],
                 }
             )

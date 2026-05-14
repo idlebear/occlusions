@@ -586,14 +586,14 @@ def _exact_entropy_calc(
 
     Returns:
         dict: A unified entropy result containing:
-            - "entropy": legacy weighted sum of partition entropies
-            - "oc_entropy": entropy of the mixed conditional belief
+            - "entropy": weighted sum of partition entropies
+            - "oc_entropy": normalized conditional entropy, entropy / prob
             - "mode_entropy": mode uncertainty term (0.0 for single-mode methods)
             - "spatial_separation": weighted spatial separation
             - "belief": mixed conditional belief
             - "prob": total occluded probability
             - "A_state": average within-partition entropy
-            - "E_state": oc_entropy - A_state
+            - "E_state": mixed conditional state entropy - A_state
     """
 
     M = len(b_0)
@@ -691,8 +691,9 @@ def _exact_entropy_calc(
                 sum_state += sb / total_prob
                 A_state += entropy / total_prob
 
-    oc_entropy = entropy_fn(sum_state)
-    E_state = max(0.0, oc_entropy - A_state)
+    mixed_state_entropy = entropy_fn(sum_state)
+    E_state = max(0.0, mixed_state_entropy - A_state)
+    oc_entropy = legacy_entropy / total_prob if total_prob > TOLERANCE else 0.0
 
     assert total_prob <= 1.001, "Expected probability exceeds 1.0"
 
@@ -705,7 +706,7 @@ def _exact_entropy_calc(
         "entropy": float(legacy_entropy),
         "oc_entropy": float(oc_entropy),
         # Backward-compatible alias for older callers.
-        "state_entropy": float(oc_entropy),
+        "state_entropy": float(mixed_state_entropy),
         # Single-mode exact entropy has no mode uncertainty term.
         "mode_entropy": 0.0,
         "spatial_separation": float(spatial_separation),
@@ -1130,8 +1131,10 @@ def _exact_entropy(trial, k, P, b, I_s, depth=None, seed=None, **kwargs):
                 "state_entropy": entropy_result["state_entropy"],
                 "mode_entropy": entropy_result["mode_entropy"],
                 "combined_entropy": combined_entropy,
+                "total_entropy": aggregate_entropy,
                 "mean_entropy": aggregate_entropy / step,
                 "cumulative_entropy": aggregate_entropy,
+                "total_combined_entropy": aggregate_combined_entropy,
                 "mean_combined_entropy": aggregate_combined_entropy / step,
                 "cumulative_combined_entropy": aggregate_combined_entropy,
                 "E_state": entropy_result["E_state"],
@@ -1619,14 +1622,14 @@ def _approximate_entropy_calc(
         I_s (np.array): The occluded states.
     Returns:
         dict: A unified entropy result containing:
-            - "entropy": legacy weighted sum of partition entropies
-            - "state_entropy": entropy of the mixed conditional belief
+            - "entropy": weighted sum of partition entropies
+            - "oc_entropy": normalized conditional entropy, entropy / prob
             - "mode_entropy": mode uncertainty term (0.0 for single-mode methods)
             - "spatial_separation": weighted spatial separation
             - "belief": mixed conditional belief
             - "prob": total occluded probability
             - "A_state": average within-partition entropy
-            - "E_state": state_entropy - A_state
+            - "E_state": mixed conditional state entropy - A_state
     """
 
     beliefs = []
@@ -1695,20 +1698,17 @@ def _approximate_entropy_calc(
         sum_state += b / total_prob
         A_state += entropy / total_prob
 
-    oc_entropy = calc_entropy(sum_state)
-    E_state = max(0.0, oc_entropy - A_state)
+    mixed_state_entropy = calc_entropy(sum_state)
+    E_state = max(0.0, mixed_state_entropy - A_state)
+    oc_entropy = legacy_entropy / total_prob if total_prob > TOLERANCE else 0.0
 
     assert total_prob <= 1.001, "Expected probability exceeds 1.0"
-
-    # # normalize the entropy and spatial separation by the total expected probability
-    # approximate_entropy /= total_prob
-    # spatial_separation /= total_prob
 
     return {
         # Legacy entropy is the weighted sum of the partition entropies.
         "entropy": float(legacy_entropy),
         "oc_entropy": float(oc_entropy),
-        "state_entropy": float(oc_entropy),
+        "state_entropy": float(mixed_state_entropy),
         # Single-mode approximate entropy has no mode uncertainty term.
         "mode_entropy": 0.0,
         "spatial_separation": float(spatial_separation),
@@ -1891,8 +1891,10 @@ def _approximate_entropy(trial, k, P, b, I_s, depth=None, seed=None, **kwargs):
                 "state_entropy": step_result["state_entropy"],
                 "mode_entropy": step_result["mode_entropy"],
                 "combined_entropy": combined_entropy,
+                "total_entropy": aggregate_entropy,
                 "mean_entropy": aggregate_entropy / step,
                 "cumulative_entropy": aggregate_entropy,
+                "total_combined_entropy": aggregate_combined_entropy,
                 "mean_combined_entropy": aggregate_combined_entropy / step,
                 "cumulative_combined_entropy": aggregate_combined_entropy,
                 "spatial_separation": spatial_separation,
