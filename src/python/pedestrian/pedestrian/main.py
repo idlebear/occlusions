@@ -111,6 +111,15 @@ from specialk import (
 )
 
 
+DISCRETE_OCE_SCORING_MODES = (
+    "entropy",
+    "oc_entropy",
+    "entropy_plus_information",
+    "oc_entropy_plus_information",
+    "information_only",
+)
+
+
 def blocking_static_polygon_union(static_polygons):
     polygons = []
     for static_polygon in static_polygons or []:
@@ -1375,6 +1384,32 @@ def log_token(value, default="run"):
     return text.strip("._-") or str(default)
 
 
+def experiment_log_method(
+    method,
+    hw,
+    discrete_oce_method=None,
+    discrete_oce_scoring_mode=None,
+):
+    method = str(method or "none").strip().lower()
+    method_label = "vis" if method == "visibility" else method
+    hw_label = str(hw or "cpu").strip().lower()
+    discrete_method = "none"
+    scoring_mode = "none"
+    if method == "oce" and hw_label == "gpu":
+        discrete_method = normalize_discrete_oce_method_for_log(discrete_oce_method)
+        scoring_mode = str(discrete_oce_scoring_mode or "none").strip().lower()
+    return f"{method_label}-{hw_label}-{discrete_method}-{scoring_mode}"
+
+
+def normalize_discrete_oce_method_for_log(discrete_oce_method=None):
+    method = str(discrete_oce_method or "exact").strip().lower()
+    if method in {"discrete_exact_entropy", "exact"}:
+        return "exact"
+    if method in {"approximate_entropy", "approximate"}:
+        return "approximate"
+    return log_token(method, default="none").lower()
+
+
 def experiment_method_stem(*, experiment=0, method="", prefix=None, hw=None):
     parts = []
     if prefix is not None and str(prefix).strip():
@@ -2410,6 +2445,7 @@ def evaluate_candidate_paths_by_discrete_oce(
     return_debug_tensors=False,
     debug=False,
     occupancy_horizon=None,
+    scoring_mode="information_only",
 ):
     if tracker is None or not tracker.agent_hmms or not paths:
         return 0, None, None
@@ -2506,6 +2542,7 @@ def evaluate_candidate_paths_by_discrete_oce(
                     else 0.25
                 ),
                 entropy_method=method,
+                scoring_mode=scoring_mode,
             )
             timing["backend"] = getattr(result, "execution_path", "cuda_discrete_exact")
             timing["gpu_total"] = perf_counter() - gpu_start
@@ -2548,6 +2585,7 @@ def evaluate_candidate_paths_by_discrete_oce(
                 ),
                 "visibility_tensor": getattr(result, "visibility_tensor", None),
                 "metadata": getattr(result, "metadata", None),
+                "scoring_mode": scoring_mode,
             }
             if debug:
                 component_shape = (
@@ -6044,6 +6082,9 @@ def get_control(
                 getattr(args, "debug_discrete_oce", False)
             ),
             "backend": getattr(args, "discrete_oce_backend", "auto"),
+            "scoring_mode": getattr(
+                args, "discrete_oce_scoring_mode", "information_only"
+            ),
         }
 
     section_start = perf_counter()
@@ -6811,7 +6852,7 @@ def simulate(args, delivery_log=None):
                     sdd_models=sdd_models,
                     prefix=args.prefix,
                     experiment=args.experiment,
-                    method=args.method,
+                    method=args.log_method,
                     hw=args.hw,
                     robot_speed=robot_speed,
                     robot_distance_traveled=robot_distance_traveled,
@@ -6984,6 +7025,7 @@ def simulate(args, delivery_log=None):
                             return_debug_tensors=args.debug_discrete_oce,
                             debug=args.debug_oce_eval,
                             occupancy_horizon=occupancy_horizon,
+                            scoring_mode=args.discrete_oce_scoring_mode,
                         )
                     )
                 else:
@@ -7141,7 +7183,7 @@ def simulate(args, delivery_log=None):
                 getattr(args, "_last_control_timing", {}),
                 prefix=args.prefix,
                 experiment=args.experiment,
-                method=args.method,
+                method=args.log_method,
                 hw=args.hw,
                 actors=len(info["actors"]),
                 visible_actors=len(visible_agents),
@@ -7259,6 +7301,23 @@ def validate_args(args):
         raise ValueError("--discrete-oce-horizon must be positive or None.")
     if args.visibility_horizon is not None and args.visibility_horizon <= 0:
         raise ValueError("--visibility-horizon must be positive or None.")
+    args.discrete_oce_method = str(
+        getattr(args, "discrete_oce_method", "discrete_exact_entropy")
+    ).strip().lower()
+    args.discrete_oce_scoring_mode = str(
+        getattr(args, "discrete_oce_scoring_mode", "information_only")
+    ).strip().lower()
+    if args.discrete_oce_scoring_mode not in DISCRETE_OCE_SCORING_MODES:
+        allowed = ", ".join(DISCRETE_OCE_SCORING_MODES)
+        raise ValueError(
+            f"--discrete-oce-scoring-mode must be one of {{{allowed}}}."
+        )
+    args.log_method = experiment_log_method(
+        args.method,
+        args.hw,
+        args.discrete_oce_method,
+        args.discrete_oce_scoring_mode,
+    )
     if (
         args.max_control_path_heading_error_deg < 0.0
         or args.max_control_path_heading_error_deg > 180.0
@@ -7465,6 +7524,17 @@ if __name__ == "__main__":
         "--discrete-oce-method",
         default="discrete_exact_entropy",
         help="Entropy method used by the discrete OCE backend.",
+    )
+    argparser.add_argument(
+        "--discrete-oce-scoring-mode",
+        "--scoring-mode",
+        choices=DISCRETE_OCE_SCORING_MODES,
+        default="information_only",
+        help=(
+            "Path scoring mode for GPU discrete OCE: entropy, oc_entropy, "
+            "entropy_plus_information, oc_entropy_plus_information, or "
+            "information_only."
+        ),
     )
     argparser.add_argument(
         "--discrete-oce-backend",
