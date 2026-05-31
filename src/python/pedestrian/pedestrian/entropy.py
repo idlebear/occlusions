@@ -2181,31 +2181,26 @@ def _kl_divergence(p: np.ndarray, q: np.ndarray) -> float:
     return float(np.sum(p[valid] * (np.log(p[valid]) - np.log(q_safe))))
 
 
-def _jensen_shannon_distance(p: np.ndarray, q: np.ndarray) -> float:
-    """Jensen-Shannon distance between discrete distributions."""
-    p = np.asarray(p, dtype=float)
-    q = np.asarray(q, dtype=float)
-
-    p_sum = p.sum()
-    q_sum = q.sum()
-    if p_sum <= TOLERANCE or q_sum <= TOLERANCE:
-        return 0.0
-
-    p = p / p_sum
-    q = q / q_sum
-    m = 0.5 * (p + q)
-    js_div = 0.5 * _kl_divergence(p, m) + 0.5 * _kl_divergence(q, m)
-    return float(np.sqrt(max(js_div, 0.0)))
+def _canonical_separation_metric(separation_metric: str) -> str:
+    aliases = {
+        "spatial": "geo",
+        "geo": "geo",
+        "jsd": "jsd",
+        "js": "jsd",
+    }
+    try:
+        return aliases[separation_metric]
+    except KeyError:
+        raise ValueError("separation_metric must be 'geo' or 'jsd'") from None
 
 
-def _s_js_disc_partition(mode_dim, mode_partition_results):
+def _js_divergence_partition(mode_dim, mode_partition_results):
     """
-    Partition-local discrete JS separation:
+    Partition-local Jensen-Shannon divergence:
 
-        S_JS^disc(p, k) = (1/2) * sum_{m,n} w_m(p) w_n(p) D_JS(pi_k^{(m,p)}, pi_k^{(n,p)})
+        D_JS(r) = sum_c w_c(r) KL(p_c(. | r) || p_bar(. | r))
 
-    where w_m(p) are posterior mode weights for the partition p and
-    pi_k^{(m,p)} are per-mode state distributions at step k within that partition.
+    where p_bar(. | r) = sum_c w_c(r) p_c(. | r).
     """
     p_part = 0.0
     for w, _, p in mode_partition_results:
@@ -2215,33 +2210,33 @@ def _s_js_disc_partition(mode_dim, mode_partition_results):
         return 0.0, 0.0
 
     mode_post = np.zeros(mode_dim, dtype=float)
-    pi_by_mode = {}
+    state_post_by_mode = {}
     for idx, (w, b, p) in enumerate(mode_partition_results):
         if b is None or p <= TOLERANCE or w <= TOLERANCE:
             continue
         mode_post[idx] = w * p
-        pi_by_mode[idx] = b / p
+        state_post_by_mode[idx] = b / p
 
     post_mass = mode_post.sum()
     if post_mass <= TOLERANCE:
         return 0.0, p_part
     mode_post /= post_mass
 
-    active_modes = [idx for idx in pi_by_mode if mode_post[idx] > TOLERANCE]
+    active_modes = [idx for idx in state_post_by_mode if mode_post[idx] > TOLERANCE]
     if len(active_modes) < 2:
         return 0.0, p_part
 
-    # 0.5 * sum_{m,n} (...) over a symmetric distance equals sum_{m<n} (...)
-    separation = 0.0
-    for i_pos, i_mode in enumerate(active_modes[:-1]):
-        for j_mode in active_modes[i_pos + 1 :]:
-            separation += (
-                mode_post[i_mode]
-                * mode_post[j_mode]
-                * _jensen_shannon_distance(pi_by_mode[i_mode], pi_by_mode[j_mode])
-            )
+    mixture = np.zeros_like(state_post_by_mode[active_modes[0]])
+    for mode_idx in active_modes:
+        mixture += mode_post[mode_idx] * state_post_by_mode[mode_idx]
 
-    return float(separation), p_part
+    separation = 0.0
+    for mode_idx in active_modes:
+        separation += mode_post[mode_idx] * _kl_divergence(
+            state_post_by_mode[mode_idx], mixture
+        )
+
+    return float(max(separation, 0.0)), p_part
 
 
 # mixture probability and mixture final belief for this partition
@@ -2250,8 +2245,9 @@ def _mixture_probability(
     mode_dim,
     mode_partition_results,
     spatial_separation_fn=None,
-    separation_metric="spatial",
+    separation_metric="geo",
 ):
+    separation_metric = _canonical_separation_metric(separation_metric)
     mode_entropy_contribution = 0.0
     state_mix_entropy_contribution = 0.0
     separation_contribution = 0.0
@@ -2281,14 +2277,16 @@ def _mixture_probability(
         state_post_entropy = calc_entropy(state_mix_post)
         state_mix_entropy_contribution = state_post_entropy * p_part
 
-        if separation_metric == "spatial":
+        if separation_metric == "geo":
             if spatial_separation_fn is not None:
                 separation_contribution = spatial_separation_fn(state_mix_post) * p_part
         elif separation_metric == "jsd":
-            s_js_disc, _ = _s_js_disc_partition(mode_dim, mode_partition_results)
-            separation_contribution = s_js_disc * p_part
+            js_divergence, _ = _js_divergence_partition(
+                mode_dim, mode_partition_results
+            )
+            separation_contribution = js_divergence * p_part
         else:
-            raise ValueError("separation_metric must be 'spatial' or 'jsd'")
+            raise ValueError("separation_metric must be 'geo' or 'jsd'")
 
         # Mode posterior for this partition and mode-entropy
         mode_post = np.zeros(mode_dim)
@@ -2320,7 +2318,7 @@ def _combined_partition_exact_calc(
     occ_suffixes_by_mode,
     mode_weights,
     spatial_separation_fn=None,
-    separation_metric="spatial",
+    separation_metric="geo",
     next_sensor_step=0,
     sensing_interval=1,
     planning_speed=1,
@@ -2506,7 +2504,7 @@ def _combined_partition_approximate_calc(
     occ_suffixes_by_mode,
     mode_weights,
     spatial_separation_fn=None,
-    separation_metric="spatial",
+    separation_metric="geo",
     next_sensor_step=0,
     sensing_interval=1,
     planning_speed=1,
@@ -2761,11 +2759,11 @@ def _combined_entropy(
     if not (0.0 <= zeta <= 1.0):
         raise ValueError("alpha + beta must be in [0, 1]")
 
-    separation_metric = kwargs.get("separation_metric", "spatial")
-    if separation_metric not in ("spatial", "jsd"):
-        raise ValueError("separation_metric must be 'spatial' or 'jsd'")
+    separation_metric = _canonical_separation_metric(
+        kwargs.get("separation_metric", "geo")
+    )
 
-    if separation_metric == "spatial":
+    if separation_metric == "geo":
         grid_height = kwargs.get("grid_height", None)
         grid_width = kwargs.get("grid_width", None)
         if grid_height is None or grid_width is None:
@@ -2777,7 +2775,7 @@ def _combined_entropy(
             max_separation = max(max_separation, TOLERANCE)
     else:
         spatial_separation_fn = None
-        max_separation = kwargs.get("max_js_separation", np.sqrt(np.log(2.0)))
+        max_separation = kwargs.get("max_js_separation", np.log(hmm.num_modes))
         max_separation = max(float(max_separation), TOLERANCE)
 
     if mode not in ("exact", "approximate"):
@@ -2835,6 +2833,33 @@ def _combined_entropy(
         else "Combined (Partition Approximate)"
     )
 
+    def _terminal_visible_mode_entropy(step):
+        if not _sensor_active_at_step(
+            step,
+            next_sensor_step=next_sensor_step,
+            sensing_interval=sensing_interval,
+            planning_speed=planning_speed,
+        ):
+            return 0.0, 0.0
+
+        vis_mask = np.clip(1.0 - occ_vectors[step], 0.0, 1.0)
+        if np.sum(vis_mask) <= TOLERANCE:
+            return 0.0, 0.0
+
+        q_c_vis = np.zeros((hmm.num_modes, hmm.num_states), dtype=float)
+        for c, P_cache in P_caches_by_mode.items():
+            q_c_vis[c] = mode_weights[c] * (b0 @ P_cache[step]) * vis_mask
+
+        q_vis = np.sum(q_c_vis, axis=0)
+        visible_mode_entropy = 0.0
+        for state_mass, mode_joint in zip(q_vis, q_c_vis.T):
+            if state_mass <= TOLERANCE:
+                continue
+            mode_post = mode_joint / state_mass
+            visible_mode_entropy += state_mass * calc_entropy(mode_post)
+
+        return float(visible_mode_entropy), float(np.sum(q_vis))
+
     results = []
     agg_combined = 0.0
     for step in range(1, k + 1):
@@ -2851,10 +2876,12 @@ def _combined_entropy(
             sensing_interval=sensing_interval,
             planning_speed=planning_speed,
         )
+        visible_mode_entropy, _ = _terminal_visible_mode_entropy(step)
+        mode_entropy = entropy_result["mode_entropy"] + visible_mode_entropy
 
         # Normalize entropies before combining
         norm_state_H = entropy_result["entropy"] / max_state_entropy
-        norm_mode_H = entropy_result["mode_entropy"] / max_mode_entropy
+        norm_mode_H = mode_entropy / max_mode_entropy
         norm_separation = entropy_result["spatial_separation"] / max_separation
 
         combined = (
@@ -2873,7 +2900,7 @@ def _combined_entropy(
                     "oc_entropy", entropy_result["state_entropy"]
                 ),
                 "state_entropy": entropy_result["state_entropy"],
-                "mode_entropy": entropy_result["mode_entropy"],
+                "mode_entropy": mode_entropy,
                 "spatial_separation": entropy_result["spatial_separation"],
                 "belief": entropy_result["belief"],
                 "A_state": entropy_result["A_state"],
