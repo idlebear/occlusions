@@ -4197,6 +4197,12 @@ def hybrid_states_collision_free(
     return True
 
 
+def resolve_hybrid_goal_tolerance(goal_tolerance, resolution):
+    if goal_tolerance is not None:
+        return float(goal_tolerance)
+    return max(2.0 * float(resolution or GRID_RESOLUTION), 0.45)
+
+
 def validate_hybrid_candidate_states(
     states,
     goal_xy,
@@ -4214,10 +4220,9 @@ def validate_hybrid_candidate_states(
     if states.ndim != 2 or states.shape[0] < 2:
         return False, "missing"
 
-    tolerance = (
-        float(goal_tolerance)
-        if goal_tolerance is not None
-        else max(float(resolution or GRID_RESOLUTION), 0.5 * float(vehicle_length))
+    tolerance = resolve_hybrid_goal_tolerance(
+        goal_tolerance,
+        resolution,
     )
     if hybrid_states_goal_distance(states, goal_xy) > tolerance:
         return False, "goal"
@@ -5121,7 +5126,7 @@ def hybrid_astar_search(
     sample_distance = float(
         sample_distance or max(min(resolution, motion_step / 4.0), 0.05)
     )
-    goal_tolerance = float(goal_tolerance or max(2.0 * resolution, 0.45))
+    goal_tolerance = resolve_hybrid_goal_tolerance(goal_tolerance, resolution)
     connect_distance = float(connect_distance or max(8.0 * resolution, 2.5))
     speed = max(float(speed), 0.05)
     dt = max(float(dt or 1.0), 1.0e-6)
