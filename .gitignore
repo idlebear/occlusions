@@ -372,3 +372,26 @@ cython_debug/
 # End of https://www.toptal.com/developers/gitignore/api/c++,python,clion,matlab,visualstudiocode
 
 github/
+
+src/thirdParty/sdd/data/
+
+src/thirdParty/polycheck
+
+src/thirdParty/
+
+outputs/
+
+.codex/
+
+
+*.png
+
+*.json
+
+*.csv
+
+*.mp4
+
+*.prof
+
+src/python/pedestrian/pedestrian/results/simulation.prof.txt

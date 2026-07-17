@@ -1,0 +1,5 @@
+# distutils: language = c++
+from distutils.core import setup
+from Cython.Build import cythonize
+
+setup(ext_modules=cythonize("mppi_controller.pyx"))

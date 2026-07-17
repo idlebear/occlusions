@@ -7,7 +7,7 @@ from time import time
 
 from config import *
 from trajectory import generate_trajectory
-from polygpu import visibility_from_region
+from polycheck import visibility_from_region, visibility_from_real_region
 
 from Grid.VisibilityGrid import VisibilityGrid
 
