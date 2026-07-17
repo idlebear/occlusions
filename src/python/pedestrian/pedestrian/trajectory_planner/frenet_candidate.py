@@ -85,8 +85,8 @@ def frenet_prediction_schedule(
         0.5 * (current_s_speed + planning_speed),
         0.05,
     )
-    predict_time = max(
-        control_horizon * control_dt,
+    predict_time = min(
+        2 * control_horizon * control_dt,
         remaining_s / average_planning_speed,
         1.0,
     )

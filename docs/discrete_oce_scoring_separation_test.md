@@ -120,6 +120,57 @@ This allows the questions:
   scoring objective?
 - What is the majority selection for each test point?  Which methods agree most often?
 
+Implemented entrypoint:
+
+```text
+./run_discrete_oce_separation_phase1.sh
+```
+
+The script runs the existing SDD scenario setup once per seed using the nominal
+`none` selector for robot motion. At each route replan it scores the fixed
+candidate set with the full method suite and writes:
+
+```text
+src/python/pedestrian/pedestrian/experiment_logs/<prefix>_phase1_case_methods.csv
+src/python/pedestrian/pedestrian/experiment_logs/<prefix>_phase1_candidates.csv
+```
+
+The same logging can be enabled in any `main.py` run with:
+
+```text
+--discrete-oce-separation-phase1-output <case-method-output.csv>
+--discrete-oce-separation-phase1-candidate-output <candidate-output.csv>
+```
+
+If the candidate output path is omitted, it defaults to
+`<case-method-output-stem>_candidates.csv`.
+
+Phase 1 processing is integrated into the existing uncertainty plotting script:
+
+```text
+python experiments/plot_experiment_uncertainty.py experiment_logs --prefix <prefix>
+```
+
+The processor auto-detects `<prefix>_phase1_case_methods.csv` and
+`<prefix>_phase1_candidates.csv`. Explicit paths may also be passed with:
+
+```text
+--phase1-case-methods <case-method-output.csv>
+--phase1-candidates <candidate-output.csv>
+```
+
+Phase 1 outputs include:
+
+- `phase1_reference_agreement.{png,pdf}`
+- `phase1_top2_agreement.{png,pdf}`
+- `phase1_majority_agreement.{png,pdf}`
+- `phase1_exact_reference_regret.{png,pdf}`
+- `phase1_paired_exact_reference_regret.{png,pdf}`
+- `phase1_reference_rank_distribution.{png,pdf}`
+- `<prefix>_phase1_summary.csv`
+- `<prefix>_phase1_selection_table.tex`
+- `<prefix>_phase1_regret_table.tex`
+
 ### Phase 2: Candidate-To-Goal Rollout
 
 For each method-selected candidate:
@@ -134,6 +185,76 @@ different planners later in the trajectory.
 
 Visibility and none baselines should be included in both scoring and rollout
 phases.
+
+Implemented entrypoint:
+
+```text
+./run_discrete_oce_separation_phase2.sh
+```
+
+The script runs each initial selector method from the same scenario setup. The
+selector chooses the first route candidate, that candidate is forced for the
+planning horizon, and the run then switches to a common downstream policy. The
+default common policy is `none`; it can be changed with:
+
+```text
+COMMON_METHOD=visibility ./run_discrete_oce_separation_phase2.sh
+```
+
+For quick smoke runs, the seed set can be narrowed with:
+
+```text
+SEEDS="42" ./run_discrete_oce_separation_phase2.sh
+```
+
+If the default `python` is not the project environment, pass the interpreter:
+
+```text
+PYTHON=/home/bjgilhul/miniconda3/envs/ppo/bin/python ./run_discrete_oce_separation_phase2.sh
+```
+
+The script writes:
+
+```text
+src/python/pedestrian/pedestrian/experiment_logs/<prefix>_phase2_rollouts.csv
+```
+
+Phase 2 processing is integrated into the existing uncertainty plotting script:
+
+```text
+python experiments/plot_experiment_uncertainty.py experiment_logs \
+  --prefix <prefix> \
+  --phase2-rollouts experiment_logs/<prefix>_phase2_rollouts.csv
+```
+
+Phase 2 outputs include:
+
+- `phase2_final_state_entropy.{png,pdf}`
+- `phase2_final_class_entropy.{png,pdf}`
+- `phase2_true_class_probability.{png,pdf}`
+- `phase2_visibility_fraction.{png,pdf}`
+- `phase2_distance_traveled.{png,pdf}`
+- `phase2_goal_rate.{png,pdf}`
+- `<prefix>_phase2_summary.csv`
+- `<prefix>_phase2_outcome_table.tex`
+- `<prefix>_phase2_completion_table.tex`
+
+The processor also generates paired exact-vs-approximate diagnostics for each
+seed and scoring mode:
+
+- `<prefix>_phase2_exact_approx_pairs.csv`
+- `<prefix>_phase2_exact_approx_pair_table.tex`
+- `phase2_exact_approx_state_entropy_delta.{png,pdf}`
+- `phase2_exact_approx_class_entropy_delta.{png,pdf}`
+- `phase2_exact_approx_true_probability_delta.{png,pdf}`
+- `phase2_exact_approx_visibility_delta.{png,pdf}`
+
+These pair rows compare the approximate selector against the exact selector with
+the same scoring mode. If matching Phase 1 case-method rows are available, the
+pair rows also include the Phase 1 exact-reference regret and paired exact regret.
+When plotting a Phase 2 prefix, the script automatically looks for the
+corresponding Phase 1 prefix by replacing `phase2` with `phase1`; explicit Phase 1
+CSV paths can still be supplied with `--phase1-case-methods`.
 
 ### Phase 3: Closed-Loop Method Rollout
 
@@ -152,6 +273,56 @@ intentionally include compounding effects from later planning decisions.
 
 Visibility and none baselines should be included in the closed-loop rollout as
 full methods, not only as references.
+
+Implemented entrypoint:
+
+```text
+./run_discrete_oce_separation_phase3.sh
+```
+
+The script runs every selector as a full closed-loop policy: OCE methods continue
+to replan with their configured exact/approximate scoring objective, visibility
+continues to replan with visibility, and none continues to use the nominal
+candidate. This phase is the direct comparison for whether exact+info and
+approximate+info improve over visibility and none in the complete policy.
+
+As with the other runners, pass the project interpreter if needed:
+
+```text
+PYTHON=/home/bjgilhul/miniconda3/envs/ppo/bin/python ./run_discrete_oce_separation_phase3.sh
+```
+
+For quick smoke runs:
+
+```text
+SEEDS="42" ONLY_SELECTOR=exact_entropy_plus_information ./run_discrete_oce_separation_phase3.sh
+```
+
+The script writes:
+
+```text
+src/python/pedestrian/pedestrian/experiment_logs/<prefix>_phase3_rollouts.csv
+```
+
+Phase 3 processing is integrated into the existing uncertainty plotting script:
+
+```text
+python experiments/plot_experiment_uncertainty.py experiment_logs \
+  --prefix <prefix> \
+  --phase3-rollouts experiment_logs/<prefix>_phase3_rollouts.csv
+```
+
+Phase 3 outputs include:
+
+- `phase3_final_state_entropy.{png,pdf}`
+- `phase3_final_class_entropy.{png,pdf}`
+- `phase3_true_class_probability.{png,pdf}`
+- `phase3_visibility_fraction.{png,pdf}`
+- `phase3_distance_traveled.{png,pdf}`
+- `phase3_goal_rate.{png,pdf}`
+- `<prefix>_phase3_summary.csv`
+- `<prefix>_phase3_outcome_table.tex`
+- `<prefix>_phase3_completion_table.tex`
 
 ## Outputs And Metrics
 

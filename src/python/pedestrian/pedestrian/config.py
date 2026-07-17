@@ -77,6 +77,9 @@ STATIC_PLANNER_OBSTACLE_CLEARANCE = 0.50  # route-planner static inflation margi
 OCC_PROB = 0.65  # default occupancy probability
 
 DEFAULT_POLICY_NAME = "random"
+SEPARATION_METRIC = (
+    "jsd"  # options: "jsd" for Jensen-Shannon divergence, "geo" for geometric distance
+)
 
 # arguments for the random number generator
 DEFAULT_GENERATOR_NAME = "uniform"

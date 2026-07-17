@@ -1,9 +1,11 @@
 import argparse
 import cProfile
 import csv
+import hashlib
 import io
 import pstats
 import re
+from collections import Counter
 from dataclasses import replace
 from heapq import heappop, heappush
 from pathlib import Path
@@ -32,6 +34,7 @@ from config import (
     LAMBDA_TASKS,
     NUM_ACTORS,
     DEFAULT_POLICY_NAME,
+    SEPARATION_METRIC,
     SIMULATION_SPEED,
     TICK_TIME,
     DEFAULT_GENERATOR_NAME,
@@ -110,13 +113,13 @@ from specialk import (
     generate_specialk_trajectories,
 )
 
-
 DISCRETE_OCE_SCORING_MODES = (
     "entropy",
     "oc_entropy",
     "entropy_plus_information",
     "oc_entropy_plus_information",
     "information_only",
+    "entropy_plus_js",
 )
 
 
@@ -1430,7 +1433,9 @@ def experiment_method_log_path(
     )
 
 
-def experiment_method_output_path(path, *, experiment=0, method="", prefix=None, hw=None):
+def experiment_method_output_path(
+    path, *, experiment=0, method="", prefix=None, hw=None
+):
     path = Path(path)
     stem = experiment_method_stem(
         experiment=experiment,
@@ -1563,6 +1568,405 @@ EXPERIMENT_SUMMARY_FIELDS = [
     "robot_speed",
     "robot_distance_traveled",
 ]
+
+
+DISCRETE_OCE_PHASE1_PRIMARY_REFERENCE = "oce-gpu-exact-entropy_plus_information"
+
+DISCRETE_OCE_PHASE1_CASE_METHOD_FIELDS = [
+    "prefix",
+    "experiment",
+    "experiment_phase",
+    "case_id",
+    "seed",
+    "scenario",
+    "tick",
+    "time_s",
+    "station",
+    "method",
+    "backend",
+    "discrete_oce_method",
+    "scoring_mode",
+    "score_order",
+    "num_candidates",
+    "candidate_set_hash",
+    "selected_index",
+    "reference_selected_index",
+    "selection_agreement",
+    "reference_rank",
+    "top2_agreement",
+    "top3_agreement",
+    "exact_reference_regret",
+    "paired_exact_reference_regret",
+    "method_score_selected",
+    "reference_score_selected",
+    "reference_score_best",
+    "majority_selected_index",
+    "majority_selection_count",
+    "agrees_with_majority",
+    "rollout_mode",
+    "final_sum_state_entropy",
+    "final_sum_class_entropy",
+    "final_true_class_probability",
+    "visibility_fraction",
+    "distance_traveled",
+    "time_to_goal",
+    "timeout",
+    "collision",
+    "failure_reason",
+]
+
+DISCRETE_OCE_PHASE1_CANDIDATE_FIELDS = [
+    "prefix",
+    "experiment",
+    "experiment_phase",
+    "case_id",
+    "seed",
+    "scenario",
+    "tick",
+    "time_s",
+    "station",
+    "candidate_index",
+    "candidate_set_hash",
+    "candidate_path_length",
+    "candidate_endpoint_x",
+    "candidate_endpoint_y",
+    "method",
+    "method_score",
+    "primary_reference_score",
+    "paired_exact_reference_score",
+    "primary_reference_rank",
+]
+
+DISCRETE_OCE_PHASE2_FIELDS = [
+    "prefix",
+    "experiment",
+    "experiment_phase",
+    "case_id",
+    "seed",
+    "scenario",
+    "selector_method",
+    "common_method",
+    "backend",
+    "discrete_oce_method",
+    "scoring_mode",
+    "rollout_mode",
+    "force_horizon",
+    "initial_tick",
+    "switch_tick",
+    "final_tick",
+    "time_s",
+    "num_candidates",
+    "candidate_set_hash",
+    "selected_index",
+    "control_index",
+    "selected_score",
+    "final_sum_state_entropy",
+    "final_mean_state_entropy",
+    "final_sum_class_entropy",
+    "final_mean_class_entropy",
+    "final_true_class_probability",
+    "visibility_fraction",
+    "distance_traveled",
+    "time_to_goal",
+    "timeout",
+    "collision",
+    "at_goal",
+    "failure_reason",
+]
+
+
+def discrete_oce_phase1_method_specs():
+    specs = []
+    for discrete_method in ("exact", "approximate"):
+        for scoring_mode in DISCRETE_OCE_SCORING_MODES:
+            specs.append(
+                {
+                    "method": experiment_log_method(
+                        "oce",
+                        "gpu",
+                        discrete_method,
+                        scoring_mode,
+                    ),
+                    "selector": "oce",
+                    "backend": "gpu",
+                    "discrete_oce_method": discrete_method,
+                    "scoring_mode": scoring_mode,
+                    "score_order": "min",
+                }
+            )
+    specs.extend(
+        [
+            {
+                "method": experiment_log_method("visibility", "cpu", "none", "none"),
+                "selector": "visibility",
+                "backend": "cpu",
+                "discrete_oce_method": "none",
+                "scoring_mode": "none",
+                "score_order": "max",
+            },
+            {
+                "method": experiment_log_method("none", "cpu", "none", "none"),
+                "selector": "none",
+                "backend": "cpu",
+                "discrete_oce_method": "none",
+                "scoring_mode": "none",
+                "score_order": "min",
+            },
+        ]
+    )
+    return specs
+
+
+def path_xy_array(path):
+    try:
+        xy = frenet_path_xy(path)
+    except AttributeError:
+        xy = np.asarray(path, dtype=float)
+        if xy.ndim != 2 or xy.shape[1] < 2:
+            xy = np.zeros((0, 2), dtype=float)
+        else:
+            xy = xy[:, :2]
+    return np.asarray(xy, dtype=np.float64)
+
+
+def candidate_record_path(candidate):
+    if isinstance(candidate, dict) and "path" in candidate:
+        return candidate["path"]
+    return candidate
+
+
+def candidate_path_metadata(candidate):
+    path = candidate_record_path(candidate)
+    xy = path_xy_array(path)
+    if xy.shape[0] == 0:
+        return {
+            "path_length": np.nan,
+            "endpoint_x": np.nan,
+            "endpoint_y": np.nan,
+        }
+    deltas = np.diff(xy, axis=0)
+    length = float(np.sum(np.linalg.norm(deltas, axis=1))) if deltas.size else 0.0
+    endpoint = xy[-1]
+    return {
+        "path_length": length,
+        "endpoint_x": float(endpoint[0]),
+        "endpoint_y": float(endpoint[1]),
+    }
+
+
+def candidate_set_hash(paths):
+    digest = hashlib.sha256()
+    for candidate in paths:
+        xy = path_xy_array(candidate_record_path(candidate))
+        rounded = np.round(xy.astype(np.float64, copy=False), decimals=4)
+        rounded = np.ascontiguousarray(rounded)
+        digest.update(str(rounded.shape).encode("ascii"))
+        digest.update(rounded.tobytes())
+    return digest.hexdigest()[:16]
+
+
+def _score_selected_index(scores, score_order):
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+    if scores.size == 0:
+        return None
+    finite = np.isfinite(scores)
+    if not np.any(finite):
+        return None
+    if score_order == "max":
+        ranked = np.where(finite, scores, -np.inf)
+        return int(np.argmax(ranked))
+    ranked = np.where(finite, scores, np.inf)
+    return int(np.argmin(ranked))
+
+
+def _reference_rank(reference_scores, selected_index):
+    if selected_index is None:
+        return None
+    reference_scores = np.asarray(reference_scores, dtype=np.float64).reshape(-1)
+    if selected_index < 0 or selected_index >= reference_scores.size:
+        return None
+    selected_score = reference_scores[selected_index]
+    if not np.isfinite(selected_score):
+        return None
+    return int(1 + np.sum(reference_scores < selected_score - 1.0e-12))
+
+
+def discrete_oce_phase1_rows_from_scores(
+    *,
+    case_info,
+    scores_by_method,
+    method_specs,
+    candidate_hash,
+    candidate_metadata=None,
+    primary_reference_method=DISCRETE_OCE_PHASE1_PRIMARY_REFERENCE,
+):
+    method_specs = list(method_specs)
+    candidate_metadata = list(candidate_metadata or [])
+    num_candidates = max(
+        [len(np.asarray(scores).reshape(-1)) for scores in scores_by_method.values()]
+        or [0]
+    )
+    reference_scores = np.asarray(
+        scores_by_method.get(primary_reference_method, []),
+        dtype=np.float64,
+    ).reshape(-1)
+    reference_selected = _score_selected_index(reference_scores, "min")
+    reference_best = (
+        float(reference_scores[reference_selected])
+        if reference_selected is not None
+        else np.nan
+    )
+
+    selected_by_method = {}
+    for spec in method_specs:
+        scores = np.asarray(
+            scores_by_method.get(spec["method"], []),
+            dtype=np.float64,
+        ).reshape(-1)
+        selected_by_method[spec["method"]] = _score_selected_index(
+            scores,
+            spec["score_order"],
+        )
+
+    valid_selected = [
+        selected for selected in selected_by_method.values() if selected is not None
+    ]
+    majority_selected = None
+    majority_count = 0
+    if valid_selected:
+        majority_selected, majority_count = Counter(valid_selected).most_common(1)[0]
+
+    case_rows = []
+    candidate_rows = []
+    for spec in method_specs:
+        method = spec["method"]
+        scores = np.asarray(scores_by_method.get(method, []), dtype=np.float64).reshape(
+            -1
+        )
+        selected = selected_by_method[method]
+        method_score_selected = (
+            float(scores[selected])
+            if selected is not None and selected < scores.size
+            else np.nan
+        )
+        reference_score_selected = (
+            float(reference_scores[selected])
+            if selected is not None and selected < reference_scores.size
+            else np.nan
+        )
+        reference_rank = _reference_rank(reference_scores, selected)
+        exact_reference_regret = (
+            reference_score_selected - reference_best
+            if np.isfinite(reference_score_selected) and np.isfinite(reference_best)
+            else np.nan
+        )
+
+        paired_exact_reference_regret = np.nan
+        paired_exact_scores = np.asarray([], dtype=np.float64)
+        if spec["selector"] == "oce" and spec["discrete_oce_method"] == "approximate":
+            paired_method = experiment_log_method(
+                "oce",
+                "gpu",
+                "exact",
+                spec["scoring_mode"],
+            )
+            paired_exact_scores = np.asarray(
+                scores_by_method.get(paired_method, []),
+                dtype=np.float64,
+            ).reshape(-1)
+            paired_selected = _score_selected_index(paired_exact_scores, "min")
+            if (
+                selected is not None
+                and selected < paired_exact_scores.size
+                and paired_selected is not None
+                and paired_selected < paired_exact_scores.size
+            ):
+                paired_exact_reference_regret = float(
+                    paired_exact_scores[selected] - paired_exact_scores[paired_selected]
+                )
+
+        row = {
+            **case_info,
+            "method": method,
+            "backend": spec["backend"],
+            "discrete_oce_method": spec["discrete_oce_method"],
+            "scoring_mode": spec["scoring_mode"],
+            "score_order": spec["score_order"],
+            "num_candidates": int(num_candidates),
+            "candidate_set_hash": candidate_hash,
+            "selected_index": "" if selected is None else int(selected),
+            "reference_selected_index": (
+                "" if reference_selected is None else int(reference_selected)
+            ),
+            "selection_agreement": int(
+                selected is not None and selected == reference_selected
+            ),
+            "reference_rank": "" if reference_rank is None else int(reference_rank),
+            "top2_agreement": int(reference_rank is not None and reference_rank <= 2),
+            "top3_agreement": int(reference_rank is not None and reference_rank <= 3),
+            "exact_reference_regret": exact_reference_regret,
+            "paired_exact_reference_regret": paired_exact_reference_regret,
+            "method_score_selected": method_score_selected,
+            "reference_score_selected": reference_score_selected,
+            "reference_score_best": reference_best,
+            "majority_selected_index": (
+                "" if majority_selected is None else int(majority_selected)
+            ),
+            "majority_selection_count": int(majority_count),
+            "agrees_with_majority": int(
+                selected is not None and selected == majority_selected
+            ),
+            "rollout_mode": "none",
+            "final_sum_state_entropy": np.nan,
+            "final_sum_class_entropy": np.nan,
+            "final_true_class_probability": np.nan,
+            "visibility_fraction": np.nan,
+            "distance_traveled": np.nan,
+            "time_to_goal": np.nan,
+            "timeout": "",
+            "collision": "",
+            "failure_reason": "",
+        }
+        case_rows.append(row)
+
+        for candidate_index in range(num_candidates):
+            metadata = (
+                candidate_metadata[candidate_index]
+                if candidate_index < len(candidate_metadata)
+                else {}
+            )
+            candidate_rows.append(
+                {
+                    **case_info,
+                    "candidate_index": int(candidate_index),
+                    "candidate_set_hash": candidate_hash,
+                    "candidate_path_length": metadata.get("path_length", np.nan),
+                    "candidate_endpoint_x": metadata.get("endpoint_x", np.nan),
+                    "candidate_endpoint_y": metadata.get("endpoint_y", np.nan),
+                    "method": method,
+                    "method_score": (
+                        float(scores[candidate_index])
+                        if candidate_index < scores.size
+                        else np.nan
+                    ),
+                    "primary_reference_score": (
+                        float(reference_scores[candidate_index])
+                        if candidate_index < reference_scores.size
+                        else np.nan
+                    ),
+                    "paired_exact_reference_score": (
+                        float(paired_exact_scores[candidate_index])
+                        if candidate_index < paired_exact_scores.size
+                        else np.nan
+                    ),
+                    "primary_reference_rank": _reference_rank(
+                        reference_scores,
+                        candidate_index,
+                    ),
+                }
+            )
+
+    return case_rows, candidate_rows
 
 
 def append_csv_row(path, fieldnames, row):
@@ -1708,6 +2112,105 @@ def append_experiment_logs(
         "robot_distance_traveled": float(robot_distance_traveled),
     }
     append_csv_row(summary_path, EXPERIMENT_SUMMARY_FIELDS, summary)
+
+
+def append_discrete_oce_phase1_rows(
+    case_method_path,
+    candidate_path,
+    *,
+    case_rows,
+    candidate_rows,
+):
+    if case_method_path:
+        for row in case_rows:
+            append_csv_row(
+                case_method_path,
+                DISCRETE_OCE_PHASE1_CASE_METHOD_FIELDS,
+                row,
+            )
+    if candidate_path:
+        for row in candidate_rows:
+            append_csv_row(
+                candidate_path,
+                DISCRETE_OCE_PHASE1_CANDIDATE_FIELDS,
+                row,
+            )
+
+
+def final_tracker_uncertainty_summary(actors, tracker, sdd_models):
+    if tracker is None:
+        return {
+            "tracked_count": 0,
+            "visible_tracked_count": 0,
+            "sum_state_entropy": np.nan,
+            "mean_state_entropy": np.nan,
+            "sum_mode_entropy": np.nan,
+            "mean_mode_entropy": np.nan,
+            "mean_true_class_probability": np.nan,
+            "visibility_fraction": np.nan,
+        }
+
+    track_to_class = {
+        str(track_id): int(class_id)
+        for track_id, class_id in (sdd_models or {}).get("track_to_class", {}).items()
+    }
+    tracked_actors = [
+        actor
+        for actor in actors or []
+        if bool(actor.get("tracked", False)) and "id" in actor
+    ]
+    state_entropies = []
+    mode_entropies = []
+    true_class_probabilities = []
+    for actor in tracked_actors:
+        hmm = tracker.agent_hmms.get(
+            actor["id"], tracker.agent_hmms.get(str(actor["id"]))
+        )
+        if hmm is None:
+            continue
+        state_distribution = np.asarray(hmm.state_distribution, dtype=float)
+        mode_distribution = np.asarray(hmm.mode_distribution, dtype=float)
+        state_entropies.append(float(calc_entropy(state_distribution)))
+        mode_entropies.append(float(calc_entropy(mode_distribution)))
+        true_class_id = track_to_class.get(str(actor["id"]), -1)
+        if true_class_id >= 0:
+            class_id_to_mode_index = {
+                int(class_id): index for index, class_id in enumerate(tracker.class_ids)
+            }
+            mode_index = class_id_to_mode_index.get(int(true_class_id))
+            if mode_index is not None and mode_index < mode_distribution.size:
+                true_class_probabilities.append(float(mode_distribution[mode_index]))
+
+    tracked_count = len(tracked_actors)
+    visible_count = sum(1 for actor in tracked_actors if actor.get("visible", False))
+    return {
+        "tracked_count": tracked_count,
+        "visible_tracked_count": visible_count,
+        "sum_state_entropy": (
+            float(np.sum(state_entropies)) if state_entropies else np.nan
+        ),
+        "mean_state_entropy": (
+            float(np.mean(state_entropies)) if state_entropies else np.nan
+        ),
+        "sum_mode_entropy": float(np.sum(mode_entropies)) if mode_entropies else np.nan,
+        "mean_mode_entropy": (
+            float(np.mean(mode_entropies)) if mode_entropies else np.nan
+        ),
+        "mean_true_class_probability": (
+            float(np.mean(true_class_probabilities))
+            if true_class_probabilities
+            else np.nan
+        ),
+        "visibility_fraction": (
+            float(visible_count) / float(tracked_count) if tracked_count else np.nan
+        ),
+    }
+
+
+def append_discrete_oce_phase2_row(path, row):
+    if not path:
+        return
+    append_csv_row(path, DISCRETE_OCE_PHASE2_FIELDS, row)
 
 
 def uniform_prediction_probabilities(predictions):
@@ -2168,8 +2671,8 @@ class DiscreteOCETracker:
         ray_ranges = np.minimum(ray_ranges, max_range)
 
         empty_margin = max(0.0, 0.25 * self.cell_size)
-        return in_fov & (distances <= max_range) & (
-            distances + empty_margin < ray_ranges
+        return (
+            in_fov & (distances <= max_range) & (distances + empty_margin < ray_ranges)
         )
 
     def _apply_missed_observation(self, hmm, observed_empty_states):
@@ -2308,6 +2811,84 @@ class DiscreteOCETracker:
             data = np.zeros((0,), dtype=np.float32)
             indices = np.zeros((0,), dtype=np.int32)
         return data, indices, indptr, prefix
+
+    def agent_mode_transition_csr(self, agent_ids, horizon):
+        if not agent_ids:
+            empty_indptr = np.zeros((0, self.num_states + 1), dtype=np.int32)
+            empty_prefix = np.zeros(
+                (0, int(horizon) + 1, self.num_states), dtype=np.float32
+            )
+            return (
+                [],
+                np.zeros((0,), dtype=np.float32),
+                np.zeros((0,), dtype=np.int32),
+                np.zeros((0,), dtype=np.int32),
+                np.zeros((0, self.num_states), dtype=np.float32),
+                np.zeros((0,), dtype=np.float32),
+                np.zeros((0,), dtype=np.int32),
+                empty_indptr,
+                empty_prefix,
+            )
+
+        row_agent_ids = []
+        mode_weights = []
+        mode_agent_offsets = []
+        mode_agent_counts = []
+        belief_rows = []
+        data_chunks = []
+        index_chunks = []
+        num_rows = sum(self.agent_hmms[agent_id].num_modes for agent_id in agent_ids)
+        indptr = np.empty((num_rows, self.num_states + 1), dtype=np.int32)
+        prefix = np.empty(
+            (num_rows, int(horizon) + 1, self.num_states),
+            dtype=np.float32,
+        )
+        offset = 0
+        row_idx = 0
+        for agent_id in agent_ids:
+            hmm = self.agent_hmms[agent_id]
+            belief0 = np.asarray(hmm.state_distribution, dtype=np.float32)
+            mode_distribution = np.asarray(hmm.mode_distribution, dtype=np.float32)
+            mode_agent_offsets.append(row_idx)
+            mode_agent_counts.append(int(mode_distribution.shape[0]))
+            for mode_idx, mode_weight in enumerate(mode_distribution):
+                row_agent_ids.append(agent_id)
+                mode_weights.append(float(mode_weight))
+                belief_rows.append(belief0)
+
+                P_sparse = self.sparse_transitions[mode_idx].tocsr()
+                P_sparse.sum_duplicates()
+                P_sparse.eliminate_zeros()
+                data = P_sparse.data.astype(np.float32, copy=False)
+                indices = P_sparse.indices.astype(np.int32, copy=False)
+                data_chunks.append(data)
+                index_chunks.append(indices)
+                indptr[row_idx] = P_sparse.indptr.astype(np.int32, copy=False) + offset
+                offset += int(data.shape[0])
+
+                prefix[row_idx, 0] = belief0
+                for step in range(1, int(horizon) + 1):
+                    prefix[row_idx, step] = prefix[row_idx, step - 1] @ P_sparse
+                row_idx += 1
+
+        if data_chunks:
+            data = np.concatenate(data_chunks).astype(np.float32, copy=False)
+            indices = np.concatenate(index_chunks).astype(np.int32, copy=False)
+        else:
+            data = np.zeros((0,), dtype=np.float32)
+            indices = np.zeros((0,), dtype=np.int32)
+
+        return (
+            row_agent_ids,
+            np.asarray(mode_weights, dtype=np.float32),
+            np.asarray(mode_agent_offsets, dtype=np.int32),
+            np.asarray(mode_agent_counts, dtype=np.int32),
+            np.stack(belief_rows, axis=0).astype(np.float32, copy=False),
+            data,
+            indices,
+            indptr,
+            prefix,
+        )
 
     def write_debug(self, tick):
         records = {}
@@ -2460,7 +3041,12 @@ def evaluate_candidate_paths_by_discrete_oce(
     eval_horizon = max(1, int(horizon))
     backend = str(backend or "auto").lower()
 
-    gpu_supported_methods = {"discrete_exact_entropy", "exact", "approximate_entropy", "approximate"}
+    gpu_supported_methods = {
+        "discrete_exact_entropy",
+        "exact",
+        "approximate_entropy",
+        "approximate",
+    }
     if (
         backend in {"auto", "gpu"}
         and evaluate_discrete_oce_gpu is not None
@@ -2482,18 +3068,35 @@ def evaluate_candidate_paths_by_discrete_oce(
                 path_arrays.append(xy)
             packed_paths = np.stack(path_arrays, axis=0).astype(np.float32)
             agent_ids, beliefs = tracker.agent_belief_matrix()
-            agent_owner_bits = np.zeros((len(agent_ids),), dtype=np.uint64)
+            mode_weights = None
+            mode_agent_offsets = None
+            mode_agent_counts = None
+            owner_agent_ids = agent_ids
+            if str(SEPARATION_METRIC).strip().lower() in {"js", "jsd"}:
+                (
+                    owner_agent_ids,
+                    mode_weights,
+                    mode_agent_offsets,
+                    mode_agent_counts,
+                    beliefs,
+                    transition_data,
+                    transition_indices,
+                    transition_indptr,
+                    prefix_beliefs,
+                ) = tracker.agent_mode_transition_csr(agent_ids, eval_horizon)
+            else:
+                (
+                    transition_data,
+                    transition_indices,
+                    transition_indptr,
+                    prefix_beliefs,
+                ) = tracker.agent_mixed_transition_csr(agent_ids, eval_horizon)
+            agent_owner_bits = np.zeros((len(owner_agent_ids),), dtype=np.uint64)
             if occupancy_horizon is not None:
-                for idx, agent_id in enumerate(agent_ids):
+                for idx, agent_id in enumerate(owner_agent_ids):
                     bit_index = occupancy_horizon.agent_bit_indices.get(agent_id)
                     if bit_index is not None:
                         agent_owner_bits[idx] = np.uint64(1) << np.uint64(bit_index)
-            (
-                transition_data,
-                transition_indices,
-                transition_indptr,
-                prefix_beliefs,
-            ) = tracker.agent_mixed_transition_csr(agent_ids, eval_horizon)
             if occupancy_horizon is not None:
                 gpu_static_grid = np.zeros(
                     occupancy_horizon.probability_grids.shape[1:],
@@ -2522,6 +3125,9 @@ def evaluate_candidate_paths_by_discrete_oce(
                 transition_indptr=transition_indptr,
                 prefix_beliefs=prefix_beliefs,
                 beliefs=beliefs,
+                mode_weights=mode_weights,
+                mode_agent_offsets=mode_agent_offsets,
+                mode_agent_counts=mode_agent_counts,
                 horizon=eval_horizon,
                 scan_range=scan_range,
                 return_visibility=return_debug_tensors,
@@ -2543,6 +3149,7 @@ def evaluate_candidate_paths_by_discrete_oce(
                 ),
                 entropy_method=method,
                 scoring_mode=scoring_mode,
+                separation_metric=SEPARATION_METRIC,
             )
             timing["backend"] = getattr(result, "execution_path", "cuda_discrete_exact")
             timing["gpu_total"] = perf_counter() - gpu_start
@@ -2661,6 +3268,96 @@ def evaluate_candidate_paths_by_discrete_oce(
         )
 
     return best_trajectory, path_scores, {"timing": timing, "agents": path_results}
+
+
+def evaluate_discrete_oce_phase1_case(
+    *,
+    args,
+    tick,
+    time_s,
+    paths,
+    tracker,
+    static_polygons,
+    occupancy_horizon=None,
+):
+    if not paths or len(paths) < 2:
+        return [], []
+    if tracker is None or not getattr(tracker, "agent_hmms", None):
+        return [], []
+
+    path_records = list(paths)
+    candidate_paths = [candidate_record_path(path) for path in path_records]
+    method_specs = discrete_oce_phase1_method_specs()
+    scores_by_method = {}
+
+    for spec in method_specs:
+        if spec["selector"] == "oce":
+            _best, scores, _result = evaluate_candidate_paths_by_discrete_oce(
+                time_step=tick,
+                paths=candidate_paths,
+                tracker=tracker,
+                static_polygons=static_polygons,
+                horizon=args.discrete_oce_horizon or args.horizon,
+                method=spec["discrete_oce_method"],
+                scan_range=SCAN_RANGE,
+                backend=spec["backend"],
+                return_debug_tensors=False,
+                debug=False,
+                occupancy_horizon=occupancy_horizon,
+                scoring_mode=spec["scoring_mode"],
+            )
+        elif spec["selector"] == "visibility":
+            _best, scores, _result = evaluate_candidate_paths_by_visibility(
+                time_step=tick,
+                paths=candidate_paths,
+                tracker=tracker,
+                static_polygons=static_polygons,
+                horizon=args.visibility_horizon,
+                scan_range=SCAN_RANGE,
+                occupancy_horizon=occupancy_horizon,
+                debug=False,
+            )
+        elif spec["selector"] == "none":
+            scores = np.arange(len(candidate_paths), dtype=np.float64)
+        else:
+            raise ValueError(f"Unsupported phase 1 method selector: {spec['selector']}")
+
+        if scores is None:
+            scores = np.full((len(candidate_paths),), np.nan, dtype=np.float64)
+        scores_by_method[spec["method"]] = np.asarray(scores, dtype=np.float64)
+
+    case_id = "_".join(
+        [
+            log_token(getattr(args, "prefix", None), default="run"),
+            f"exp{int(getattr(args, 'experiment', 0))}",
+            f"seed{log_token(getattr(args, 'seed', None), default='none')}",
+            f"tick{int(tick)}",
+        ]
+    )
+    case_info = {
+        "prefix": "" if args.prefix is None else str(args.prefix),
+        "experiment": int(args.experiment),
+        "experiment_phase": "phase1",
+        "case_id": case_id,
+        "seed": "" if args.seed is None else int(args.seed),
+        "scenario": str(
+            getattr(args, "sdd_scenario_config", None)
+            or getattr(args, "data_source", "")
+            or ""
+        ),
+        "tick": int(tick),
+        "time_s": float(time_s),
+        "station": int(tick),
+    }
+    candidate_hash = candidate_set_hash(path_records)
+    metadata = [candidate_path_metadata(path) for path in path_records]
+    return discrete_oce_phase1_rows_from_scores(
+        case_info=case_info,
+        scores_by_method=scores_by_method,
+        method_specs=method_specs,
+        candidate_hash=candidate_hash,
+        candidate_metadata=metadata,
+    )
 
 
 def frenet_path_to_states(path):
@@ -3031,8 +3728,7 @@ def order_nominal_shortest_candidates(candidates):
         enriched.append((shortest_rank, length, index, candidate))
 
     ordered = [
-        candidate
-        for _shortest_rank, _length, _index, candidate in sorted(enriched)
+        candidate for _shortest_rank, _length, _index, candidate in sorted(enriched)
     ]
     ordered[0]["nominal"] = True
     return ordered
@@ -3082,6 +3778,27 @@ def hybrid_state_key(state, *, display_offset, resolution, heading_bins):
     return col, row, heading_bin(theta, heading_bins)
 
 
+def hybrid_state_time_key(
+    state,
+    time_index,
+    *,
+    display_offset,
+    resolution,
+    heading_bins,
+    occupancy_horizon=None,
+):
+    spatial_key = hybrid_state_key(
+        state,
+        display_offset=display_offset,
+        resolution=resolution,
+        heading_bins=heading_bins,
+    )
+    if occupancy_horizon is None:
+        return spatial_key
+    capped_time = min(int(time_index), int(occupancy_horizon.horizon) + 1)
+    return (*spatial_key, capped_time)
+
+
 def hybrid_state_cell(state, *, display_offset, resolution):
     x, y = np.asarray(state, dtype=float)[:2]
     min_x = float(display_offset[0])
@@ -3120,6 +3837,58 @@ def hybrid_state_collision_free(
         return True
     footprint = vehicle_footprint_polygon(state, vehicle_length, vehicle_width)
     return not footprint.intersects(collision_region)
+
+
+def hybrid_state_dynamic_collision_free(
+    state,
+    occupancy_horizon,
+    time_index,
+    *,
+    vehicle_length,
+    vehicle_width,
+):
+    if occupancy_horizon is None:
+        return True
+    time_index = int(time_index)
+    if time_index > int(occupancy_horizon.horizon):
+        return True
+
+    collision_grid = np.asarray(
+        occupancy_horizon.collision_grids[time_index],
+        dtype=bool,
+    )
+    if not np.any(collision_grid):
+        return True
+
+    footprint = vehicle_footprint_polygon(state, vehicle_length, vehicle_width)
+    min_x, min_y, max_x, max_y = footprint.bounds
+    origin_x, origin_y = occupancy_horizon.origin
+    resolution = float(occupancy_horizon.resolution)
+    rows, cols = collision_grid.shape
+    min_col = max(0, int(np.floor((min_x - origin_x) / resolution)))
+    max_col = min(cols - 1, int(np.floor((max_x - origin_x) / resolution)))
+    min_row = max(0, int(np.floor((min_y - origin_y) / resolution)))
+    max_row = min(rows - 1, int(np.floor((max_y - origin_y) / resolution)))
+    if min_col > max_col or min_row > max_row:
+        return False
+
+    for row in range(min_row, max_row + 1):
+        for col in range(min_col, max_col + 1):
+            if not collision_grid[row, col]:
+                continue
+            cell_x0 = origin_x + col * resolution
+            cell_y0 = origin_y + row * resolution
+            cell = Polygon(
+                [
+                    (cell_x0, cell_y0),
+                    (cell_x0 + resolution, cell_y0),
+                    (cell_x0 + resolution, cell_y0 + resolution),
+                    (cell_x0, cell_y0 + resolution),
+                ]
+            )
+            if footprint.intersects(cell):
+                return False
+    return True
 
 
 def goal_position_collision_free(
@@ -3163,10 +3932,11 @@ def rollout_ackermann_distance(
     speed,
 ):
     state = np.asarray(state, dtype=float)[:4].copy()
-    state[ActorStateEnum.VELOCITY] = float(speed)
-    distance = max(0.0, float(distance))
+    distance = float(distance)
+    state[ActorStateEnum.VELOCITY] = np.sign(distance or 1.0) * abs(float(speed))
+    travel = abs(distance)
     sample_distance = max(float(sample_distance), 1.0e-3)
-    steps = max(1, int(np.ceil(distance / sample_distance)))
+    steps = max(1, int(np.ceil(travel / sample_distance)))
     ds = distance / float(steps)
     curvature = np.tan(float(steer)) / max(float(vehicle_length), 1.0e-6)
     states = []
@@ -3177,7 +3947,7 @@ def rollout_ackermann_distance(
         state[ActorStateEnum.THETA] = wrap_angle(
             state[ActorStateEnum.THETA] + curvature * ds
         )
-        state[ActorStateEnum.VELOCITY] = float(speed)
+        state[ActorStateEnum.VELOCITY] = np.sign(ds or 1.0) * abs(float(speed))
         states.append(state.copy())
     return states
 
@@ -3190,18 +3960,39 @@ def hybrid_primitive_is_safe(
     display_diff,
     vehicle_length,
     vehicle_width,
+    occupancy_horizon=None,
+    start_time_index=0,
+    end_time_index=None,
 ):
-    return all(
-        hybrid_state_collision_free(
+    start_time_index = int(start_time_index)
+    if end_time_index is None:
+        end_time_index = start_time_index + len(states)
+    end_time_index = int(end_time_index)
+    time_span = max(1, len(states))
+    for offset, state in enumerate(states, start=1):
+        if not hybrid_state_collision_free(
             state,
             collision_region,
             display_offset=display_offset,
             display_diff=display_diff,
             vehicle_length=vehicle_length,
             vehicle_width=vehicle_width,
-        )
-        for state in states
-    )
+        ):
+            return False
+        if not hybrid_state_dynamic_collision_free(
+            state,
+            occupancy_horizon,
+            int(
+                round(
+                    start_time_index
+                    + (end_time_index - start_time_index) * offset / time_span
+                )
+            ),
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+        ):
+            return False
+    return True
 
 
 def hybrid_connect_to_goal(
@@ -3218,6 +4009,8 @@ def hybrid_connect_to_goal(
     sample_distance,
     max_distance,
     goal_tolerance,
+    occupancy_horizon=None,
+    start_time_index=0,
 ):
     goal = np.asarray(goal_xy, dtype=float)[:2]
     current = np.asarray(state, dtype=float)[:4].copy()
@@ -3258,6 +4051,9 @@ def hybrid_connect_to_goal(
             display_diff=display_diff,
             vehicle_length=vehicle_length,
             vehicle_width=vehicle_width,
+            occupancy_horizon=occupancy_horizon,
+            start_time_index=int(start_time_index) + len(states),
+            end_time_index=int(start_time_index) + len(states) + 1,
         ):
             return None
         current = step_states[-1]
@@ -3307,7 +4103,7 @@ def hybrid_states_path_length(states):
 
 
 def hybrid_states_to_route(states, *, min_spacing=0.35):
-    if not states:
+    if states is None or len(states) == 0:
         return []
     route = [np.asarray(states[0], dtype=float)[:2].tolist()]
     last = np.asarray(route[-1], dtype=float)
@@ -3322,6 +4118,144 @@ def hybrid_states_to_route(states, *, min_spacing=0.35):
     return dedupe_waypoints(route)
 
 
+def hybrid_states_goal_distance(states, goal_xy):
+    states = np.asarray(states, dtype=float)
+    if states.ndim != 2 or states.shape[0] == 0:
+        return float("inf")
+    goal = np.asarray(goal_xy, dtype=float)[:2]
+    return float(np.linalg.norm(states[-1, :2] - goal))
+
+
+def hybrid_states_have_self_intersection(states):
+    states = np.asarray(states, dtype=float)
+    if states.ndim != 2 or states.shape[0] < 4:
+        return False
+    points = [tuple(point) for point in states[:, :2]]
+    points = [
+        point
+        for index, point in enumerate(points)
+        if index == 0
+        or np.linalg.norm(np.asarray(point) - np.asarray(points[index - 1])) > 1.0e-9
+    ]
+    if len(points) < 4:
+        return False
+    return not LineString(points).is_simple
+
+
+def hybrid_states_revisit_spatial_cell(
+    states,
+    *,
+    display_offset,
+    resolution,
+    min_gap=4,
+):
+    states = np.asarray(states, dtype=float)
+    if states.ndim != 2 or states.shape[0] < int(min_gap) + 2:
+        return False
+    visited = {}
+    for index, state in enumerate(states):
+        cell = hybrid_state_cell(
+            state,
+            display_offset=display_offset,
+            resolution=resolution,
+        )
+        previous = visited.get(cell)
+        if previous is not None and index - previous >= int(min_gap):
+            return True
+        visited[cell] = index
+    return False
+
+
+def hybrid_states_collision_free(
+    states,
+    collision_region,
+    *,
+    display_offset,
+    display_diff,
+    vehicle_length,
+    vehicle_width,
+    occupancy_horizon=None,
+):
+    for index, state in enumerate(states):
+        if not hybrid_state_collision_free(
+            state,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+        ):
+            return False
+        if not hybrid_state_dynamic_collision_free(
+            state,
+            occupancy_horizon,
+            index,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+        ):
+            return False
+    return True
+
+
+def validate_hybrid_candidate_states(
+    states,
+    goal_xy,
+    collision_region,
+    *,
+    display_offset,
+    display_diff,
+    vehicle_length,
+    vehicle_width,
+    occupancy_horizon=None,
+    goal_tolerance=None,
+    resolution=None,
+):
+    states = np.asarray(states, dtype=float)
+    if states.ndim != 2 or states.shape[0] < 2:
+        return False, "missing"
+
+    tolerance = (
+        float(goal_tolerance)
+        if goal_tolerance is not None
+        else max(float(resolution or GRID_RESOLUTION), 0.5 * float(vehicle_length))
+    )
+    if hybrid_states_goal_distance(states, goal_xy) > tolerance:
+        return False, "goal"
+
+    if not hybrid_states_collision_free(
+        states,
+        collision_region,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        occupancy_horizon=occupancy_horizon,
+    ):
+        return False, "collision"
+
+    if hybrid_states_have_self_intersection(states):
+        return False, "self_intersection"
+
+    has_reverse_segment = bool(
+        states.shape[1] > ActorStateEnum.VELOCITY
+        and np.any(states[:, ActorStateEnum.VELOCITY] < -1.0e-6)
+    )
+    if not has_reverse_segment:
+        loop_resolution = max(
+            0.5 * float(resolution or GRID_RESOLUTION),
+            0.25 * float(vehicle_width),
+            1.0e-3,
+        )
+        if hybrid_states_revisit_spatial_cell(
+            states,
+            display_offset=display_offset,
+            resolution=loop_resolution,
+        ):
+            return False, "loop"
+
+    return True, ""
+
+
 def hybrid_states_to_frenet_path(states, *, speed, dt, max_points=None):
     states = np.asarray(states, dtype=float)
     path = Frenet_path()
@@ -3334,7 +4268,7 @@ def hybrid_states_to_frenet_path(states, *, speed, dt, max_points=None):
     path.x = states[:, ActorStateEnum.X].astype(float).tolist()
     path.y = states[:, ActorStateEnum.Y].astype(float).tolist()
     path.yaw = states[:, ActorStateEnum.THETA].astype(float).tolist()
-    path.s_d = [float(speed)] * states.shape[0]
+    path.s_d = states[:, ActorStateEnum.VELOCITY].astype(float).tolist()
     path.t = [idx * float(dt) for idx in range(states.shape[0])]
     if states.shape[0] >= 2:
         deltas = np.linalg.norm(np.diff(states[:, :2], axis=0), axis=1)
@@ -4176,6 +5110,10 @@ def hybrid_astar_search(
     goal_tolerance=None,
     connect_distance=None,
     max_expansions=None,
+    dt=None,
+    occupancy_horizon=None,
+    start_time_index=0,
+    allow_reverse=True,
 ):
     resolution = float(resolution or GRID_RESOLUTION)
     heading_bins = max(8, int(heading_bins))
@@ -4186,6 +5124,7 @@ def hybrid_astar_search(
     goal_tolerance = float(goal_tolerance or max(2.0 * resolution, 0.45))
     connect_distance = float(connect_distance or max(8.0 * resolution, 2.5))
     speed = max(float(speed), 0.05)
+    dt = max(float(dt or 1.0), 1.0e-6)
     cell_penalty = cell_penalty or {}
     edge_penalty = edge_penalty or {}
     max_expansions = int(
@@ -4200,6 +5139,15 @@ def hybrid_astar_search(
         collision_region,
         display_offset=display_offset,
         display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+    ):
+        return None
+    start_time_index = int(start_time_index)
+    if not hybrid_state_dynamic_collision_free(
+        start,
+        occupancy_horizon,
+        start_time_index,
         vehicle_length=vehicle_length,
         vehicle_width=vehicle_width,
     ):
@@ -4219,6 +5167,19 @@ def hybrid_astar_search(
         ],
         dtype=float,
     )
+    drive_primitives = [(1.0, steer) for steer in steer_values]
+    if allow_reverse:
+        reverse_steers = np.asarray(
+            [
+                -float(max_steer),
+                -0.5 * float(max_steer),
+                0.0,
+                0.5 * float(max_steer),
+                float(max_steer),
+            ],
+            dtype=float,
+        )
+        drive_primitives.extend((-1.0, steer) for steer in reverse_steers)
 
     def heuristic(state):
         delta = goal - np.asarray(state, dtype=float)[:2]
@@ -4229,13 +5190,16 @@ def hybrid_astar_search(
         heading_error = abs(wrap_angle(goal_heading - state[ActorStateEnum.THETA]))
         return distance + 0.15 * min_turn_radius * heading_error
 
-    start_key = hybrid_state_key(
+    start_key = hybrid_state_time_key(
         start,
+        start_time_index,
         display_offset=display_offset,
         resolution=resolution,
         heading_bins=heading_bins,
+        occupancy_horizon=occupancy_horizon,
     )
     node_states = {start_key: start}
+    node_times = {start_key: start_time_index}
     parent = {start_key: (None, [])}
     cost_so_far = {start_key: 0.0}
     frontier = []
@@ -4246,6 +5210,7 @@ def hybrid_astar_search(
     while frontier and expansions < max_expansions:
         _priority, _counter, current_key = heappop(frontier)
         current = node_states[current_key]
+        current_time = int(node_times.get(current_key, 0))
         expansions += 1
 
         distance_to_goal = float(np.linalg.norm(goal - current[:2]))
@@ -4266,10 +5231,13 @@ def hybrid_astar_search(
                 sample_distance=sample_distance,
                 max_distance=max(connect_distance, distance_to_goal + motion_step),
                 goal_tolerance=goal_tolerance,
+                occupancy_horizon=occupancy_horizon,
+                start_time_index=current_time,
             )
             if connector is not None:
                 goal_key = ("goal", expansions)
                 node_states[goal_key] = connector[-1] if connector else current.copy()
+                node_times[goal_key] = current_time + len(connector)
                 parent[goal_key] = (current_key, connector)
                 return reconstruct_hybrid_states(parent, node_states, goal_key)
 
@@ -4278,11 +5246,19 @@ def hybrid_astar_search(
             display_offset=display_offset,
             resolution=resolution,
         )
-        for steer in steer_values:
+        for direction, steer in drive_primitives:
+            next_time = current_time + max(
+                1,
+                int(
+                    np.ceil(
+                        (float(motion_step) / max(float(speed), 1.0e-6)) / float(dt)
+                    )
+                ),
+            )
             primitive_states = rollout_ackermann_distance(
                 current,
                 steer=steer,
-                distance=motion_step,
+                distance=direction * motion_step,
                 sample_distance=sample_distance,
                 vehicle_length=vehicle_length,
                 speed=speed,
@@ -4294,15 +5270,20 @@ def hybrid_astar_search(
                 display_diff=display_diff,
                 vehicle_length=vehicle_length,
                 vehicle_width=vehicle_width,
+                occupancy_horizon=occupancy_horizon,
+                start_time_index=current_time,
+                end_time_index=next_time,
             ):
                 continue
 
             next_state = primitive_states[-1]
-            next_key = hybrid_state_key(
+            next_key = hybrid_state_time_key(
                 next_state,
+                next_time,
                 display_offset=display_offset,
                 resolution=resolution,
                 heading_bins=heading_bins,
+                occupancy_horizon=occupancy_horizon,
             )
             if next_key == current_key:
                 continue
@@ -4318,14 +5299,18 @@ def hybrid_astar_search(
             steer_cost = (
                 float(turn_penalty) * abs(float(steer)) / max(float(max_steer), 1.0e-6)
             )
+            reverse_cost = 1.75 if direction < 0.0 else 0.0
             new_cost = (
-                cost_so_far[current_key] + motion_step * (1.0 + steer_cost) + penalty
+                cost_so_far[current_key]
+                + motion_step * (1.0 + steer_cost + reverse_cost)
+                + penalty
             )
             if new_cost >= cost_so_far.get(next_key, float("inf")):
                 continue
 
             cost_so_far[next_key] = new_cost
             node_states[next_key] = next_state
+            node_times[next_key] = next_time
             parent[next_key] = (current_key, primitive_states)
             counter += 1
             heappush(frontier, (new_cost + heuristic(next_state), counter, next_key))
@@ -4359,6 +5344,7 @@ def k_diverse_hybrid_astar_paths(
     goal_tolerance=None,
     connect_distance=None,
     debug=False,
+    occupancy_horizon=None,
 ):
     base_resolution = float(resolution or GRID_RESOLUTION)
     search_resolution = float(search_resolution or max(0.5, 2.5 * base_resolution))
@@ -4395,6 +5381,9 @@ def k_diverse_hybrid_astar_paths(
         "long": 0,
         "overlap": 0,
         "loop": 0,
+        "goal": 0,
+        "collision": 0,
+        "self_intersection": 0,
     }
     max_attempts = max(int(max_attempts), int(k))
 
@@ -4417,9 +5406,32 @@ def k_diverse_hybrid_astar_paths(
             motion_step=motion_step,
             goal_tolerance=goal_tolerance,
             connect_distance=connect_distance,
+            dt=dt,
+            occupancy_horizon=occupancy_horizon,
         )
         if states is None or len(states) < 2:
             reject_counts["missing"] += 1
+            break
+
+        valid, reason = validate_hybrid_candidate_states(
+            states,
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            occupancy_horizon=occupancy_horizon,
+            goal_tolerance=goal_tolerance,
+            resolution=search_resolution,
+        )
+        if not valid:
+            reject_counts[reason] = reject_counts.get(reason, 0) + 1
+            if debug:
+                print(
+                    "[kpaths] rejected hybrid route "
+                    f"attempt={attempt} reason={reason}"
+                )
             break
 
         cells = hybrid_route_cells(
@@ -4437,12 +5449,10 @@ def k_diverse_hybrid_astar_paths(
         loop = grid_path_has_loop(cells)
 
         if not duplicate and not loop and near_shortest and diverse:
-            max_points = max(int(horizon) + 1, 2)
             path = hybrid_states_to_frenet_path(
                 states,
                 speed=speed,
                 dt=dt,
-                max_points=max_points,
             )
             route = hybrid_states_to_route(
                 states,
@@ -4487,6 +5497,847 @@ def k_diverse_hybrid_astar_paths(
         )
 
     return accepted
+
+
+def hybrid_astar_search_via_waypoint(
+    start_state,
+    waypoint_xy,
+    goal_xy,
+    collision_region,
+    *,
+    display_offset,
+    display_diff,
+    vehicle_length,
+    vehicle_width,
+    max_steer,
+    speed,
+    dt,
+    resolution,
+    heading_bins,
+    occupancy_horizon=None,
+    cell_penalty=None,
+    edge_penalty=None,
+    turn_penalty=0.15,
+    motion_step=None,
+    goal_tolerance=None,
+    connect_distance=None,
+):
+    first = hybrid_astar_search(
+        start_state,
+        waypoint_xy,
+        collision_region,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        max_steer=max_steer,
+        speed=speed,
+        resolution=resolution,
+        heading_bins=heading_bins,
+        cell_penalty=cell_penalty,
+        edge_penalty=edge_penalty,
+        turn_penalty=turn_penalty,
+        motion_step=motion_step,
+        goal_tolerance=goal_tolerance,
+        connect_distance=connect_distance,
+        dt=dt,
+        occupancy_horizon=occupancy_horizon,
+        start_time_index=0,
+    )
+    if first is None or len(first) < 2:
+        return None
+
+    second = hybrid_astar_search(
+        first[-1],
+        goal_xy,
+        collision_region,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        max_steer=max_steer,
+        speed=speed,
+        resolution=resolution,
+        heading_bins=heading_bins,
+        cell_penalty=cell_penalty,
+        edge_penalty=edge_penalty,
+        turn_penalty=turn_penalty,
+        motion_step=motion_step,
+        goal_tolerance=goal_tolerance,
+        connect_distance=connect_distance,
+        dt=dt,
+        occupancy_horizon=occupancy_horizon,
+        start_time_index=len(first) - 1,
+    )
+    if second is None or len(second) < 2:
+        return None
+    return [*first, *second[1:]]
+
+
+def hybrid_route_anchor_points(route, *, max_anchors=8, min_spacing=1.0):
+    route = [np.asarray(point, dtype=float)[:2] for point in dedupe_waypoints(route)]
+    if len(route) <= 1:
+        return []
+    if len(route) == 2:
+        return [route[-1]]
+
+    anchors = []
+    last_anchor = route[0]
+    previous_direction = None
+    for index in range(1, len(route) - 1):
+        previous_point = route[index - 1]
+        point = route[index]
+        next_point = route[index + 1]
+        incoming = point - previous_point
+        outgoing = next_point - point
+        incoming_norm = float(np.linalg.norm(incoming))
+        outgoing_norm = float(np.linalg.norm(outgoing))
+        if incoming_norm <= 1.0e-9 or outgoing_norm <= 1.0e-9:
+            continue
+
+        direction = outgoing / outgoing_norm
+        turn = 0.0
+        if previous_direction is not None:
+            turn = abs(
+                float(
+                    previous_direction[0] * direction[1]
+                    - previous_direction[1] * direction[0]
+                )
+            )
+        separated = float(np.linalg.norm(point - last_anchor)) >= float(min_spacing)
+        if turn > 0.15 or separated:
+            anchors.append(point)
+            last_anchor = point
+            previous_direction = direction
+        elif previous_direction is None:
+            previous_direction = direction
+
+    anchors.append(route[-1])
+    if len(anchors) <= int(max_anchors):
+        return anchors
+
+    final = anchors[-1]
+    intermediates = anchors[:-1]
+    keep_count = max(0, int(max_anchors) - 1)
+    if keep_count <= 0:
+        return [final]
+    indices = np.linspace(0, len(intermediates) - 1, keep_count, dtype=int)
+    selected = [intermediates[int(index)] for index in indices]
+    return [*selected, final]
+
+
+def hybrid_astar_search_via_route(
+    start_state,
+    route,
+    collision_region,
+    *,
+    display_offset,
+    display_diff,
+    vehicle_length,
+    vehicle_width,
+    max_steer,
+    speed,
+    dt,
+    resolution,
+    heading_bins,
+    occupancy_horizon=None,
+    cell_penalty=None,
+    edge_penalty=None,
+    turn_penalty=0.15,
+    motion_step=None,
+    goal_tolerance=None,
+    connect_distance=None,
+    max_anchors=8,
+):
+    anchors = hybrid_route_anchor_points(
+        route,
+        max_anchors=max_anchors,
+        min_spacing=max(2.0 * float(resolution), float(vehicle_length)),
+    )
+    if not anchors:
+        return None
+
+    current = np.asarray(start_state, dtype=float)[:4].copy()
+    states = [current.copy()]
+    current_time = 0
+    for index, target in enumerate(anchors):
+        is_final = index == len(anchors) - 1
+        segment_tolerance = (
+            goal_tolerance
+            if is_final
+            else max(float(goal_tolerance or resolution), 1.5 * float(resolution))
+        )
+        segment = hybrid_astar_search(
+            current,
+            target,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            resolution=resolution,
+            heading_bins=heading_bins,
+            cell_penalty=cell_penalty,
+            edge_penalty=edge_penalty,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=segment_tolerance,
+            connect_distance=connect_distance,
+            dt=dt,
+            occupancy_horizon=occupancy_horizon,
+            start_time_index=current_time,
+        )
+        if segment is None or len(segment) < 2:
+            return None
+        states.extend(state.copy() for state in segment[1:])
+        current = states[-1]
+        current_time += len(segment) - 1
+    return states
+
+
+def hybrid_fanout_waypoints(
+    start_state,
+    goal_xy,
+    *,
+    count,
+    speed,
+    dt,
+    horizon,
+    vehicle_width,
+    display_offset,
+    display_diff,
+    resolution,
+):
+    start = np.asarray(start_state, dtype=float)[:2]
+    goal = np.asarray(goal_xy, dtype=float)[:2]
+    delta = goal - start
+    distance = float(np.linalg.norm(delta))
+    if distance <= 1.0e-6:
+        return []
+
+    direction = delta / distance
+    normal = np.asarray([-direction[1], direction[0]], dtype=float)
+    horizon_distance = max(float(speed) * float(dt) * max(1, int(horizon)), resolution)
+    anchor_distance = min(max(horizon_distance, 2.0 * resolution), 0.65 * distance)
+    max_offset = max(2.0 * float(vehicle_width), 2.0 * float(resolution))
+    waypoints = []
+    for index in range(max(0, int(count))):
+        side = -1.0 if index % 2 == 0 else 1.0
+        scale = 1.0 + 0.5 * (index // 2)
+        waypoint = (
+            start + anchor_distance * direction + side * scale * max_offset * normal
+        )
+        if point_within_display(waypoint, display_offset, display_diff):
+            waypoints.append(
+                {
+                    "point": waypoint.astype(float),
+                    "side": "left" if side > 0.0 else "right",
+                    "offset": float(side * scale * max_offset),
+                }
+            )
+    return waypoints
+
+
+def hybrid_candidate_from_states(
+    states,
+    *,
+    route,
+    speed,
+    dt,
+    horizon,
+    generator="hybrid",
+    is_roadmap_shortest=False,
+    metadata=None,
+):
+    path = hybrid_states_to_frenet_path(
+        states,
+        speed=speed,
+        dt=dt,
+    )
+    tracked_route = hybrid_states_to_route(states, min_spacing=0.25)
+    length = hybrid_states_path_length(states)
+    candidate = {
+        "path": path,
+        "route": dedupe_waypoints(route),
+        "tracked_route": tracked_route,
+        "length": float(length),
+        "tracked_length": float(waypoint_route_length(tracked_route)),
+        "generator": generator,
+        "is_roadmap_shortest": bool(is_roadmap_shortest),
+    }
+    if metadata:
+        candidate.update(metadata)
+    return candidate
+
+
+def hybrid_static_route_recovery_candidate(
+    route,
+    *,
+    start_state,
+    goal_xy,
+    collision_region,
+    display_offset,
+    display_diff,
+    vehicle_length,
+    vehicle_width,
+    speed,
+    dt,
+    occupancy_horizon=None,
+    goal_tolerance=None,
+    resolution=None,
+    allow_dynamic_relaxation=True,
+):
+    route = dedupe_waypoints(route)
+    if len(route) < 2:
+        return None, "missing"
+
+    tolerance = (
+        float(goal_tolerance)
+        if goal_tolerance is not None
+        else max(float(resolution or GRID_RESOLUTION), 0.5 * float(vehicle_length))
+    )
+    if (
+        np.linalg.norm(
+            np.asarray(route[-1], dtype=float)[:2]
+            - np.asarray(goal_xy, dtype=float)[:2]
+        )
+        > tolerance
+    ):
+        return None, "goal"
+
+    length = waypoint_route_length(route)
+    spacing = max(float(speed) * float(dt), 0.03)
+    max_points = max(2, int(np.ceil(length / spacing)) + 1)
+    path = points_to_frenet_path(
+        route,
+        start_heading=float(start_state[ActorStateEnum.THETA]),
+        speed=speed,
+        dt=dt,
+        max_points=max_points,
+    )
+    states = frenet_path_to_states(path)
+    if states.shape[0] < 2:
+        return None, "missing"
+
+    if not hybrid_states_collision_free(
+        states,
+        collision_region,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        occupancy_horizon=None,
+    ):
+        return None, "collision"
+    if hybrid_states_have_self_intersection(states):
+        return None, "self_intersection"
+
+    dynamic_ok = hybrid_states_collision_free(
+        states,
+        collision_region,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        occupancy_horizon=occupancy_horizon,
+    )
+    if not dynamic_ok and not allow_dynamic_relaxation:
+        return None, "dynamic_collision"
+
+    tracked_route = hybrid_states_to_route(states, min_spacing=0.25)
+    candidate = {
+        "path": path,
+        "route": route,
+        "tracked_route": tracked_route,
+        "length": float(length),
+        "tracked_length": float(waypoint_route_length(tracked_route)),
+        "generator": "hybrid",
+        "fallback": True,
+        "degraded_kinematic": True,
+        "dynamic_relaxed": int(not dynamic_ok),
+        "is_roadmap_shortest": True,
+        "route_rank": 0,
+        "route_reason": "static_route_recovery",
+        "fanout_side": "nominal",
+        "fanout_offset": 0.0,
+    }
+    return candidate, ""
+
+
+def generate_hybrid_trajectories(
+    start,
+    end,
+    args,
+    *,
+    static_polygons=None,
+    display_offset=None,
+    display_diff=None,
+    vehicle_length=0.7,
+    vehicle_width=0.7,
+    vehicle_scale=1.0,
+    max_steer=np.deg2rad(30.0),
+    resolution=None,
+    occupancy_blocked=None,
+    occupancy_horizon=None,
+):
+    speed = scene_linear_speed(args.robot_speed, vehicle_scale)
+    dt = float(args.tick_time)
+    horizon = int(args.horizon)
+    k = max(1, int(args.trajectory_count))
+    heading_bins = int(getattr(args, "kpaths_heading_bins", 16))
+    base_resolution = float(resolution or GRID_RESOLUTION)
+    min_turn_radius = float(vehicle_length) / max(np.tan(float(max_steer)), 1.0e-6)
+    search_resolution = float(
+        getattr(args, "kpaths_search_resolution", None)
+        or max(min_turn_radius, base_resolution)
+    )
+    motion_step = getattr(args, "kpaths_motion_step", None)
+    goal_tolerance = getattr(args, "kpaths_goal_tolerance", None)
+    connect_distance = getattr(args, "kpaths_connect_distance", None)
+    turn_penalty = float(getattr(args, "kpaths_turn_penalty", 0.1))
+    diversity_penalty = float(getattr(args, "kpaths_diversity_penalty", 1.0))
+    max_overlap = float(getattr(args, "kpaths_max_overlap", 0.65))
+    max_attempts = max(k, int(getattr(args, "kpaths_max_attempts", 30)))
+    debug = (
+        getattr(args, "debug_paths", False)
+        or getattr(args, "debug_kpaths", False)
+        or getattr(args, "debug_steering", False)
+    )
+
+    static_union = blocking_static_polygon_union(static_polygons)
+    collision_region = (
+        static_union.buffer(MIN_SEPARATION * float(vehicle_scale))
+        if static_union is not None and not static_union.is_empty
+        else None
+    )
+    start_state = np.asarray(start, dtype=float)[:4]
+    goal_xy = np.asarray(end, dtype=float)[:2]
+
+    if occupancy_horizon is not None and occupancy_blocked is None:
+        occupancy_blocked = occupancy_horizon.current_blocked
+    grid = build_static_planning_grid(
+        static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        resolution=search_resolution,
+        occupancy_blocked=occupancy_blocked,
+    )
+
+    accepted = []
+    accepted_cells = []
+    cell_penalty = {}
+    edge_penalty = {}
+    reject_counts = {
+        "direct": 0,
+        "fanout": 0,
+        "fallback": 0,
+        "duplicate": 0,
+        "goal": 0,
+        "collision": 0,
+        "self_intersection": 0,
+        "loop": 0,
+        "static_route_recovery": 0,
+        "dynamic_collision": 0,
+    }
+
+    direct_route = plan_static_route(
+        start_state[:2],
+        goal_xy,
+        static_polygons,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        vehicle_length=vehicle_length,
+        vehicle_width=vehicle_width,
+        resolution=search_resolution,
+        start_heading=start_state[ActorStateEnum.THETA],
+        occupancy_blocked=occupancy_blocked,
+    )
+    route_guided_first = (
+        direct_route is not None and len(dedupe_waypoints(direct_route)) > 2
+    )
+    direct_states = None
+    if route_guided_first:
+        direct_states = hybrid_astar_search_via_route(
+            start_state,
+            direct_route,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            dt=dt,
+            resolution=search_resolution,
+            heading_bins=heading_bins,
+            occupancy_horizon=occupancy_horizon,
+            cell_penalty=cell_penalty,
+            edge_penalty=edge_penalty,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=goal_tolerance,
+            connect_distance=connect_distance,
+            max_anchors=getattr(args, "kpaths_route_max_anchors", 8),
+        )
+
+    if direct_states is None:
+        direct_states = hybrid_astar_search(
+            start_state,
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            resolution=search_resolution,
+            heading_bins=heading_bins,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=goal_tolerance,
+            connect_distance=connect_distance,
+            dt=dt,
+            occupancy_horizon=occupancy_horizon,
+        )
+
+    if direct_states is not None and len(direct_states) >= 2:
+        valid, reason = validate_hybrid_candidate_states(
+            direct_states,
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            occupancy_horizon=occupancy_horizon,
+            goal_tolerance=goal_tolerance,
+            resolution=search_resolution,
+        )
+    else:
+        valid, reason = False, "direct"
+
+    if (
+        not valid
+        and not route_guided_first
+        and direct_route is not None
+        and len(direct_route) >= 2
+    ):
+        guided_states = hybrid_astar_search_via_route(
+            start_state,
+            direct_route,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            dt=dt,
+            resolution=search_resolution,
+            heading_bins=heading_bins,
+            occupancy_horizon=occupancy_horizon,
+            cell_penalty=cell_penalty,
+            edge_penalty=edge_penalty,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=goal_tolerance,
+            connect_distance=connect_distance,
+            max_anchors=getattr(args, "kpaths_route_max_anchors", 8),
+        )
+        if guided_states is not None and len(guided_states) >= 2:
+            guided_valid, guided_reason = validate_hybrid_candidate_states(
+                guided_states,
+                goal_xy,
+                collision_region,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                occupancy_horizon=occupancy_horizon,
+                goal_tolerance=goal_tolerance,
+                resolution=search_resolution,
+            )
+            if guided_valid:
+                direct_states = guided_states
+                valid = True
+                reason = ""
+            else:
+                reason = guided_reason
+
+    if valid:
+        accepted.append(
+            hybrid_candidate_from_states(
+                direct_states,
+                route=direct_route,
+                speed=speed,
+                dt=dt,
+                horizon=horizon,
+                is_roadmap_shortest=True,
+                metadata={
+                    "route_rank": 0,
+                    "route_reason": "shortest",
+                    "fanout_side": "nominal",
+                    "fanout_offset": 0.0,
+                },
+            )
+        )
+        accepted_cells.append(
+            hybrid_route_cells(
+                direct_states,
+                display_offset=display_offset,
+                resolution=search_resolution,
+            )
+        )
+    else:
+        reject_counts[reason] = reject_counts.get(reason, 0) + 1
+
+    fanout_waypoints = hybrid_fanout_waypoints(
+        start_state,
+        goal_xy,
+        count=max(k - 1, max_attempts),
+        speed=speed,
+        dt=dt,
+        horizon=horizon,
+        vehicle_width=vehicle_width,
+        display_offset=display_offset,
+        display_diff=display_diff,
+        resolution=search_resolution,
+    )
+    for fanout_index, fanout in enumerate(fanout_waypoints, start=1):
+        if len(accepted) >= k:
+            break
+        states = hybrid_astar_search_via_waypoint(
+            start_state,
+            fanout["point"],
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            dt=dt,
+            resolution=search_resolution,
+            heading_bins=heading_bins,
+            occupancy_horizon=occupancy_horizon,
+            cell_penalty=cell_penalty,
+            edge_penalty=edge_penalty,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=goal_tolerance,
+            connect_distance=connect_distance,
+        )
+        if states is None or len(states) < 2:
+            reject_counts["fanout"] += 1
+            continue
+        valid, reason = validate_hybrid_candidate_states(
+            states,
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            occupancy_horizon=occupancy_horizon,
+            goal_tolerance=goal_tolerance,
+            resolution=search_resolution,
+        )
+        if not valid:
+            reject_counts[reason] = reject_counts.get(reason, 0) + 1
+            continue
+        cells = hybrid_route_cells(
+            states,
+            display_offset=display_offset,
+            resolution=search_resolution,
+        )
+        if cells in accepted_cells:
+            reject_counts["duplicate"] += 1
+            continue
+        overlap = grid_path_overlap(cells, accepted_cells)
+        if accepted_cells and overlap > max_overlap:
+            reject_counts["duplicate"] += 1
+            continue
+        route = [
+            start_state[:2].astype(float).tolist(),
+            fanout["point"].astype(float).tolist(),
+            goal_xy.astype(float).tolist(),
+        ]
+        accepted.append(
+            hybrid_candidate_from_states(
+                states,
+                route=route,
+                speed=speed,
+                dt=dt,
+                horizon=horizon,
+                metadata={
+                    "route_rank": fanout_index,
+                    "route_reason": "fanout",
+                    "fanout_side": fanout["side"],
+                    "fanout_offset": fanout["offset"],
+                },
+            )
+        )
+        accepted_cells.append(cells)
+        penalty_scale = diversity_penalty * (1.0 + 0.25 * fanout_index)
+        for cell in cells:
+            cell_penalty[cell] = cell_penalty.get(cell, 0.0) + penalty_scale
+        for a, b in zip(cells[:-1], cells[1:]):
+            edge = tuple(sorted((a, b)))
+            edge_penalty[edge] = edge_penalty.get(edge, 0.0) + 2.0 * penalty_scale
+
+    fallback_paths = []
+    if len(accepted) < k:
+        fallback_paths = k_diverse_hybrid_astar_paths(
+            start_state,
+            goal_xy,
+            static_polygons,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            max_steer=max_steer,
+            speed=speed,
+            dt=dt,
+            horizon=horizon,
+            resolution=base_resolution,
+            search_resolution=search_resolution,
+            k=k,
+            heading_bins=heading_bins,
+            max_overlap=max_overlap,
+            max_attempts=max_attempts,
+            diversity_penalty=diversity_penalty,
+            turn_penalty=turn_penalty,
+            motion_step=motion_step,
+            goal_tolerance=goal_tolerance,
+            connect_distance=connect_distance,
+            occupancy_horizon=occupancy_horizon,
+            debug=False,
+        )
+    for fallback_index, fallback in enumerate(fallback_paths, start=1):
+        if len(accepted) >= k:
+            break
+        states = fallback["states"]
+        valid, reason = validate_hybrid_candidate_states(
+            states,
+            goal_xy,
+            collision_region,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            occupancy_horizon=occupancy_horizon,
+            goal_tolerance=goal_tolerance,
+            resolution=search_resolution,
+        )
+        if not valid:
+            reject_counts[reason] = reject_counts.get(reason, 0) + 1
+            continue
+        cells = hybrid_route_cells(
+            states,
+            display_offset=display_offset,
+            resolution=search_resolution,
+        )
+        if cells in accepted_cells:
+            continue
+        accepted.append(
+            hybrid_candidate_from_states(
+                states,
+                route=fallback["route"],
+                speed=speed,
+                dt=dt,
+                horizon=horizon,
+                metadata={
+                    "route_rank": len(accepted),
+                    "route_reason": "fallback",
+                    "fanout_side": "",
+                    "fanout_offset": np.nan,
+                },
+            )
+        )
+        accepted_cells.append(cells)
+
+    if not accepted:
+        recovery_routes = []
+        if direct_route is not None and len(direct_route) >= 2:
+            recovery_routes.append(direct_route)
+        static_only_route = plan_static_route(
+            start_state[:2],
+            goal_xy,
+            static_polygons,
+            display_offset=display_offset,
+            display_diff=display_diff,
+            vehicle_length=vehicle_length,
+            vehicle_width=vehicle_width,
+            resolution=search_resolution,
+            start_heading=start_state[ActorStateEnum.THETA],
+            occupancy_blocked=None,
+        )
+        if static_only_route is not None and len(static_only_route) >= 2:
+            recovery_routes.append(static_only_route)
+
+        seen_recovery = set()
+        for route in recovery_routes:
+            route_key = tuple(
+                tuple(np.round(np.asarray(point, dtype=float)[:2], decimals=4))
+                for point in dedupe_waypoints(route)
+            )
+            if route_key in seen_recovery:
+                continue
+            seen_recovery.add(route_key)
+            candidate, recovery_reason = hybrid_static_route_recovery_candidate(
+                route,
+                start_state=start_state,
+                goal_xy=goal_xy,
+                collision_region=collision_region,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                speed=speed,
+                dt=dt,
+                occupancy_horizon=occupancy_horizon,
+                goal_tolerance=goal_tolerance,
+                resolution=search_resolution,
+                allow_dynamic_relaxation=True,
+            )
+            if candidate is not None:
+                accepted.append(candidate)
+                reject_counts["static_route_recovery"] += 1
+                break
+            reject_counts[recovery_reason] = reject_counts.get(recovery_reason, 0) + 1
+
+    args._last_hybrid_debug = {
+        "accepted": len(accepted),
+        "requested": k,
+        "reject_counts": dict(reject_counts),
+        "search_resolution": float(search_resolution),
+        "direct_route_points": len(direct_route or []),
+        "direct_route_length": (
+            float(waypoint_route_length(direct_route))
+            if direct_route is not None
+            else np.nan
+        ),
+    }
+
+    if debug:
+        lengths = [round(candidate_executable_length(item), 3) for item in accepted]
+        print(
+            "[hybrid] "
+            f"accepted={len(accepted)}/{k} lengths={lengths} "
+            f"search_resolution={search_resolution:.3f} "
+            f"grid={grid['cols']}x{grid['rows']} rejects={reject_counts}"
+        )
+
+    if not accepted:
+        return []
+
+    return accepted[:k]
 
 
 def simplify_grid_route_points(points):
@@ -5894,6 +7745,7 @@ def generate_trajectories(
     max_steer=np.deg2rad(30.0),
     resolution=None,
     occupancy_blocked=None,
+    occupancy_horizon=None,
 ):
     generator = str(getattr(args, "trajectory_generator", "kpaths")).lower()
 
@@ -5947,12 +7799,37 @@ def generate_trajectories(
                 occupancy_blocked=occupancy_blocked,
             )
         )
+    elif generator == "hybrid":
+        return order_nominal_shortest_candidates(
+            generate_hybrid_trajectories(
+                start,
+                end,
+                args,
+                static_polygons=static_polygons,
+                display_offset=display_offset,
+                display_diff=display_diff,
+                vehicle_length=vehicle_length,
+                vehicle_width=vehicle_width,
+                vehicle_scale=vehicle_scale,
+                max_steer=max_steer,
+                resolution=resolution,
+                occupancy_blocked=occupancy_blocked,
+                occupancy_horizon=occupancy_horizon,
+            )
+        )
     else:
         raise ValueError(f"Unsupported trajectory generator: {generator}")
 
 
 def debug_routes_for_render(paths, args):
-    routes = [path["route"] for path in paths]
+    routes = [
+        (
+            path.get("tracked_route")
+            if path.get("generator") == "hybrid" and path.get("tracked_route")
+            else path["route"]
+        )
+        for path in paths
+    ]
     if (
         getattr(args, "debug_paths", False)
         and str(getattr(args, "trajectory_generator", "")).lower() == "frenet"
@@ -6783,6 +8660,32 @@ def simulate(args, delivery_log=None):
     cached_control_trajectory = 0
     cached_oce_entropies = None
     next_route_replan_tick = None
+    phase2_enabled = bool(args.discrete_oce_separation_phase2_output)
+    phase2_force_horizon = max(
+        1,
+        int(args.discrete_oce_separation_phase2_force_horizon or args.horizon),
+    )
+    phase2_common_method = str(
+        args.discrete_oce_separation_phase2_common_method
+    ).lower()
+    phase2_selector_method = args.log_method
+    phase2_initial_tick = None
+    phase2_switch_tick = None
+    phase2_candidate_hash = ""
+    phase2_selected_index = None
+    phase2_control_index = None
+    phase2_selected_score = np.nan
+    phase2_num_candidates = 0
+    phase3_enabled = bool(args.discrete_oce_separation_phase3_output)
+    phase3_selector_method = args.log_method
+    phase3_initial_tick = None
+    phase3_candidate_hash = ""
+    phase3_selected_index = None
+    phase3_control_index = None
+    phase3_selected_score = np.nan
+    phase3_num_candidates = 0
+    last_info = None
+    last_robot_speed = np.nan
     while True:
         loop_start = perf_counter()
         timing = {}
@@ -6809,6 +8712,8 @@ def simulate(args, delivery_log=None):
             if current_ego_state.size > ActorStateEnum.VELOCITY
             else np.nan
         )
+        last_info = info
+        last_robot_speed = robot_speed
         if getattr(args, "debug_steering", False) and action is not None:
             print_applied_steering_debug(
                 tick=sim.ticks,
@@ -6955,7 +8860,22 @@ def simulate(args, delivery_log=None):
                 max_steer=robot.max_delta,
                 resolution=grid_resolution,
                 occupancy_blocked=occupancy_blocked,
+                occupancy_horizon=occupancy_horizon,
             )
+            if not paths:
+                hybrid_debug = getattr(args, "_last_hybrid_debug", None)
+                if cached_paths:
+                    if args.debug_paths or args.debug_steering:
+                        print(
+                            "[paths] replanning produced no valid candidates; "
+                            f"reusing cached paths debug={hybrid_debug}"
+                        )
+                    paths = cached_paths
+                else:
+                    raise RuntimeError(
+                        "trajectory generation produced no valid candidates; "
+                        f"debug={hybrid_debug}"
+                    )
             cached_paths = paths
             cached_path_debug = (
                 getattr(args, "_last_specialk_debug", None)
@@ -6963,7 +8883,11 @@ def simulate(args, delivery_log=None):
                 else (
                     getattr(args, "_last_frenet_debug", None)
                     if str(args.trajectory_generator).lower() == "frenet"
-                    else None
+                    else (
+                        getattr(args, "_last_hybrid_debug", None)
+                        if str(args.trajectory_generator).lower() == "hybrid"
+                        else None
+                    )
                 )
             )
             timing["trajectories"] = perf_counter() - section_start
@@ -6984,7 +8908,7 @@ def simulate(args, delivery_log=None):
                     f"points={route_points} "
                     f"lengths={route_lengths} "
                     f"next_replan_tick={next_route_replan_tick} "
-                    f"generator={paths[0].get('generator')}"
+                    f"generator={paths[0].get('generator') if paths else 'none'}"
                 )
                 if cached_path_debug:
                     print(
@@ -7003,12 +8927,45 @@ def simulate(args, delivery_log=None):
             timing["trajectories"] = 0.0
             timing["filter_paths"] = 0.0
 
+        if should_replan_routes and args.discrete_oce_separation_phase1_output:
+            section_start = perf_counter()
+            case_rows, candidate_rows = evaluate_discrete_oce_phase1_case(
+                args=args,
+                tick=sim.ticks,
+                time_s=info.get("time", sim.ticks * args.tick_time),
+                paths=paths,
+                tracker=discrete_oce_tracker,
+                static_polygons=sim.static_polygons,
+                occupancy_horizon=occupancy_horizon,
+            )
+            append_discrete_oce_phase1_rows(
+                args.discrete_oce_separation_phase1_output,
+                args.discrete_oce_separation_phase1_candidate_output,
+                case_rows=case_rows,
+                candidate_rows=candidate_rows,
+            )
+            if args.debug_oce_eval and case_rows:
+                print(
+                    "[phase1-separation] "
+                    f"tick={sim.ticks} cases=1 rows={len(case_rows)} "
+                    f"candidates={len(paths)} "
+                    f"candidate_hash={case_rows[0]['candidate_set_hash']}"
+                )
+            timing["phase1_eval"] = perf_counter() - section_start
+
         best_trajectory = cached_best_trajectory
         control_trajectory = cached_control_trajectory
         oce_entropies = cached_oce_entropies
         timing["oce_eval"] = 0.0
+        effective_method = args.method
+        if (
+            phase2_enabled
+            and phase2_switch_tick is not None
+            and sim.ticks >= phase2_switch_tick
+        ):
+            effective_method = phase2_common_method
         if should_replan_routes:
-            if args.method == "oce":
+            if effective_method == "oce":
                 section_start = perf_counter()
                 _oce_results = None
                 if args.oce_eval_method == "discrete":
@@ -7047,7 +9004,7 @@ def simulate(args, delivery_log=None):
                 if args.debug_oce_eval:
                     print(
                         "[oce-eval] "
-                        f"method={args.method} backend={args.oce_eval_method} "
+                        f"method={effective_method} backend={args.oce_eval_method} "
                         f"tick={sim.ticks} best={best_trajectory} "
                         f"entropies={np.asarray(oce_entropies).tolist() if oce_entropies is not None else None} "
                         f"timing={_oce_results['timing'] if isinstance(_oce_results, dict) and 'timing' in _oce_results else None}"
@@ -7072,7 +9029,7 @@ def simulate(args, delivery_log=None):
                 cached_best_trajectory = best_trajectory
                 cached_control_trajectory = control_trajectory
                 cached_oce_entropies = oce_entropies
-            elif args.method == "visibility":
+            elif effective_method == "visibility":
                 section_start = perf_counter()
                 best_trajectory, oce_entropies, _visibility_results = (
                     evaluate_candidate_paths_by_visibility(
@@ -7107,14 +9064,62 @@ def simulate(args, delivery_log=None):
                 cached_best_trajectory = best_trajectory
                 cached_control_trajectory = control_trajectory
                 cached_oce_entropies = oce_entropies
-            elif args.method == "none":
+            elif effective_method == "none":
                 best_trajectory = 0
                 control_trajectory = 0
                 cached_best_trajectory = best_trajectory
                 cached_control_trajectory = control_trajectory
                 cached_oce_entropies = None
             else:
-                raise ValueError(f"Invalid method: {args.method}")
+                raise ValueError(f"Invalid method: {effective_method}")
+
+            if phase2_enabled and phase2_initial_tick is None:
+                phase2_initial_tick = int(sim.ticks)
+                phase2_switch_tick = int(sim.ticks) + int(phase2_force_horizon)
+                phase2_num_candidates = len(paths)
+                phase2_candidate_hash = candidate_set_hash(paths)
+                phase2_selected_index = int(best_trajectory)
+                phase2_control_index = int(control_trajectory)
+                if oce_entropies is not None:
+                    scores = np.asarray(oce_entropies, dtype=float).reshape(-1)
+                    if phase2_selected_index < scores.size:
+                        phase2_selected_score = float(scores[phase2_selected_index])
+                else:
+                    phase2_selected_score = (
+                        0.0 if phase2_selected_index == 0 else np.nan
+                    )
+                next_route_replan_tick = phase2_switch_tick
+                if args.debug_oce_eval:
+                    print(
+                        "[phase2-separation] "
+                        f"selector={phase2_selector_method} "
+                        f"common={phase2_common_method} "
+                        f"tick={phase2_initial_tick} switch_tick={phase2_switch_tick} "
+                        f"selected={phase2_selected_index} control={phase2_control_index} "
+                        f"candidate_hash={phase2_candidate_hash}"
+                    )
+
+            if phase3_enabled and phase3_initial_tick is None:
+                phase3_initial_tick = int(sim.ticks)
+                phase3_num_candidates = len(paths)
+                phase3_candidate_hash = candidate_set_hash(paths)
+                phase3_selected_index = int(best_trajectory)
+                phase3_control_index = int(control_trajectory)
+                if oce_entropies is not None:
+                    scores = np.asarray(oce_entropies, dtype=float).reshape(-1)
+                    if phase3_selected_index < scores.size:
+                        phase3_selected_score = float(scores[phase3_selected_index])
+                else:
+                    phase3_selected_score = (
+                        0.0 if phase3_selected_index == 0 else np.nan
+                    )
+                if args.debug_oce_eval:
+                    print(
+                        "[phase3-separation] "
+                        f"selector={phase3_selector_method} tick={phase3_initial_tick} "
+                        f"selected={phase3_selected_index} control={phase3_control_index} "
+                        f"candidate_hash={phase3_candidate_hash}"
+                    )
 
         section_start = perf_counter()
         u, trajectories, trajectory_weights = get_control(
@@ -7188,6 +9193,198 @@ def simulate(args, delivery_log=None):
                 actors=len(info["actors"]),
                 visible_actors=len(visible_agents),
             )
+
+    if phase2_enabled:
+        final_info = last_info or {}
+        final_actors = final_info.get("actors", [])
+        final_summary = final_tracker_uncertainty_summary(
+            final_actors,
+            discrete_oce_tracker,
+            sdd_models,
+        )
+        at_goal = bool(sim.ego.at_goal())
+        collision = bool(getattr(sim.ego, "collided", False))
+        timeout = bool(
+            args.max_time is not None
+            and float(sim.sim_time) >= float(args.max_time)
+            and not at_goal
+            and not collision
+        )
+        if collision:
+            failure_reason = "collision"
+        elif timeout:
+            failure_reason = "timeout"
+        elif at_goal:
+            failure_reason = ""
+        else:
+            failure_reason = "stopped"
+        common_method_label = experiment_log_method(
+            phase2_common_method,
+            "cpu",
+            "none",
+            "none",
+        )
+        phase2_case_id = "_".join(
+            [
+                log_token(getattr(args, "prefix", None), default="run"),
+                f"exp{int(getattr(args, 'experiment', 0))}",
+                f"seed{log_token(getattr(args, 'seed', None), default='none')}",
+                f"selector{log_token(phase2_selector_method)}",
+            ]
+        )
+        append_discrete_oce_phase2_row(
+            args.discrete_oce_separation_phase2_output,
+            {
+                "prefix": "" if args.prefix is None else str(args.prefix),
+                "experiment": int(args.experiment),
+                "experiment_phase": "phase2",
+                "case_id": phase2_case_id,
+                "seed": "" if args.seed is None else int(args.seed),
+                "scenario": str(
+                    getattr(args, "sdd_scenario_config", None)
+                    or getattr(args, "data_source", "")
+                    or ""
+                ),
+                "selector_method": phase2_selector_method,
+                "common_method": common_method_label,
+                "backend": args.hw,
+                "discrete_oce_method": (
+                    normalize_discrete_oce_method_for_log(args.discrete_oce_method)
+                    if args.method == "oce" and args.hw == "gpu"
+                    else "none"
+                ),
+                "scoring_mode": (
+                    args.discrete_oce_scoring_mode
+                    if args.method == "oce" and args.hw == "gpu"
+                    else "none"
+                ),
+                "rollout_mode": "common_policy",
+                "force_horizon": int(phase2_force_horizon),
+                "initial_tick": (
+                    "" if phase2_initial_tick is None else int(phase2_initial_tick)
+                ),
+                "switch_tick": (
+                    "" if phase2_switch_tick is None else int(phase2_switch_tick)
+                ),
+                "final_tick": int(sim.ticks),
+                "time_s": float(sim.sim_time),
+                "num_candidates": int(phase2_num_candidates),
+                "candidate_set_hash": phase2_candidate_hash,
+                "selected_index": (
+                    "" if phase2_selected_index is None else int(phase2_selected_index)
+                ),
+                "control_index": (
+                    "" if phase2_control_index is None else int(phase2_control_index)
+                ),
+                "selected_score": phase2_selected_score,
+                "final_sum_state_entropy": final_summary["sum_state_entropy"],
+                "final_mean_state_entropy": final_summary["mean_state_entropy"],
+                "final_sum_class_entropy": final_summary["sum_mode_entropy"],
+                "final_mean_class_entropy": final_summary["mean_mode_entropy"],
+                "final_true_class_probability": final_summary[
+                    "mean_true_class_probability"
+                ],
+                "visibility_fraction": final_summary["visibility_fraction"],
+                "distance_traveled": float(robot_distance_traveled),
+                "time_to_goal": float(sim.sim_time) if at_goal else np.nan,
+                "timeout": int(timeout),
+                "collision": int(collision),
+                "at_goal": int(at_goal),
+                "failure_reason": failure_reason,
+            },
+        )
+
+    if phase3_enabled:
+        final_info = last_info or {}
+        final_actors = final_info.get("actors", [])
+        final_summary = final_tracker_uncertainty_summary(
+            final_actors,
+            discrete_oce_tracker,
+            sdd_models,
+        )
+        at_goal = bool(sim.ego.at_goal())
+        collision = bool(getattr(sim.ego, "collided", False))
+        timeout = bool(
+            args.max_time is not None
+            and float(sim.sim_time) >= float(args.max_time)
+            and not at_goal
+            and not collision
+        )
+        if collision:
+            failure_reason = "collision"
+        elif timeout:
+            failure_reason = "timeout"
+        elif at_goal:
+            failure_reason = ""
+        else:
+            failure_reason = "stopped"
+        phase3_case_id = "_".join(
+            [
+                log_token(getattr(args, "prefix", None), default="run"),
+                f"exp{int(getattr(args, 'experiment', 0))}",
+                f"seed{log_token(getattr(args, 'seed', None), default='none')}",
+                f"selector{log_token(phase3_selector_method)}",
+            ]
+        )
+        append_discrete_oce_phase2_row(
+            args.discrete_oce_separation_phase3_output,
+            {
+                "prefix": "" if args.prefix is None else str(args.prefix),
+                "experiment": int(args.experiment),
+                "experiment_phase": "phase3",
+                "case_id": phase3_case_id,
+                "seed": "" if args.seed is None else int(args.seed),
+                "scenario": str(
+                    getattr(args, "sdd_scenario_config", None)
+                    or getattr(args, "data_source", "")
+                    or ""
+                ),
+                "selector_method": phase3_selector_method,
+                "common_method": phase3_selector_method,
+                "backend": args.hw,
+                "discrete_oce_method": (
+                    normalize_discrete_oce_method_for_log(args.discrete_oce_method)
+                    if args.method == "oce" and args.hw == "gpu"
+                    else "none"
+                ),
+                "scoring_mode": (
+                    args.discrete_oce_scoring_mode
+                    if args.method == "oce" and args.hw == "gpu"
+                    else "none"
+                ),
+                "rollout_mode": "closed_loop",
+                "force_horizon": 0,
+                "initial_tick": (
+                    "" if phase3_initial_tick is None else int(phase3_initial_tick)
+                ),
+                "switch_tick": "",
+                "final_tick": int(sim.ticks),
+                "time_s": float(sim.sim_time),
+                "num_candidates": int(phase3_num_candidates),
+                "candidate_set_hash": phase3_candidate_hash,
+                "selected_index": (
+                    "" if phase3_selected_index is None else int(phase3_selected_index)
+                ),
+                "control_index": (
+                    "" if phase3_control_index is None else int(phase3_control_index)
+                ),
+                "selected_score": phase3_selected_score,
+                "final_sum_state_entropy": final_summary["sum_state_entropy"],
+                "final_mean_state_entropy": final_summary["mean_state_entropy"],
+                "final_sum_class_entropy": final_summary["sum_mode_entropy"],
+                "final_mean_class_entropy": final_summary["mean_mode_entropy"],
+                "final_true_class_probability": final_summary[
+                    "mean_true_class_probability"
+                ],
+                "visibility_fraction": final_summary["visibility_fraction"],
+                "distance_traveled": float(robot_distance_traveled),
+                "time_to_goal": float(sim.sim_time) if at_goal else np.nan,
+                "timeout": int(timeout),
+                "collision": int(collision),
+                "at_goal": int(at_goal),
+                "failure_reason": failure_reason,
+            },
+        )
 
     return sim
 
@@ -7295,23 +9492,64 @@ def validate_args(args):
         and args.data_source != "sdd"
     ):
         raise ValueError("Discrete OCE evaluation requires --data-source sdd.")
+    if args.discrete_oce_separation_phase1_output and args.data_source != "sdd":
+        raise ValueError("Discrete OCE separation Phase 1 requires --data-source sdd.")
+    if args.discrete_oce_separation_phase1_output:
+        args.oce_eval_method = "discrete"
+        if not args.discrete_oce_separation_phase1_candidate_output:
+            output_path = Path(args.discrete_oce_separation_phase1_output)
+            args.discrete_oce_separation_phase1_candidate_output = str(
+                output_path.with_name(f"{output_path.stem}_candidates.csv")
+            )
+    common_phase2_method = (
+        str(getattr(args, "discrete_oce_separation_phase2_common_method", "none"))
+        .strip()
+        .lower()
+    )
+    if common_phase2_method == "vis":
+        common_phase2_method = "visibility"
+    if common_phase2_method not in {"none", "visibility"}:
+        raise ValueError(
+            "--discrete-oce-separation-phase2-common-method must be one of "
+            "{'none', 'visibility', 'vis'}."
+        )
+    args.discrete_oce_separation_phase2_common_method = common_phase2_method
+    if args.discrete_oce_separation_phase2_output:
+        if args.data_source != "sdd":
+            raise ValueError(
+                "Discrete OCE separation Phase 2 requires --data-source sdd."
+            )
+        args.oce_eval_method = "discrete"
+        if args.discrete_oce_separation_phase2_force_horizon is not None:
+            if args.discrete_oce_separation_phase2_force_horizon <= 0:
+                raise ValueError(
+                    "--discrete-oce-separation-phase2-force-horizon must be positive."
+                )
+    if args.discrete_oce_separation_phase3_output:
+        if args.data_source != "sdd":
+            raise ValueError(
+                "Discrete OCE separation Phase 3 requires --data-source sdd."
+            )
+        args.oce_eval_method = "discrete"
     if args.method == "oce" and not args.use_oce_trajectory_eval:
         raise ValueError("--method oce requires --use-oce-trajectory-eval.")
     if args.discrete_oce_horizon is not None and args.discrete_oce_horizon <= 0:
         raise ValueError("--discrete-oce-horizon must be positive or None.")
     if args.visibility_horizon is not None and args.visibility_horizon <= 0:
         raise ValueError("--visibility-horizon must be positive or None.")
-    args.discrete_oce_method = str(
-        getattr(args, "discrete_oce_method", "discrete_exact_entropy")
-    ).strip().lower()
-    args.discrete_oce_scoring_mode = str(
-        getattr(args, "discrete_oce_scoring_mode", "information_only")
-    ).strip().lower()
+    args.discrete_oce_method = (
+        str(getattr(args, "discrete_oce_method", "discrete_exact_entropy"))
+        .strip()
+        .lower()
+    )
+    args.discrete_oce_scoring_mode = (
+        str(getattr(args, "discrete_oce_scoring_mode", "information_only"))
+        .strip()
+        .lower()
+    )
     if args.discrete_oce_scoring_mode not in DISCRETE_OCE_SCORING_MODES:
         allowed = ", ".join(DISCRETE_OCE_SCORING_MODES)
-        raise ValueError(
-            f"--discrete-oce-scoring-mode must be one of {{{allowed}}}."
-        )
+        raise ValueError(f"--discrete-oce-scoring-mode must be one of {{{allowed}}}.")
     args.log_method = experiment_log_method(
         args.method,
         args.hw,
@@ -7490,6 +9728,53 @@ if __name__ == "__main__":
         help=("Write target class-identification experiment CSVs into this directory."),
     )
     argparser.add_argument(
+        "--discrete-oce-separation-phase1-output",
+        default=None,
+        help=(
+            "Write Phase 1 frozen candidate scoring case-method rows to this CSV. "
+            "When set, all OCE scoring modes plus visibility and none baselines "
+            "are evaluated at each route replan without changing the active method."
+        ),
+    )
+    argparser.add_argument(
+        "--discrete-oce-separation-phase1-candidate-output",
+        default=None,
+        help=(
+            "Write Phase 1 per-candidate diagnostic rows to this CSV. Defaults to "
+            "<phase1-output-stem>_candidates.csv when Phase 1 output is enabled."
+        ),
+    )
+    argparser.add_argument(
+        "--discrete-oce-separation-phase2-output",
+        default=None,
+        help=(
+            "Write one Phase 2 common-policy rollout outcome row to this CSV. "
+            "The configured --method selects the initial candidate, that path is "
+            "forced for the Phase 2 horizon, then the run switches to the common "
+            "downstream policy."
+        ),
+    )
+    argparser.add_argument(
+        "--discrete-oce-separation-phase2-common-method",
+        choices=["none", "visibility", "vis"],
+        default="none",
+        help="Common downstream policy used after the forced Phase 2 horizon.",
+    )
+    argparser.add_argument(
+        "--discrete-oce-separation-phase2-force-horizon",
+        type=int,
+        default=None,
+        help="Ticks to force the initial selected candidate. Defaults to --horizon.",
+    )
+    argparser.add_argument(
+        "--discrete-oce-separation-phase3-output",
+        default=None,
+        help=(
+            "Write one Phase 3 closed-loop rollout outcome row to this CSV. "
+            "The configured --method keeps replanning as itself for the full run."
+        ),
+    )
+    argparser.add_argument(
         "--debug-mppi",
         action="store_true",
         help="Enable verbose MPPI internal diagnostics.",
@@ -7532,8 +9817,8 @@ if __name__ == "__main__":
         default="information_only",
         help=(
             "Path scoring mode for GPU discrete OCE: entropy, oc_entropy, "
-            "entropy_plus_information, oc_entropy_plus_information, or "
-            "information_only."
+            "entropy_plus_information, oc_entropy_plus_information, "
+            "information_only, or entropy_plus_js."
         ),
     )
     argparser.add_argument(
@@ -7802,7 +10087,8 @@ if __name__ == "__main__":
         help=(
             "Number of candidate paths to generate. In frenet mode these are "
             "lateral offsets around the reference; in kpaths mode these are "
-            "diverse near-shortest routes."
+            "diverse near-shortest routes; in hybrid mode this is path zero "
+            "plus additional diverse fanout candidates."
         ),
     )
     argparser.add_argument(
@@ -7816,13 +10102,15 @@ if __name__ == "__main__":
     )
     argparser.add_argument(
         "--trajectory-generator",
-        choices=["kpaths", "specialk", "frenet"],
+        choices=["kpaths", "specialk", "frenet", "hybrid"],
         default="kpaths",
         help=(
             "Candidate trajectory generator. kpaths searches diverse "
             "kinematically feasible grid routes; specialk uses homotopy-aware "
             "roadmap skeletons refined with Ackermann state-lattice primitives; "
-            "frenet samples lateral offsets around a stable nominal route."
+            "frenet samples lateral offsets around a stable nominal route; "
+            "hybrid generates a shortest bicycle-feasible path zero and "
+            "additional dynamic-occupancy-aware fanout candidates."
         ),
     )
     argparser.add_argument(
@@ -7883,19 +10171,28 @@ if __name__ == "__main__":
         "--kpaths-motion-step",
         default=None,
         type=float,
-        help="Legacy hybrid-A* option; ignored by the current k-path generator.",
+        help="Hybrid-A* motion primitive length. Used by --trajectory-generator=hybrid.",
     )
     argparser.add_argument(
         "--kpaths-goal-tolerance",
         default=None,
         type=float,
-        help="Legacy hybrid-A* option; ignored by the current k-path generator.",
+        help="Hybrid-A* goal capture radius. Used by --trajectory-generator=hybrid.",
     )
     argparser.add_argument(
         "--kpaths-connect-distance",
         default=None,
         type=float,
-        help="Legacy hybrid-A* option; ignored by the current k-path generator.",
+        help="Hybrid-A* direct goal connector distance. Used by --trajectory-generator=hybrid.",
+    )
+    argparser.add_argument(
+        "--kpaths-route-max-anchors",
+        default=8,
+        type=int,
+        help=(
+            "Maximum static-route waypoints used to guide hybrid recovery when "
+            "direct Hybrid-A* fails."
+        ),
     )
     argparser.add_argument(
         "--kpaths-curvature-tolerance",
